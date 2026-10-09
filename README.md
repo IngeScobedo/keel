@@ -17,7 +17,9 @@ docs/adr/                 decisiones de arquitectura de Keel. Autoridad vinculan
 docs/sdd/                 especificación: PRD y UI, arquitectura, datos, roadmap y TUI.
 docs/design/              tokens.json exportado del canvas de pen.dev + inventario de pantallas.
 docs/inherited/mirador/   ADRs y backlog de Mirador, copiados íntegros como referencia. No se editan.
-packages/core             @keel/core: envelope, esquemas Zod, correlación. Cero I/O. Fixtures reales.
+packages/core             @keel/core: envelope, correlación, contrato IPC (ADR-0005), visual_state (ADR-0006). Cero I/O.
+packages/daemon           @keel/daemon: store SQLite WAL con migraciones (ADR-0004). Fase 0.
+scripts/                  validate-ddl (62 checks), extract-ddl (SDD 03 -> migración 0001), png-grayscale.
 spikes/sdk-capabilities   qué dan de verdad los SDKs: auth, costo, identidad de subagentes.
 tools/                    lanzador del MCP de Pencil (pen.dev) para leer el canvas desde Claude Code.
 ```
@@ -29,6 +31,9 @@ bun install
 bun run test          # bun test en packages/*
 bun run typecheck     # tsc -b + tests
 bun run lint          # biome
+bun run docs:lint     # markdownlint; docs:format con prettier
+bun run docs:validate-ddl  # DDL del SDD 03 sobre bun:sqlite con FTS5 y vec0
+bun run ddl:check     # la migración 0001 del daemon coincide con el SDD 03
 bun run spike:sdk     # probe del Claude Agent SDK (usa el `claude` instalado, modelo haiku)
 bun run spike:codex   # probe del Codex SDK
 ```

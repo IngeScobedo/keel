@@ -39,7 +39,7 @@ let db = new Database(dbPath)
 let passed = 0
 let failed = 0
 const failures: string[] = []
-function check(name: string, fn: () => boolean | void) {
+function check(name: string, fn: () => boolean | undefined) {
   try {
     const r = fn()
     if (r === false) throw new Error("returned false")

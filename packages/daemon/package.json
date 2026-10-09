@@ -1,0 +1,24 @@
+{
+  "name": "@keel/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Daemon de Keel: store SQLite (ADR-0004), protocolo IPC (ADR-0005), scheduler y adaptadores. TypeScript sobre Bun (ADR-0003).",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "bun test",
+    "dev": "tsc -b --watch"
+  },
+  "dependencies": {
+    "@keel/core": "workspace:*",
+    "sqlite-vec": "^0.1.9",
+    "zod": "^4.4.3"
+  },
+  "keel": {
+    "runtime": "bun",
+    "dependsOn": [
+      "@keel/core"
+    ]
+  }
+}

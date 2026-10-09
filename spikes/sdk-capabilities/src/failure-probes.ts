@@ -121,10 +121,46 @@ async function probeCancel() {
         ],
       },
     ],
-    PostToolUse: [{ hooks: [async () => (mark("PostToolUse"), {})] }],
-    PostToolUseFailure: [{ hooks: [async () => (mark("PostToolUseFailure"), {})] }],
-    Stop: [{ hooks: [async () => (mark("Stop"), {})] }],
-    SessionEnd: [{ hooks: [async () => (mark("SessionEnd"), {})] }],
+    PostToolUse: [
+      {
+        hooks: [
+          async () => {
+            mark("PostToolUse")
+            return {}
+          },
+        ],
+      },
+    ],
+    PostToolUseFailure: [
+      {
+        hooks: [
+          async () => {
+            mark("PostToolUseFailure")
+            return {}
+          },
+        ],
+      },
+    ],
+    Stop: [
+      {
+        hooks: [
+          async () => {
+            mark("Stop")
+            return {}
+          },
+        ],
+      },
+    ],
+    SessionEnd: [
+      {
+        hooks: [
+          async () => {
+            mark("SessionEnd")
+            return {}
+          },
+        ],
+      },
+    ],
   }
   const before = claudeProcesses().map((p) => p.pid)
   let result: Record<string, unknown> | null = null
@@ -368,7 +404,7 @@ async function probeConcurrent() {
   }))
   await Promise.all(
     words.map(async (w, i) => {
-      const slot = perRun[i]!
+      const slot = perRun[i] as (typeof perRun)[number]
       const hook: HookCallback = async (input) => {
         slot.hook_count++
         slot.hook_sessions.add(input.session_id)
@@ -408,7 +444,7 @@ async function probeConcurrent() {
       s.hook_sessions.size === 1 &&
       s.msg_sessions.size === 1 &&
       [...s.hook_sessions][0] === s.init_session,
-    answer_matches: s.echoed?.toLowerCase().includes(words[i]!) ?? false,
+    answer_matches: s.echoed?.toLowerCase().includes(words[i] ?? "") ?? false,
   }))
   const sessions = new Set(summary.map((s) => s.init_session))
   saveReport("concurrent", {
@@ -516,8 +552,8 @@ const probes: Record<string, () => Promise<void>> = {
 }
 if (which === "all") {
   for (const name of ["cancel", "sigkill", "late-permission", "concurrent", "lag"])
-    await probes[name]!()
-} else if (probes[which]) await probes[which]!()
+    await probes[name]?.()
+} else if (probes[which]) await probes[which]?.()
 else {
   console.error(`probe desconocido: ${which}`)
   process.exit(2)

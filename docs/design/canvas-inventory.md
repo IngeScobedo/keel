@@ -80,10 +80,11 @@ app-shell/runtime-target-inspector.
 ## Desalineaciones con el SDD que resuelve un ADR
 
 - Vocabulario de estados: ADR-0006 (aceptado 2026-10-09). Aplicado en el canvas
-  el 2026-10-09: variantes `needs_review` (ámbar, triángulo hueco) y `paused`
-  (neutro, dos barras) en `ds/StatusDot` y `ds/StatusBadge` md/sm, filas nuevas
-  en la tabla de Foundations, badges `Needs review` del Board y la lista
-  convertidos a `needs_review`, `Needs you` sustituido por el texto real
+  el 2026-10-09: variantes `needs_review` (ámbar, check; el triángulo hueco
+  inicial se confundía con `waiting_human` en escala de grises y se cambió) y
+  `paused` (neutro, dos barras) en `ds/StatusDot` y `ds/StatusBadge` md/sm,
+  filas nuevas en la tabla de Foundations, badges `Needs review` del Board y la
+  lista convertidos a `needs_review`, `Needs you` sustituido por el texto real
   `Waiting for you` y añadido como chip de filtro `filter/needs_you` en las 15
   barras de filtros.
 - Nombre del archivo de proyecto (`.keel/project.yaml` vs `.toml`): pendiente,

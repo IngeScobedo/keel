@@ -20,6 +20,15 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/daemon": {
+      "name": "@keel/daemon",
+      "version": "0.0.0",
+      "dependencies": {
+        "@keel/core": "workspace:*",
+        "sqlite-vec": "^0.1.9",
+        "zod": "^4.4.3",
+      },
+    },
     "spikes/sdk-capabilities": {
       "name": "@keel/spike-sdk-capabilities",
       "version": "0.0.0",
@@ -73,6 +82,8 @@
     "@hono/node-server": ["@hono/node-server@2.1.4", "", { "peerDependencies": { "hono": "^4 || ^5.0.0-0" } }, "sha512-2g1qeHl4BduwDn6L8nkAvDrPUWPMlkQ//a5NhP/zIyaXKMjZNRV+cG9Csu+BiJFf6+68pqzjf4Hi5sJGKHuS1g=="],
 
     "@keel/core": ["@keel/core@workspace:packages/core"],
+
+    "@keel/daemon": ["@keel/daemon@workspace:packages/daemon"],
 
     "@keel/spike-sdk-capabilities": ["@keel/spike-sdk-capabilities@workspace:spikes/sdk-capabilities"],
 

@@ -20,6 +20,8 @@
     "docs:format": "prettier --write \"**/*.md\" \"!**/node_modules/**\"",
     "docs:lint": "markdownlint-cli2 \"**/*.md\" \"!**/node_modules/**\"",
     "docs:validate-ddl": "bun scripts/validate-ddl.ts",
+    "ddl:extract": "bun scripts/extract-ddl.ts",
+    "ddl:check": "bun scripts/extract-ddl.ts --check",
     "spike:sdk": "bun spikes/sdk-capabilities/src/claude-probe.ts",
     "spike:codex": "bun spikes/sdk-capabilities/src/codex-probe.ts",
     "clean": "rm -rf packages/*/dist spikes/*/dist packages/*/tsconfig.tsbuildinfo"

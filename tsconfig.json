@@ -1,5 +1,15 @@
 {
   "extends": "./tsconfig.base.json",
   "files": [],
-  "references": [{ "path": "./packages/core" }, { "path": "./spikes/sdk-capabilities" }]
+  "references": [
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/daemon"
+    },
+    {
+      "path": "./spikes/sdk-capabilities"
+    }
+  ]
 }

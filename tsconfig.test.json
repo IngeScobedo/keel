@@ -11,5 +11,12 @@
     "noEmit": true
   },
   "include": ["packages/*/test/**/*.ts"],
-  "references": [{ "path": "./packages/core" }]
+  "references": [
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/daemon"
+    }
+  ]
 }
