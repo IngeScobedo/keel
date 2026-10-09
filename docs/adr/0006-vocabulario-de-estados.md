@@ -67,10 +67,9 @@ badge es un badge.
    (`Backlog, Ready, In Progress, In Review, Done`) son el default; el mapeo no
    puede saltarse las guardas del `lifecycle`.
 
-4. **`end_reason` del run**
-   (`completed, interrupted, timeout, budget_exceeded, rate_limit, fatal_error,
-   cancelled`)
-   se conserva como causa, separado del estado. `rate_limit` y `StopFailure`
+4. **`end_reason` del run** se conserva como causa, separado del estado. Sus
+   valores son `completed`, `interrupted`, `timeout`, `budget_exceeded`,
+   `rate_limit`, `fatal_error` y `cancelled`. `rate_limit` y `StopFailure`
    producen `interrupted`, no `failed`: la distinción que Mirador aprendió (F2
    del backlog).
 
