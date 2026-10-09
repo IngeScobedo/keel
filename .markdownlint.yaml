@@ -1,0 +1,10 @@
+# markdownlint (lo lee markdownlint-cli2 y el editor). Prosa a 80 columnas;
+# tablas y bloques de código quedan fuera del límite porque no se pueden partir.
+default: true
+MD013:
+  line_length: 80
+  tables: false
+  code_blocks: false
+  headings: false
+MD060:
+  style: aligned

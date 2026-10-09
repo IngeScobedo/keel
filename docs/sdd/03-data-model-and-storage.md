@@ -1,31 +1,35 @@
 # 03 · Modelo de datos, persistencia y Shared Hub — Keel
 
-**Estado:** esquema de referencia propuesto; no es una migración del store de Mirador.
-[Arquitectura](02-systems-architecture.md) · [PRD](01-prd-ui-spec.md).
+**Estado:** esquema de referencia propuesto; no es una migración del store de
+Mirador. [Arquitectura](02-systems-architecture.md) · [PRD](01-prd-ui-spec.md).
 
 ## 1. Reglas de almacenamiento
 
-SQLite reside en disco local del target que ejecuta el daemon. Un escritor coordinado y
-transacciones cortas; lectores con snapshots. WAL no crea múltiples escritores simultáneos
-ni una base distribuida. Habilitar foreign keys y timeout en cada conexión. `synchronous=FULL`
-es el punto de partida para decisiones durables; otra política exige medir durabilidad.
+SQLite reside en disco local del target que ejecuta el daemon. Un escritor
+coordinado y transacciones cortas; lectores con snapshots. WAL no crea múltiples
+escritores simultáneos ni una base distribuida. Habilitar foreign keys y timeout
+en cada conexión. `synchronous=FULL` es el punto de partida para decisiones
+durables; otra política exige medir durabilidad.
 [Documentación de WAL](https://www.sqlite.org/wal.html).
 
-IDs de dominio ULID en TEXT, timestamps UTC ISO 8601, booleanos INTEGER con CHECK, JSON
-validado. Importes en micro-USD enteros (`1 USD = 1_000_000`) y null si el costo es desconocido.
-Los SHAs se conservan como texto para admitir formatos Git distintos; el daemon valida con Git.
-Referencias compuestas evitan asociar tareas, repos, runs o contratos de proyectos diferentes.
+IDs de dominio ULID en TEXT, timestamps UTC ISO 8601, booleanos INTEGER con
+CHECK, JSON validado. Importes en micro-USD enteros (`1 USD = 1_000_000`) y null
+si el costo es desconocido. Los SHAs se conservan como texto para admitir
+formatos Git distintos; el daemon valida con Git. Referencias compuestas evitan
+asociar tareas, repos, runs o contratos de proyectos diferentes.
 
-Eventos y versiones de contratos son append-only. Proyecciones, leases y outbox sí cambian.
-Archivar un proyecto preserva el historial; el borrado por retención es una operación de
-mantenimiento explícita. El daemon es el único escritor autorizado. Restricciones SQL no
-sustituyen permisos, validación de actores ni control de transiciones en el servicio.
+Eventos y versiones de contratos son append-only. Proyecciones, leases y outbox
+sí cambian. Archivar un proyecto preserva el historial; el borrado por retención
+es una operación de mantenimiento explícita. El daemon es el único escritor
+autorizado. Restricciones SQL no sustituyen permisos, validación de actores ni
+control de transiciones en el servicio.
 
 ## 2. DDL relacional y FTS5
 
-Este bloque se ejecuta sobre una base vacía con FTS5 y funciones JSON disponibles. El bloque
-vectorial de la sección 3 requiere cargar `sqlite-vec` antes de ejecutarse. Las migraciones
-de implementación deberán versionar y probar este esquema, sin aplicarlo a Postgres/Mirador.
+Este bloque se ejecuta sobre una base vacía con FTS5 y funciones JSON
+disponibles. El bloque vectorial de la sección 3 requiere cargar `sqlite-vec`
+antes de ejecutarse. Las migraciones de implementación deberán versionar y
+probar este esquema, sin aplicarlo a Postgres/Mirador.
 
 ```sql
 PRAGMA journal_mode = WAL;
@@ -606,37 +610,46 @@ END;
 
 ### Invariantes adicionales del servicio
 
-- Antes de crear un proyecto ejecutable se elige exactamente un repo principal; el índice
-  impone como máximo uno. Alias, paths y URL se validan al registrarlos.
-- `run_worktrees.slot` es `root` o el ID de lane; el daemon comprueba esa correspondencia y
-  reserva branches/paths en el target. Solo un run vivo por tarea; workers concurren en lanes.
-- Publicar una revisión de `execution_plans.dag_json` valida el schema tipado, aciclicidad,
-  IDs únicos y dependencias del mismo proyecto. Un run fija una revisión del plan de su tarea.
-  Las revisiones publicadas se conservan. `work_item_dependencies` también debe ser acíclico;
-  `done` satisface `needs_review`, pero el daemon reevalúa la guarda si una tarea se reabre.
-  Toda alta/cambio de dependencia o lifecycle encola reevaluación en la misma transacción.
-  Los ciclos del
-  árbol de agentes se rechazan; padres aún desconocidos permanecen null hasta reconciliación.
-- Publicar research valida que `created_by_agent` pertenezca al run/proyecto de origen y
-  que el manifest cubra todas las fuentes consultadas. `workspace_id` se deriva de `projects`;
-  no se duplica un campo que pueda divergir. Compartir entre proyectos requiere scope explícito.
-- `cross_findings.target_repo_id` debe coincidir con el repo del WorkItem destino. Firmas
-  de reintento y recurrencia se calculan antes de la transacción.
-- `schema_sha256` se calcula en el daemon sobre los bytes UTF-8 almacenados, con saltos de
-  línea normalizados de forma declarada. `ready_for_mock`/`implemented` requieren evidencia
-  correspondiente al hash y, para implementación, al SHA productor; un ID de evidencia solo
-  prueba existencia, no éxito. El daemon verifica ese contenido antes de insertar el evento.
-- Identidad, contratos adoptados y required_state de una dependencia publicada no se editan.
-  Sustituir versión marca `superseded_at` y crea una fila nueva en transacción con Activity y
-  `work_item_gate_recheck`. Conservar las filas anteriores permite identificar consumidores.
-- Versiones por familia se asignan en `BEGIN IMMEDIATE`; conflictos de UNIQUE se recuperan
-  mediante relectura. Correcciones nunca usan `INSERT OR REPLACE`, pues su semántica de
-  borrado/reinserción rompería el historial.
+- Antes de crear un proyecto ejecutable se elige exactamente un repo principal;
+  el índice impone como máximo uno. Alias, paths y URL se validan al
+  registrarlos.
+- `run_worktrees.slot` es `root` o el ID de lane; el daemon comprueba esa
+  correspondencia y reserva branches/paths en el target. Solo un run vivo por
+  tarea; workers concurren en lanes.
+- Publicar una revisión de `execution_plans.dag_json` valida el schema tipado,
+  aciclicidad, IDs únicos y dependencias del mismo proyecto. Un run fija una
+  revisión del plan de su tarea. Las revisiones publicadas se conservan.
+  `work_item_dependencies` también debe ser acíclico; `done` satisface
+  `needs_review`, pero el daemon reevalúa la guarda si una tarea se reabre. Toda
+  alta/cambio de dependencia o lifecycle encola reevaluación en la misma
+  transacción. Los ciclos del árbol de agentes se rechazan; padres aún
+  desconocidos permanecen null hasta reconciliación.
+- Publicar research valida que `created_by_agent` pertenezca al run/proyecto de
+  origen y que el manifest cubra todas las fuentes consultadas. `workspace_id`
+  se deriva de `projects`; no se duplica un campo que pueda divergir. Compartir
+  entre proyectos requiere scope explícito.
+- `cross_findings.target_repo_id` debe coincidir con el repo del WorkItem
+  destino. Firmas de reintento y recurrencia se calculan antes de la
+  transacción.
+- `schema_sha256` se calcula en el daemon sobre los bytes UTF-8 almacenados, con
+  saltos de línea normalizados de forma declarada.
+  `ready_for_mock`/`implemented` requieren evidencia correspondiente al hash y,
+  para implementación, al SHA productor; un ID de evidencia solo prueba
+  existencia, no éxito. El daemon verifica ese contenido antes de insertar el
+  evento.
+- Identidad, contratos adoptados y required_state de una dependencia publicada
+  no se editan. Sustituir versión marca `superseded_at` y crea una fila nueva en
+  transacción con Activity y `work_item_gate_recheck`. Conservar las filas
+  anteriores permite identificar consumidores.
+- Versiones por familia se asignan en `BEGIN IMMEDIATE`; conflictos de UNIQUE se
+  recuperan mediante relectura. Correcciones nunca usan `INSERT OR REPLACE`,
+  pues su semántica de borrado/reinserción rompería el historial.
 
 ## 3. Índice vectorial y coherencia del research
 
-DDL adicional para el perfil de embeddings de 384 dimensiones, cargando una versión fijada
-de la extensión. La columna de proyecto permite restringir búsqueda a la partición autorizada.
+DDL adicional para el perfil de embeddings de 384 dimensiones, cargando una
+versión fijada de la extensión. La columna de proyecto permite restringir
+búsqueda a la partición autorizada.
 [Referencia de vec0](https://alexgarcia.xyz/sqlite-vec/features/vec0.html).
 
 ```sql
@@ -647,76 +660,89 @@ CREATE VIRTUAL TABLE research_vectors USING vec0(
 );
 ```
 
-FTS5 usa `research_id` como enlace, no `work_item_id`: una tarea puede producir varios
-informes y el origen de un informe puede ser opcional. `unicode61` es la base multilingüe;
-el stemmer Porter del borrador solo se incorporará si las evaluaciones lo justifican.
-FTS tokeniza texto, por lo que coincidencias de endpoint o símbolo completas también se
-validan contra la fuente; “léxico” no implica igualdad byte a byte.
+FTS5 usa `research_id` como enlace, no `work_item_id`: una tarea puede producir
+varios informes y el origen de un informe puede ser opcional. `unicode61` es la
+base multilingüe; el stemmer Porter del borrador solo se incorporará si las
+evaluaciones lo justifican. FTS tokeniza texto, por lo que coincidencias de
+endpoint o símbolo completas también se validan contra la fuente; “léxico” no
+implica igualdad byte a byte.
 
-FTS y la entidad relacional cambian en una transacción por triggers. El trabajo de embeddings
-se persiste junto con el informe y se procesa después para no retener el lock de escritura
-durante inferencia. El worker comprueba `content_hash`, snapshot y revisión del modelo antes
-de escribir vector y estado `ready` en una transacción. Una edición invalida el job anterior;
-un worker tardío no puede marcar listo otro contenido. Invalidación, borrado y reconstrucción
-eliminan vectores obsoletos mediante jobs durables y reconciliación al arrancar.
+FTS y la entidad relacional cambian en una transacción por triggers. El trabajo
+de embeddings se persiste junto con el informe y se procesa después para no
+retener el lock de escritura durante inferencia. El worker comprueba
+`content_hash`, snapshot y revisión del modelo antes de escribir vector y estado
+`ready` en una transacción. Una edición invalida el job anterior; un worker
+tardío no puede marcar listo otro contenido. Invalidación, borrado y
+reconstrucción eliminan vectores obsoletos mediante jobs durables y
+reconciliación al arrancar.
 
-Las tablas virtuales no sustituyen las foreign keys del modelo relacional. Todo resultado
-FTS/vector se une a `shared_researches`, filtrando `project_id`, permisos, TTL, snapshot y
-`invalidated_at` antes de entregarlo. No se devuelve un vector huérfano. Una consulta léxica
-escapa la sintaxis FTS y usa parámetros; la vectorial valida dimensión y modelo. Si la
-partición es muy pequeña, evaluar su costo antes de ampliar el particionado.
+Las tablas virtuales no sustituyen las foreign keys del modelo relacional. Todo
+resultado FTS/vector se une a `shared_researches`, filtrando `project_id`,
+permisos, TTL, snapshot y `invalidated_at` antes de entregarlo. No se devuelve
+un vector huérfano. Una consulta léxica escapa la sintaxis FTS y usa parámetros;
+la vectorial valida dimensión y modelo. Si la partición es muy pequeña, evaluar
+su costo antes de ampliar el particionado.
 
-El manifest incluye pares ordenados de repo ID/SHA, hashes de contexto y contratos. Para
-árboles con cambios locales, primero congelar un snapshot reproducible o incluir los hashes
-de esos cambios; un `base_sha` idéntico no vuelve iguales dos worktrees sucios.
+El manifest incluye pares ordenados de repo ID/SHA, hashes de contexto y
+contratos. Para árboles con cambios locales, primero congelar un snapshot
+reproducible o incluir los hashes de esos cambios; un `base_sha` idéntico no
+vuelve iguales dos worktrees sucios.
 
 ## 4. Gates transaccionales y scheduler
 
-Se separan **contenido inmutable** (`api_contracts`), **historial** (`contract_state_events`)
-y **proyección** (`api_contract_status`). `updated_at` no modifica el contrato original;
-`state_changed_at` viene del evento. `is_satisfied` se deriva en una vista, evitando caches
-booleanos desactualizados tras insertar una dependencia o deprecar una versión.
+Se separan **contenido inmutable** (`api_contracts`), **historial**
+(`contract_state_events`) y **proyección** (`api_contract_status`). `updated_at`
+no modifica el contrato original; `state_changed_at` viene del evento.
+`is_satisfied` se deriva en una vista, evitando caches booleanos desactualizados
+tras insertar una dependencia o deprecar una versión.
 
 Tabla de satisfacción:
 
-| Estado actual | Requiere ready_for_mock | Requiere implemented |
-| --- | --- | --- |
-| draft | No | No |
-| ready_for_mock | Sí | No |
-| implemented | Sí | Sí |
-| deprecated | No | No |
+| Estado actual  | Requiere ready_for_mock | Requiere implemented |
+| -------------- | ----------------------- | -------------------- |
+| draft          | No                      | No                   |
+| ready_for_mock | Sí                      | No                   |
+| implemented    | Sí                      | Sí                   |
+| deprecated     | No                      | No                   |
 
 Un consumidor de outbox procesa cada evento con efecto idempotente:
 
 1. Abrir transacción y releer lifecycle/revisión del WorkItem.
-2. Consultar dependencias activas (`superseded_at IS NULL`) y todos los bloqueos abiertos.
-3. Si queda alguna guarda, conservar `blocked`/`waiting_human`; nunca reactivar `done`,
-   un run cancelado ni una pausa humana por el solo cambio de un contrato.
-4. Si la tarea es elegible, transicionar `blocked → planned`, registrar Activity y reservar
-   intento/lanes/presupuesto. El supervisor inicia `running` solo cuando confirma el proceso.
-5. Confirmar el efecto y la entrega; si ocurre un crash antes del ACK, el replay encuentra
-   el mismo intento. Revalidar revisiones de contratos antes de spawn.
+2. Consultar dependencias activas (`superseded_at IS NULL`) y todos los bloqueos
+   abiertos.
+3. Si queda alguna guarda, conservar `blocked`/`waiting_human`; nunca reactivar
+   `done`, un run cancelado ni una pausa humana por el solo cambio de un
+   contrato.
+4. Si la tarea es elegible, transicionar `blocked → planned`, registrar Activity
+   y reservar intento/lanes/presupuesto. El supervisor inicia `running` solo
+   cuando confirma el proceso.
+5. Confirmar el efecto y la entrega; si ocurre un crash antes del ACK, el replay
+   encuentra el mismo intento. Revalidar revisiones de contratos antes de spawn.
 
-Eventos de v2 crean `contract_reconciliations` y WorkItems en una sola transacción, con
-Activity `contract_updated` por consumidor y claves únicas. La compatibilidad se deriva de
-un comparador por formato, conservando su versión y evidencia. La relación previa/siguiente
-debe pertenecer a la misma familia. Reintentar una notificación no crea otra subtarea.
+Eventos de v2 crean `contract_reconciliations` y WorkItems en una sola
+transacción, con Activity `contract_updated` por consumidor y claves únicas. La
+compatibilidad se deriva de un comparador por formato, conservando su versión y
+evidencia. La relación previa/siguiente debe pertenecer a la misma familia.
+Reintentar una notificación no crea otra subtarea.
 
 ## 5. Redacción, telemetría y dedupe
 
-Credenciales de conectores viven en el vault; `connections.secret_ref` solo es un puntero.
-Antes de persistir, transmitir, generar previews o embeddings se filtran campos sensibles,
-cabeceras, bearer tokens, claves privadas y contraseñas de URLs. La redacción es best-effort:
-versionar reglas, probar fixtures y ofrecer modo de metadatos sin cuerpos. No publicar
-garantías de ausencia total de secretos basadas solo en regex.
+Credenciales de conectores viven en el vault; `connections.secret_ref` solo es
+un puntero. Antes de persistir, transmitir, generar previews o embeddings se
+filtran campos sensibles, cabeceras, bearer tokens, claves privadas y
+contraseñas de URLs. La redacción es best-effort: versionar reglas, probar
+fixtures y ofrecer modo de metadatos sin cuerpos. No publicar garantías de
+ausencia total de secretos basadas solo en regex.
 
-`events.payload_json` conserva el payload saneado sin descartar campos desconocidos. Si
-supera el umbral propuesto de 256 KiB, incluir preview y referencia a artefacto saneado con
-hash, tamaño y política de retención. Nunca truncar silenciosamente. La proyección puede
-reconstruirse desde eventos; tiempos de duración ausentes siguen siendo null. Datos del
-runtime y del daemon mantienen sus propios relojes y procedencia.
+`events.payload_json` conserva el payload saneado sin descartar campos
+desconocidos. Si supera el umbral propuesto de 256 KiB, incluir preview y
+referencia a artefacto saneado con hash, tamaño y política de retención. Nunca
+truncar silenciosamente. La proyección puede reconstruirse desde eventos;
+tiempos de duración ausentes siguen siendo null. Datos del runtime y del daemon
+mantienen sus propios relojes y procedencia.
 
-La clave de deduplicación de incidentes se calcula con SHA-256 sobre un array JSON canónico:
+La clave de deduplicación de incidentes se calcula con SHA-256 sobre un array
+JSON canónico:
 
 ```text
 [signature_version, project_id, target_repo_id, source_kind,
@@ -724,16 +750,18 @@ La clave de deduplicación de incidentes se calcula con SHA-256 sobre un array J
  incident_identity]
 ```
 
-Canonicalizar paths según el target, preservando mayúsculas en filesystems sensibles; no
-usar `.toLowerCase()` indiscriminado ni cortar rutas con una regex `/repo/`. Serializar un
-array evita colisiones por concatenación de delimitadores. La identidad del incidente
-separa recurrencias reales tras un cierre; un reenvío del mismo hallazgo conserva la suya.
+Canonicalizar paths según el target, preservando mayúsculas en filesystems
+sensibles; no usar `.toLowerCase()` indiscriminado ni cortar rutas con una regex
+`/repo/`. Serializar un array evita colisiones por concatenación de
+delimitadores. La identidad del incidente separa recurrencias reales tras un
+cierre; un reenvío del mismo hallazgo conserva la suya.
 
-El índice único parcial de WorkItems impide dos tarjetas activas de la misma firma bajo
-carrera concurrente. Ante conflicto se adjunta nota/Activity al ítem existente. Claves de
-request deduplican transporte; fingerprints deduplican contenido. `command_receipts` guarda
-clave, hash de request y resultado en la misma transacción que la mutación. Reusar una clave
-con otro hash se rechaza; el recibo permanece durante todo el período permitido de reintentos.
+El índice único parcial de WorkItems impide dos tarjetas activas de la misma
+firma bajo carrera concurrente. Ante conflicto se adjunta nota/Activity al ítem
+existente. Claves de request deduplican transporte; fingerprints deduplican
+contenido. `command_receipts` guarda clave, hash de request y resultado en la
+misma transacción que la mutación. Reusar una clave con otro hash se rechaza; el
+recibo permanece durante todo el período permitido de reintentos.
 
 ## 6. Diagrama de relaciones
 
@@ -759,30 +787,34 @@ erDiagram
 
 ## 7. Migración, backup y validación
 
-Migraciones numeradas, checksum y registro de aplicación; ensayo sobre copia antes de
-upgrade. Para importar un modelo antiguo de repo único: crear el repo principal, trasladar
-repo URL/rama a `project_repos`, migrar SHA/path de runs a `run_worktrees`, reconciliar IDs
-y comprobar foreign keys antes de retirar columnas antiguas. No copiar DDL SQLite a Postgres.
+Migraciones numeradas, checksum y registro de aplicación; ensayo sobre copia
+antes de upgrade. Para importar un modelo antiguo de repo único: crear el repo
+principal, trasladar repo URL/rama a `project_repos`, migrar SHA/path de runs a
+`run_worktrees`, reconciliar IDs y comprobar foreign keys antes de retirar
+columnas antiguas. No copiar DDL SQLite a Postgres.
 
-Backup mediante API de backup de SQLite o mecanismo consistente con WAL; no copiar solo el
-archivo principal mientras el daemon escribe. Artefactos se copian con manifest de hashes.
-Probar restore y reconstrucción de proyecciones/índices. Checkpoint WAL acotado y monitoreo
-de lectores largos, espacio libre y cola del escritor. Retención elimina contenido sensible
-según política sin convertir una eliminación histórica en un estado aprobado ficticio.
+Backup mediante API de backup de SQLite o mecanismo consistente con WAL; no
+copiar solo el archivo principal mientras el daemon escribe. Artefactos se
+copian con manifest de hashes. Probar restore y reconstrucción de
+proyecciones/índices. Checkpoint WAL acotado y monitoreo de lectores largos,
+espacio libre y cola del escritor. Retención elimina contenido sensible según
+política sin convertir una eliminación histórica en un estado aprobado ficticio.
 
-Validación mínima del esquema: creación en SQLite temporal, `foreign_key_check`, un único
-repo principal, duplicados activos, frontera entre proyectos, inmutabilidad de contratos,
-secuencia de versiones/estados, dependencia añadida después de ready, varias guardas,
-deprecación, outbox tras reinicio, sincronización FTS y recuperación de vectores pendientes.
-El contrato SQL es verificable ahora; spawn, permisos y recuperación completa requieren
-las pruebas de implementación especificadas en el [roadmap](04-roadmap-and-tui.md).
+Validación mínima del esquema: creación en SQLite temporal, `foreign_key_check`,
+un único repo principal, duplicados activos, frontera entre proyectos,
+inmutabilidad de contratos, secuencia de versiones/estados, dependencia añadida
+después de ready, varias guardas, deprecación, outbox tras reinicio,
+sincronización FTS y recuperación de vectores pendientes. El contrato SQL es
+verificable ahora; spawn, permisos y recuperación completa requieren las pruebas
+de implementación especificadas en el [roadmap](04-roadmap-and-tui.md).
 
 ### Validación de esta revisión documental
 
-El 2026-10-08 se ejecutaron ambos bloques DDL en una base temporal con SQLite 3.53.1,
-FTS5 y `sqlite-vec` 0.1.9, sin añadir dependencias al proyecto. Pasaron 36 comprobaciones:
-WAL, límites de proyecto, unicidad, historial inmutable, versiones y estados de contrato,
-evidencia requerida, dependencias tardías y múltiples, deprecación, reconciliación única,
-sincronización FTS, búsqueda vectorial por proyecto, integridad y persistencia de outbox
-al reabrir la base. Esto valida el esquema de referencia; el scheduler y los runtimes
-descritos siguen pendientes de implementación.
+El 2026-10-08 se ejecutaron ambos bloques DDL en una base temporal con SQLite
+3.53.1, FTS5 y `sqlite-vec` 0.1.9, sin añadir dependencias al proyecto. Pasaron
+36 comprobaciones: WAL, límites de proyecto, unicidad, historial inmutable,
+versiones y estados de contrato, evidencia requerida, dependencias tardías y
+múltiples, deprecación, reconciliación única, sincronización FTS, búsqueda
+vectorial por proyecto, integridad y persistencia de outbox al reabrir la base.
+Esto valida el esquema de referencia; el scheduler y los runtimes descritos
+siguen pendientes de implementación.
