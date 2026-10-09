@@ -48,8 +48,8 @@ Windows). Útiles:
 | Pantallas GUI (frames `screen/*` de 1440x900, 1920x1080 y 1280x800) | ~130    |
 | Pantallas TUI                                                       | 12      |
 | Componentes reutilizables `ds/*`                                    | ~110    |
-| Variables de diseño (con tema dark/light)                           | 101     |
-| Estados de dominio en `ds/StatusDot` y `ds/StatusBadge`             | 11      |
+| Variables de diseño (con tema dark/light)                           | 107     |
+| Estados de dominio en `ds/StatusDot` y `ds/StatusBadge`             | 13      |
 
 ## Pantallas de referencia (ids para exportar)
 
@@ -79,9 +79,12 @@ app-shell/runtime-target-inspector.
 
 ## Desalineaciones con el SDD que resuelve un ADR
 
-- Vocabulario de estados: ADR-0006 (aceptado 2026-10-09). Pendiente en el
-  canvas: variantes `needs_review` (ámbar, forma propia) y `paused` (neutro,
-  forma de pausa) en `ds/StatusDot` y `ds/StatusBadge`; «Needs you» pasa de
-  estado a filtro.
+- Vocabulario de estados: ADR-0006 (aceptado 2026-10-09). Aplicado en el canvas
+  el 2026-10-09: variantes `needs_review` (ámbar, triángulo hueco) y `paused`
+  (neutro, dos barras) en `ds/StatusDot` y `ds/StatusBadge` md/sm, filas nuevas
+  en la tabla de Foundations, badges `Needs review` del Board y la lista
+  convertidos a `needs_review`, `Needs you` sustituido por el texto real
+  `Waiting for you` y añadido como chip de filtro `filter/needs_you` en las 15
+  barras de filtros.
 - Nombre del archivo de proyecto (`.keel/project.yaml` vs `.toml`): pendiente,
   decisión menor que se anota en el SDD cuando se implemente Project Setup.
