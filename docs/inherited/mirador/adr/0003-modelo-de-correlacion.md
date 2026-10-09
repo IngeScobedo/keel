@@ -77,7 +77,7 @@ justifica el proyecto.
 
 ### Máquina de estados de un tool call
 
-```
+```text
 pending  → PreToolUse recibido
 blocked  → PermissionRequest / hook devolvió exit 2
 running  → permiso resuelto, sin PostToolUse aún

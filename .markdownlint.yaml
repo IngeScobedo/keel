@@ -8,3 +8,6 @@ MD013:
   headings: false
 MD060:
   style: aligned
+# Los ADRs usan **Positivas** / **Negativas** como rótulos dentro de
+# "Consecuencias" (convención heredada de Mirador); no son encabezados.
+MD036: false

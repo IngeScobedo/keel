@@ -48,7 +48,7 @@ registra** en el agente (`parent_discrepancy`), nunca se resuelve en silencio.
 
 ### 2. Árbol de tres niveles con dos clases de nodo
 
-```
+```text
 root (agente)
 ├── workflow wf_XXX (TASK, no agente)      ← background_tasks[].type: 'workflow'
 │   ├── subagente hex (agente)               + tool_response.runId / taskId

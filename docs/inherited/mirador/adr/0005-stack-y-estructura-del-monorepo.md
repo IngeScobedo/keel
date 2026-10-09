@@ -21,7 +21,7 @@ publicarse y usarse fuera de este repo.
 
 ### Estructura de paquetes
 
-```
+```text
 packages/
   core/          # envelope, esquemas Zod, lógica de correlación. Cero deps de I/O.
   collector/     # Fastify: ingesta HTTP, SSE, repositorio Postgres, gates
