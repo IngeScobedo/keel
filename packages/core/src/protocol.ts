@@ -150,7 +150,7 @@ export const NodeViewSchema = z.object({
 export const Methods = {
   "work_items.create": {
     params: MutationMeta.extend({
-      project_id: z.string(),
+      project_id: z.string().optional(),
       title: z.string().min(1),
       kind: z.string(),
       spec_markdown: z.string().optional(),
@@ -170,6 +170,7 @@ export const Methods = {
       work_item_id: z.string(),
       purpose: RunPurposeSchema,
       profile: z.string().optional(),
+      prompt: z.string().optional(),
     }),
     result: RunViewSchema,
   },

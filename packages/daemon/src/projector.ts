@@ -1,0 +1,270 @@
+/**
+ * Proyección de eventos del Claude Agent SDK a `runs`, `agent_instances` y
+ * `tool_calls` (ADR-0004 §4: proyecciones, no verdad). Pura respecto al SDK:
+ * recibe mensajes y hooks ya serializados y escribe por el `Repo`.
+ *
+ * Identidad de agentes (ADR-0002 §4, canal 0 `sdk`): un mensaje con `agent_id`
+ * es de un subagente; su `parent_tool_use_id` es el bloque `tool_use` `Agent`
+ * del mensaje padre, y el `agent_id` de ese mensaje (o null = root) es el padre.
+ */
+import type { NodeState, RunStatus } from "@keel/core"
+import { toolCallLabel } from "@keel/core"
+import { nowIso } from "./ids.js"
+import type { Repo, RunRow } from "./store/repo.js"
+
+type Json = Record<string, unknown>
+
+export type ProjectorContext = {
+  repo: Repo
+  run: RunRow
+  provider: "claude"
+  /** id del agente raíz en `agent_instances` */
+  rootAgentId: string
+}
+
+/** Estado en memoria por run: qué tool_use pertenece a qué agente, y session_id. */
+export class RunProjector {
+  readonly toolUseOwner = new Map<string, string>() // tool_use_id (toolu_…) -> agent_id (fila)
+  sessionId: string | null = null
+  model: string | null = null
+  private rootCreated = false
+
+  readonly ctx: ProjectorContext
+  constructor(ctx: ProjectorContext) {
+    this.ctx = ctx
+  }
+
+  private agentRowId(sdkAgentId: string | null | undefined): string {
+    return sdkAgentId ? `${this.ctx.run.id}:${sdkAgentId}` : this.ctx.rootAgentId
+  }
+
+  private ensureRoot(sessionId: string, model: string | null): void {
+    if (this.rootCreated) return
+    this.rootCreated = true
+    const t = nowIso()
+    this.ctx.repo.upsertAgent({
+      id: this.ctx.rootAgentId,
+      run_id: this.ctx.run.id,
+      provider: this.ctx.provider,
+      session_id: sessionId,
+      external_agent_id: null,
+      parent_agent_id: null,
+      parent_source: null,
+      classification: "root",
+      state: "running",
+      agent_type: null,
+      model,
+      first_seen: t,
+      last_seen: t,
+    })
+  }
+
+  /** Mensaje del stream de `query()`. Devuelve qué cambió para notificar. */
+  onMessage(m: Json): { run?: Partial<RunRow>; agent?: string; toolCalls?: string[] } {
+    const type = String(m.type ?? "")
+    const t = nowIso()
+    if (type === "system" && m.subtype === "init") {
+      this.sessionId = String(m.session_id ?? "")
+      this.model = typeof m.model === "string" ? m.model : null
+      this.ensureRoot(this.sessionId, this.model)
+      this.ctx.repo.updateRun(this.ctx.run.id, {
+        status: "running",
+        started_at: this.ctx.run.started_at ?? t,
+      })
+      return { run: { status: "running" }, agent: this.ctx.rootAgentId }
+    }
+    if (type === "assistant") {
+      const sdkAgent = typeof m.agent_id === "string" ? m.agent_id : null
+      const parentToolUse = typeof m.parent_tool_use_id === "string" ? m.parent_tool_use_id : null
+      const agentId = this.agentRowId(sdkAgent)
+      if (sdkAgent) {
+        const parentAgentId = parentToolUse
+          ? (this.toolUseOwner.get(parentToolUse) ?? this.ctx.rootAgentId)
+          : null
+        this.ctx.repo.upsertAgent({
+          id: agentId,
+          run_id: this.ctx.run.id,
+          provider: this.ctx.provider,
+          session_id: this.sessionId ?? String(m.session_id ?? ""),
+          external_agent_id: sdkAgent,
+          parent_agent_id: parentAgentId,
+          parent_source: parentAgentId ? "sdk" : null,
+          classification: "worker",
+          state: "running",
+          agent_type: null,
+          model: readModel(m),
+          first_seen: t,
+          last_seen: t,
+        })
+      } else {
+        this.ensureRoot(String(m.session_id ?? this.sessionId ?? ""), readModel(m))
+      }
+      const content = (m.message as Json | undefined)?.content
+      if (Array.isArray(content)) {
+        for (const block of content as Json[]) {
+          if (block.type === "tool_use" && typeof block.id === "string")
+            this.toolUseOwner.set(block.id, agentId)
+        }
+      }
+      return { agent: agentId }
+    }
+    if (type === "result") {
+      const usage = (m.usage as Json | undefined) ?? {}
+      const cost =
+        typeof m.total_cost_usd === "number" ? Math.round(m.total_cost_usd * 1_000_000) : null
+      const isError =
+        m.is_error === true || (typeof m.subtype === "string" && m.subtype !== "success")
+      const status: RunStatus = isError
+        ? m.subtype === "error_max_budget_usd"
+          ? "budget_exceeded"
+          : "failed"
+        : "completed"
+      const patch: Partial<RunRow> = {
+        status,
+        end_reason: isError
+          ? m.subtype === "error_max_budget_usd"
+            ? "budget_exceeded"
+            : "fatal_error"
+          : "completed",
+        ended_at: t,
+        input_tokens:
+          num(usage.input_tokens) +
+          num(usage.cache_read_input_tokens) +
+          num(usage.cache_creation_input_tokens),
+        output_tokens: num(usage.output_tokens),
+        total_cost_micro_usd: cost,
+        // El SDK estima a precio de lista incluso con sesión de suscripción (FINDINGS); nunca es `observed`.
+        cost_kind: cost === null ? "unknown" : "estimated",
+      }
+      this.ctx.repo.updateRun(this.ctx.run.id, patch)
+      this.ctx.repo.setAgentState(this.ctx.rootAgentId, isError ? "failed" : "succeeded", t)
+      const orphans = this.closeOpenToolCalls("orphan", t)
+      return { run: patch, agent: this.ctx.rootAgentId, toolCalls: orphans }
+    }
+    return {}
+  }
+
+  /** Hook in-process del SDK. */
+  onHook(
+    name: string,
+    input: Json,
+    toolUseId: string | undefined,
+  ): { agent?: string; toolCalls?: string[] } {
+    const t = nowIso()
+    const sdkAgent = typeof input.agent_id === "string" ? input.agent_id : null
+    const agentId = this.agentRowId(sdkAgent)
+    if (name === "SubagentStart" && sdkAgent) {
+      this.ctx.repo.upsertAgent({
+        id: agentId,
+        run_id: this.ctx.run.id,
+        provider: this.ctx.provider,
+        session_id: String(input.session_id ?? this.sessionId ?? ""),
+        external_agent_id: sdkAgent,
+        parent_agent_id: null,
+        parent_source: null,
+        classification: "worker",
+        state: "running",
+        agent_type: typeof input.agent_type === "string" ? input.agent_type : null,
+        model: null,
+        first_seen: t,
+        last_seen: t,
+      })
+      return { agent: agentId }
+    }
+    if (name === "SubagentStop" && sdkAgent) {
+      this.ctx.repo.setAgentState(agentId, "succeeded", t)
+      return { agent: agentId }
+    }
+    if (name === "PreToolUse" && typeof input.tool_use_id === "string") {
+      const toolUse = input.tool_use_id
+      this.toolUseOwner.set(toolUse, agentId)
+      const toolName = String(input.tool_name ?? "?")
+      const inputJson = input.tool_input === undefined ? null : JSON.stringify(input.tool_input)
+      const label = toolCallLabel(toolName, (input.tool_input as Json) ?? null) ?? toolName
+      const row = this.ctx.repo.openToolCall({
+        run_id: this.ctx.run.id,
+        agent_id: agentId,
+        tool_use_id: toolUse,
+        tool_name: toolName,
+        label,
+        started_at: t,
+        input_json: inputJson,
+      })
+      return { agent: agentId, toolCalls: [row.id] }
+    }
+    if (
+      (name === "PostToolUse" || name === "PostToolUseFailure") &&
+      typeof input.tool_use_id === "string"
+    ) {
+      const ok = name === "PostToolUse"
+      const row = this.ctx.repo.closeToolCall({
+        run_id: this.ctx.run.id,
+        tool_use_id: input.tool_use_id,
+        state: ok ? "succeeded" : "failed",
+        ended_at: t,
+        duration_ms: typeof input.duration_ms === "number" ? input.duration_ms : null,
+        output_json:
+          ok && input.tool_response !== undefined
+            ? JSON.stringify(input.tool_response).slice(0, 256 * 1024)
+            : null,
+        error_message: ok ? null : String((input as { error?: unknown }).error ?? "tool failed"),
+      })
+      return { agent: agentId, toolCalls: row ? [row.id] : [] }
+    }
+    if (name === "StopFailure") {
+      this.ctx.repo.setAgentState(
+        agentId,
+        "interrupted",
+        t,
+        String(input.error ?? input.message ?? "StopFailure"),
+      )
+      return { agent: agentId }
+    }
+    void toolUseId
+    return {}
+  }
+
+  /** Cancelación (FINDINGS §1: el SDK no manda `result` tras abort): el daemon sintetiza. */
+  onCancelled(
+    reason: "cancelled" | "interrupted",
+    message: string | null,
+  ): { run: Partial<RunRow>; toolCalls: string[] } {
+    const t = nowIso()
+    const patch: Partial<RunRow> = {
+      status: reason,
+      end_reason: reason === "cancelled" ? "cancelled" : "interrupted",
+      ended_at: t,
+    }
+    this.ctx.repo.updateRun(this.ctx.run.id, patch)
+    for (const a of this.ctx.repo.agentsOfRun(this.ctx.run.id))
+      if (["running", "waiting_human", "pending"].includes(a.state))
+        this.ctx.repo.setAgentState(a.id, reason, t, message)
+    const closed = this.closeOpenToolCalls(reason, t)
+    return { run: patch, toolCalls: closed }
+  }
+
+  private closeOpenToolCalls(state: NodeState, t: string): string[] {
+    const ids: string[] = []
+    for (const tc of this.ctx.repo.openToolCalls(this.ctx.run.id)) {
+      const row = this.ctx.repo.closeToolCall({
+        run_id: this.ctx.run.id,
+        tool_use_id: tc.tool_use_id,
+        state,
+        ended_at: t,
+        duration_ms: null,
+        output_json: null,
+        error_message: state === "orphan" ? "sin cierre al terminar el run" : state,
+      })
+      if (row) ids.push(row.id)
+    }
+    return ids
+  }
+}
+
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0
+}
+function readModel(m: Json): string | null {
+  const msg = m.message as Json | undefined
+  return typeof msg?.model === "string" ? msg.model : null
+}
