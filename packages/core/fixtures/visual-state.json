@@ -1,0 +1,2430 @@
+[
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": null,
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "planning"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "planning"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "planning"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "planning"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "planning"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "triage",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": null,
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "planned",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "queued"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": null,
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "running",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "running"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": null,
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "waiting_human",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": null,
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "blocked",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "blocked"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": null,
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "needs_review",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "needs_review"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": null,
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "failed",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "failed"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": null,
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "queued",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "queued",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "queued",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "initializing",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "running",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "running",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "running",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "paused",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "paused",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "paused",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "waiting_human",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "completed",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "completed",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "completed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "failed",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "failed",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "failed",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "cancelled",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "interrupted",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "plan"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "execute"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "work_item",
+    "state": "done",
+    "live_run": {
+      "status": "budget_exceeded",
+      "purpose": "triage_eval"
+    },
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "run",
+    "state": "queued",
+    "purpose": "plan",
+    "visual_state": "planning"
+  },
+  {
+    "entity": "run",
+    "state": "queued",
+    "purpose": "execute",
+    "visual_state": "queued"
+  },
+  {
+    "entity": "run",
+    "state": "queued",
+    "purpose": "triage_eval",
+    "visual_state": "queued"
+  },
+  {
+    "entity": "run",
+    "state": "initializing",
+    "purpose": "plan",
+    "visual_state": "planning"
+  },
+  {
+    "entity": "run",
+    "state": "initializing",
+    "purpose": "execute",
+    "visual_state": "queued"
+  },
+  {
+    "entity": "run",
+    "state": "initializing",
+    "purpose": "triage_eval",
+    "visual_state": "queued"
+  },
+  {
+    "entity": "run",
+    "state": "running",
+    "purpose": "plan",
+    "visual_state": "planning"
+  },
+  {
+    "entity": "run",
+    "state": "running",
+    "purpose": "execute",
+    "visual_state": "running"
+  },
+  {
+    "entity": "run",
+    "state": "running",
+    "purpose": "triage_eval",
+    "visual_state": "running"
+  },
+  {
+    "entity": "run",
+    "state": "paused",
+    "purpose": "plan",
+    "visual_state": "paused"
+  },
+  {
+    "entity": "run",
+    "state": "paused",
+    "purpose": "execute",
+    "visual_state": "paused"
+  },
+  {
+    "entity": "run",
+    "state": "paused",
+    "purpose": "triage_eval",
+    "visual_state": "paused"
+  },
+  {
+    "entity": "run",
+    "state": "waiting_human",
+    "purpose": "plan",
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "run",
+    "state": "waiting_human",
+    "purpose": "execute",
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "run",
+    "state": "waiting_human",
+    "purpose": "triage_eval",
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "run",
+    "state": "completed",
+    "purpose": "plan",
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "run",
+    "state": "completed",
+    "purpose": "execute",
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "run",
+    "state": "completed",
+    "purpose": "triage_eval",
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "run",
+    "state": "failed",
+    "purpose": "plan",
+    "visual_state": "failed"
+  },
+  {
+    "entity": "run",
+    "state": "failed",
+    "purpose": "execute",
+    "visual_state": "failed"
+  },
+  {
+    "entity": "run",
+    "state": "failed",
+    "purpose": "triage_eval",
+    "visual_state": "failed"
+  },
+  {
+    "entity": "run",
+    "state": "cancelled",
+    "purpose": "plan",
+    "visual_state": "cancelled"
+  },
+  {
+    "entity": "run",
+    "state": "cancelled",
+    "purpose": "execute",
+    "visual_state": "cancelled"
+  },
+  {
+    "entity": "run",
+    "state": "cancelled",
+    "purpose": "triage_eval",
+    "visual_state": "cancelled"
+  },
+  {
+    "entity": "run",
+    "state": "interrupted",
+    "purpose": "plan",
+    "visual_state": "interrupted"
+  },
+  {
+    "entity": "run",
+    "state": "interrupted",
+    "purpose": "execute",
+    "visual_state": "interrupted"
+  },
+  {
+    "entity": "run",
+    "state": "interrupted",
+    "purpose": "triage_eval",
+    "visual_state": "interrupted"
+  },
+  {
+    "entity": "run",
+    "state": "budget_exceeded",
+    "purpose": "plan",
+    "visual_state": "budget_stop"
+  },
+  {
+    "entity": "run",
+    "state": "budget_exceeded",
+    "purpose": "execute",
+    "visual_state": "budget_stop"
+  },
+  {
+    "entity": "run",
+    "state": "budget_exceeded",
+    "purpose": "triage_eval",
+    "visual_state": "budget_stop"
+  },
+  {
+    "entity": "node",
+    "state": "pending",
+    "visual_state": "queued"
+  },
+  {
+    "entity": "node",
+    "state": "running",
+    "visual_state": "running"
+  },
+  {
+    "entity": "node",
+    "state": "waiting_human",
+    "visual_state": "waiting_human"
+  },
+  {
+    "entity": "node",
+    "state": "succeeded",
+    "visual_state": "succeeded"
+  },
+  {
+    "entity": "node",
+    "state": "failed",
+    "visual_state": "failed"
+  },
+  {
+    "entity": "node",
+    "state": "cancelled",
+    "visual_state": "cancelled"
+  },
+  {
+    "entity": "node",
+    "state": "interrupted",
+    "visual_state": "interrupted"
+  },
+  {
+    "entity": "node",
+    "state": "orphan",
+    "visual_state": "orphan"
+  }
+]
