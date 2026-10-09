@@ -187,12 +187,12 @@ separado: detiene o reconcilia procesos, adjunta razón y evidencia y registra e
 bypass. Ningún agente, trigger SQL ni consumidor de eventos puede simular el
 actor humano.
 
-| Entidad            | Estados                                                                                              | Autoridad                                          |
-| ------------------ | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| WorkItem.lifecycle | `triage`, `planned`, `running`, `waiting_human`, `blocked`, `needs_review`, `failed`, `done`         | Máquina de estados del daemon.                     |
-| Run.status         | `queued`, `initializing`, `running`, `paused`, `completed`, `failed`, `cancelled`, `budget_exceeded` | Supervisor de procesos.                            |
-| Contrato           | `draft`, `ready_for_mock`, `implemented`, `deprecated`                                               | Eventos validados del Contract Hub.                |
-| Change formal      | `Draft`, `Approved`, `Designed`, `InProgress`, `Review`, `Done`, `Archived`                          | Gates del harness; no es el lifecycle del tablero. |
+| Entidad            | Estados                                                                                                                                         | Autoridad                                          |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| WorkItem.lifecycle | `triage`, `planned`, `running`, `waiting_human`, `blocked`, `needs_review`, `failed`, `done`                                                    | Máquina de estados del daemon.                     |
+| Run.status         | `queued`, `initializing`, `running`, `paused`, `waiting_human`, `completed`, `failed`, `cancelled`, `interrupted`, `budget_exceeded` (ADR-0006) | Supervisor de procesos.                            |
+| Contrato           | `draft`, `ready_for_mock`, `implemented`, `deprecated`                                                                                          | Eventos validados del Contract Hub.                |
+| Change formal      | `Draft`, `Approved`, `Designed`, `InProgress`, `Review`, `Done`, `Archived`                                                                     | Gates del harness; no es el lifecycle del tablero. |
 
 `blocked → planned → running` es el desbloqueo visible. Publicar un contrato
 elimina una guarda; el scheduler comprueba las demás antes de iniciar el

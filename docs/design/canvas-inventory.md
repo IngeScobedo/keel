@@ -79,6 +79,9 @@ app-shell/runtime-target-inspector.
 
 ## Desalineaciones con el SDD que resuelve un ADR
 
-- Vocabulario de estados: ADR-0006.
+- Vocabulario de estados: ADR-0006 (aceptado 2026-10-09). Pendiente en el
+  canvas: variantes `needs_review` (ámbar, forma propia) y `paused` (neutro,
+  forma de pausa) en `ds/StatusDot` y `ds/StatusBadge`; «Needs you» pasa de
+  estado a filtro.
 - Nombre del archivo de proyecto (`.keel/project.yaml` vs `.toml`): pendiente,
   decisión menor que se anota en el SDD cuando se implemente Project Setup.

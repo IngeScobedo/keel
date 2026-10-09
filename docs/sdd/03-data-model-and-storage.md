@@ -149,9 +149,10 @@ CREATE TABLE runs (
     project_id TEXT NOT NULL,
     work_item_id TEXT NOT NULL,
     plan_id TEXT,
+    purpose TEXT NOT NULL DEFAULT 'execute' CHECK (purpose IN ('plan', 'execute', 'triage_eval')),
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
-        'queued', 'initializing', 'running', 'paused', 'completed',
-        'failed', 'cancelled', 'budget_exceeded'
+        'queued', 'initializing', 'running', 'paused', 'waiting_human', 'completed',
+        'failed', 'cancelled', 'interrupted', 'budget_exceeded'
     )),
     end_reason TEXT CHECK (end_reason IN (
         'completed', 'interrupted', 'timeout', 'budget_exceeded', 'rate_limit', 'fatal_error', 'cancelled'
@@ -169,8 +170,10 @@ CREATE TABLE runs (
     FOREIGN KEY(work_item_id, project_id) REFERENCES work_items(id, project_id)
 );
 CREATE INDEX idx_runs_item ON runs(work_item_id, status);
+-- Vivo = puede volver a consumir recursos sin un run nuevo. `interrupted` es
+-- terminal: el reintento es otro run (ADR-0006).
 CREATE UNIQUE INDEX idx_live_run ON runs(work_item_id)
-    WHERE status IN ('queued', 'initializing', 'running', 'paused');
+    WHERE status IN ('queued', 'initializing', 'running', 'paused', 'waiting_human');
 
 CREATE TABLE lanes (
     id TEXT PRIMARY KEY NOT NULL,
@@ -217,10 +220,16 @@ CREATE TABLE work_item_blocks (
     UNIQUE(work_item_id, kind, reason_key)
 );
 
+-- `state` en workflow_nodes, agent_instances y tool_calls es una proyección
+-- calculada por el daemon desde `events` (ADR-0006, nivel «nodo de ejecución»);
+-- nunca la escribe un cliente.
 CREATE TABLE workflow_nodes (
     id TEXT PRIMARY KEY NOT NULL,
     run_id TEXT NOT NULL REFERENCES runs(id),
     title TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN (
+        'pending', 'running', 'waiting_human', 'succeeded', 'failed', 'cancelled', 'interrupted', 'orphan'
+    )),
     UNIQUE(id, run_id)
 );
 
@@ -232,9 +241,12 @@ CREATE TABLE agent_instances (
     external_agent_id TEXT,
     parent_agent_id TEXT,
     parent_workflow_id TEXT,
-    parent_source TEXT CHECK (parent_source IN ('transcript', 'launch', 'prompt')),
+    parent_source TEXT CHECK (parent_source IN ('sdk', 'transcript', 'launch', 'prompt')),
     parent_discrepancy INTEGER NOT NULL DEFAULT 0 CHECK (parent_discrepancy IN (0, 1)),
     classification TEXT NOT NULL CHECK (classification IN ('root', 'worker', 'utility')),
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN (
+        'pending', 'running', 'waiting_human', 'succeeded', 'failed', 'cancelled', 'interrupted', 'orphan'
+    )),
     agent_type TEXT,
     model TEXT,
     first_seen TEXT NOT NULL,
@@ -255,7 +267,9 @@ CREATE TABLE tool_calls (
     tool_use_id TEXT NOT NULL,
     tool_name TEXT NOT NULL,
     label TEXT NOT NULL CHECK (length(label) > 0),
-    state TEXT NOT NULL CHECK (state IN ('pending', 'done', 'failed', 'orphan')),
+    state TEXT NOT NULL CHECK (state IN (
+        'pending', 'running', 'waiting_human', 'succeeded', 'failed', 'cancelled', 'interrupted', 'orphan'
+    )),
     started_at TEXT NOT NULL,
     ended_at TEXT,
     wall_ms INTEGER CHECK (wall_ms >= 0),
@@ -818,3 +832,12 @@ múltiples, deprecación, reconciliación única, sincronización FTS, búsqueda
 vectorial por proyecto, integridad y persistencia de outbox al reabrir la base.
 Esto valida el esquema de referencia; el scheduler y los runtimes descritos
 siguen pendientes de implementación.
+
+El 2026-10-09, por ADR-0006, cambiaron `runs` (`purpose`, `status` con
+`waiting_human` e `interrupted`, `idx_live_run` con `waiting_human`),
+`tool_calls.state` (`done` → `succeeded`, más `running`, `waiting_human`,
+`cancelled`, `interrupted`), `state` nuevo en `workflow_nodes` y
+`agent_instances`, y `parent_source` con `sdk` (ADR-0002). El bloque relacional
+y FTS5 se re-ejecutó ese día sobre una base vacía con el módulo `sqlite3` de
+Python (SQLite 3.53.1) y pasó; las 36 comprobaciones de arriba y el bloque
+vectorial **no** se repitieron y quedan para la migración 0001 (ADR-0004 §2).
