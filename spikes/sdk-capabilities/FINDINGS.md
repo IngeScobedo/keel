@@ -161,6 +161,19 @@ verde, 0 fallidas.
 `sqlite-vec` en macOS con `Database.setCustomSQLite()`: **pendiente**, no hay
 macOS disponible.
 
+### 8. Punta a punta real con el daemon (2026-10-09, `packages/daemon`)
+
+`bun packages/daemon/src/main.ts` +
+`cli.ts run "Lista con Glob los .ts de packages/core/src…"` con la sesión de
+suscripción del usuario, modelo haiku: 24 eventos persistidos (hooks, mensajes
+del SDK, proyecciones), run `completed` con `cost_kind = estimated` y 1,900
+µUSD, un tool call `Glob` con `wall_ms 166` contra `duration_ms 43`, proceso
+`claude` registrado con pid, cwd y session_id en el manifest del run, y la CLI
+recibiendo el stream por `events.subscribe` y saliendo al ver `completed`. El
+SDK avisa que `allowedTools` con nombres pelados auto-aprueba antes de
+`canUseTool` (`CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`): para gatear todo, el perfil
+debe vaciar `allowedTools` y decidir en `PreToolUse`.
+
 ## Qué cambia en los ADRs
 
 - ADR-0002: `cost_kind = estimated` con Claude en sesión de suscripción (precio

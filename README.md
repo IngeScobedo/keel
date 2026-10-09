@@ -38,6 +38,21 @@ bun run spike:sdk     # probe del Claude Agent SDK (usa el `claude` instalado, m
 bun run spike:codex   # probe del Codex SDK
 ```
 
+## Correr el daemon y la CLI (Fase 0)
+
+```bash
+bun packages/daemon/src/main.ts --root /ruta/al/repo     # socket en $XDG_RUNTIME_DIR/keel/keel.sock
+bun packages/daemon/src/cli.ts health
+bun packages/daemon/src/cli.ts run "Lista con Glob los .ts de packages/core/src"
+bun packages/daemon/src/cli.ts tail                        # eventos en vivo con visual_state
+bun packages/daemon/src/cli.ts approve <id> <hash>         # o deny
+```
+
+El perfil por defecto usa `subscription_session` con el `claude` instalado,
+modelo `haiku`, herramientas `Read`, `Glob` y `Grep` auto-aprobadas; cualquier
+otra pasa por `canUseTool` y espera una decisión humana hasta 60 s, luego se
+deniega (SDD 02 §9).
+
 ## Proveedores y cuentas
 
 Keel no tiene login propio, no lee ni guarda credenciales de Claude ni de Codex

@@ -66,7 +66,7 @@ if (import.meta.main) {
     const prompt = rest.filter((a) => !a.startsWith("--")).join(" ")
     const purpose = rest.includes("--purpose") ? rest[rest.indexOf("--purpose") + 1] : "execute"
     client.onEvent((n) => console.log(fmtEvent(n)))
-    await client.call("events.subscribe", { after_event_seq: Number.MAX_SAFE_INTEGER - 1 })
+    await client.call("events.subscribe", { after_event_seq: Number.MAX_SAFE_INTEGER - 1 }) // «desde ahora»
     const w = (await client.call("work_items.create", {
       request_id: key(),
       idempotency_key: key(),

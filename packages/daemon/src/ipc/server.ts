@@ -230,10 +230,10 @@ export class IpcServer {
       : []
     const runs = projectId ? repo.listRuns(projectId).map((r) => repo.runView(r)) : []
     const cursor = repo.lastEventSeq()
-    // Replay de lo que el cliente no vio; luego el bus. Lo que se publique entre el
-    // replay y la suscripción se repone por `event_seq` en el cliente (dedupe por seq).
-    let last = p.after_event_seq
-    for (const e of repo.eventsAfter(p.after_event_seq, projectId)) {
+    // Un cursor por delante del último evento significa «desde ahora»: no se puede
+    // saltar el futuro. Replay de lo que el cliente no vio; luego el bus.
+    let last = Math.min(p.after_event_seq, cursor)
+    for (const e of repo.eventsAfter(last, projectId)) {
       this.send(state, notification("events.event", this.toNotification(e)))
       last = e.event_seq
     }
