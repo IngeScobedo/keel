@@ -19,6 +19,7 @@
     "format": "biome format --write .",
     "docs:format": "prettier --write \"**/*.md\" \"!**/node_modules/**\"",
     "docs:lint": "markdownlint-cli2 \"**/*.md\" \"!**/node_modules/**\"",
+    "docs:validate-ddl": "bun scripts/validate-ddl.ts",
     "spike:sdk": "bun spikes/sdk-capabilities/src/claude-probe.ts",
     "spike:codex": "bun spikes/sdk-capabilities/src/codex-probe.ts",
     "clean": "rm -rf packages/*/dist spikes/*/dist packages/*/tsconfig.tsbuildinfo"
@@ -28,6 +29,7 @@
     "@types/bun": "^1.4.0",
     "markdownlint-cli2": "^0.20.0",
     "prettier": "^3.9.9",
+    "sqlite-vec": "^0.1.9",
     "typescript": "^7.0.2"
   }
 }

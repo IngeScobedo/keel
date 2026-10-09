@@ -1,0 +1,23 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run docs:lint
+      - run: bun run docs:validate-ddl
+      - name: Keel no toca archivos de credenciales (ADR-0002)
+        run: |
+          ! grep -rnE '\.claude\.json|\.codex/auth\.json|credentials\.json' packages spikes scripts --include='*.ts' --exclude-dir=node_modules --exclude-dir=__fixtures__ \
+            | grep -v 'ADR-0002\|no lee\|nunca\|probe' || { echo "ruta de credenciales en código"; exit 1; }

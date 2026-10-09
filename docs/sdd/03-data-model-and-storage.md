@@ -837,7 +837,9 @@ El 2026-10-09, por ADR-0006, cambiaron `runs` (`purpose`, `status` con
 `waiting_human` e `interrupted`, `idx_live_run` con `waiting_human`),
 `tool_calls.state` (`done` → `succeeded`, más `running`, `waiting_human`,
 `cancelled`, `interrupted`), `state` nuevo en `workflow_nodes` y
-`agent_instances`, y `parent_source` con `sdk` (ADR-0002). El bloque relacional
-y FTS5 se re-ejecutó ese día sobre una base vacía con el módulo `sqlite3` de
-Python (SQLite 3.53.1) y pasó; las 36 comprobaciones de arriba y el bloque
-vectorial **no** se repitieron y quedan para la migración 0001 (ADR-0004 §2).
+`agent_instances`, y `parent_source` con `sdk` (ADR-0002; caso observado en
+`spikes/sdk-capabilities/FINDINGS.md`). La validación vive ahora en el repo:
+`bun run docs:validate-ddl` (`scripts/validate-ddl.ts`) lee estos bloques y
+corre 62 comprobaciones sobre `bun:sqlite` (SQLite 3.53.2) con FTS5 y
+`sqlite-vec` 0.1.9, incluido el bloque vectorial; corre en CI junto con
+`docs:lint`. Última ejecución: 2026-10-09, 62 en verde.
