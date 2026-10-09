@@ -15,16 +15,17 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0003](./0003-runtime-del-daemon-typescript-primero.md)     | Runtime del daemon: TypeScript sobre Bun primero, Rust diferido tras el spike                   | Propuesto (condicionado al spike) | Alta       |
 | [0004](./0004-store-sqlite-wal.md)                          | Store: SQLite WAL local, envelope de Mirador conservado                                         | Propuesto                         | Alta       |
 | [0005](./0005-ipc-json-rpc-ndjson-sobre-socket-local.md)    | IPC: JSON-RPC 2.0 en NDJSON sobre socket Unix / Named Pipe; los clientes nunca escriben la base | Propuesto                         | Alta       |
-| [0006](./0006-vocabulario-de-estados.md)                    | Vocabulario de estados: tres niveles (tarea, run, nodo de ejecución) y proyección a tablero     | Aceptado (2026-10-09)             | **Máxima** |
+| [0006](./0006-vocabulario-de-estados.md)                    | Vocabulario de estados: tres niveles (tarea, run, nodo de ejecución) y proyección a tablero     | Propuesto (decisiones tomadas)    | **Máxima** |
 
 ## Estado «Propuesto»
 
-Los ADRs de esta serie nacen como **Propuesto** (0006 ya fue aceptado el
-2026-10-09 con tres decisiones del humano). Los escribió Claude a petición del
-humano el 2026-10-08 a partir del SDD, los ADRs de Mirador, el canvas de pen.dev
-y los docs oficiales de Anthropic verificados ese día. Pasan a **Aceptado**
-cuando el humano los lea, corrija y cambie el estado; hasta entonces el código
-que dependa de uno se escribe como si fuera a aceptarse, y se reescribe si no.
+Todos los ADRs de esta serie están en **Propuesto**; 0006 tiene sus tres
+decisiones tomadas por el humano (2026-10-09) y aplicadas, y aun así el cambio
+de estado es suyo. Los escribió Claude a petición del humano el 2026-10-08 a
+partir del SDD, los ADRs de Mirador, el canvas de pen.dev y los docs oficiales
+de Anthropic verificados ese día. Pasan a **Aceptado** cuando el humano los lea,
+corrija y cambie el estado; hasta entonces el código que dependa de uno se
+escribe como si fuera a aceptarse, y se reescribe si no.
 
 ## Orden de lectura
 

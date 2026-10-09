@@ -47,17 +47,37 @@ sin modificar.
 
 ## Decisión
 
-### 1. Dos modos de proveedor, ambos de primera clase
+### 1. El modo de autenticación es una capacidad declarada por perfil
 
-| Modo           | Cómo                                                                                                                                                                                                      | Para quién                                                                        |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| **`api_key`**  | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` del entorno o del vault de Keel (referencia, nunca valor en el store). Bedrock/Vertex cuando el SDK lo soporte.                                                    | El único modo que los docs sancionan para «productos». Default para equipos y CI. |
-| **`personal`** | Keel invoca el **binario de Claude Code instalado por el usuario** (`pathToClaudeCodeExecutable`) y deja que ese binario use la sesión que ya tenga. Para Codex, el CLI `codex` del usuario con su login. | Una persona en su máquina con su cuenta.                                          |
+El adaptador de cada proveedor declara qué modos soporta y el perfil de proyecto
+elige uno: `subscription_session`, `api_key`, `bedrock` o `vertex`. El daemon no
+asume ninguno y **no hay fallback silencioso** entre modos. Los dos primeros se
+describen abajo; `bedrock` y `vertex` son `api_key` con las credenciales del
+proveedor cloud, cuando el SDK los soporte.
+
+Lo que dice la documentación oficial, y que aplica aunque Keel no toque la
+autenticación y aunque se dirija el `claude` del usuario por subproceso en vez
+de por el SDK: «Unless previously approved, Anthropic does not allow third party
+developers to offer claude.ai login or rate limits for their products, including
+agents built on the Claude Agent SDK»
+(`code.claude.com/docs/en/agent-sdk/overview`). Pedir esa confirmación o
+aprobación es tarea del humano; mientras llega, el modo `subscription_session`
+existe en el diseño y se usa sólo para uso personal del propio desarrollador.
+Hay una fuente secundaria no oficial que menciona un crédito mensual separado
+para el Agent SDK en planes de suscripción desde junio de 2026: **no se cita
+como hecho**; queda pendiente de verificar en documentación oficial.
+
+### 1b. Los dos modos locales
+
+| Modo                       | Cómo                                                                                                                                                                                                      | Para quién                                                                        |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| **`api_key`**              | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` del entorno o del vault de Keel (referencia, nunca valor en el store). Bedrock/Vertex cuando el SDK lo soporte.                                                    | El único modo que los docs sancionan para «productos». Default para equipos y CI. |
+| **`subscription_session`** | Keel invoca el **binario de Claude Code instalado por el usuario** (`pathToClaudeCodeExecutable`) y deja que ese binario use la sesión que ya tenga. Para Codex, el CLI `codex` del usuario con su login. | Una persona en su máquina con su cuenta.                                          |
 
 El modo se declara por perfil de proyecto, es visible en la UI (chip de runtime)
-y **no hay fallback silencioso** de uno a otro. Si el modo `personal` no
-encuentra sesión, Keel lo dice y ofrece abrir un pane de terminal con `claude`
-para que el usuario haga `/login` ahí.
+y **no hay fallback silencioso** de uno a otro. Si el modo
+`subscription_session` no encuentra sesión, Keel lo dice y ofrece abrir un pane
+de terminal con `claude` para que el usuario haga `/login` ahí.
 
 ### 2. Cuatro reglas que convierten «ordinary, individual usage» en código verificable
 
@@ -81,9 +101,9 @@ para que el usuario haga `/login` ahí.
 
 - `runs.cost_kind` (SDD 03) toma `observed` sólo cuando el proveedor devuelve un
   importe autoritativo (hoy: ninguno de los dos SDKs). Bajo `api_key` con
-  `total_cost_usd` del SDK es `estimated`; bajo `personal` es `estimated` si el
-  SDK devuelve un número y `unknown` si devuelve cero o nada. **El spike decide
-  cuál.**
+  `total_cost_usd` del SDK es `estimated`; bajo `subscription_session` es
+  `estimated` si el SDK devuelve un número y `unknown` si devuelve cero o nada.
+  **El spike decide cuál.**
 - Toda cifra en USD en la UI lleva su `cost_kind` al lado («$1.84 estimado»,
   «cuota»). La barra de estado del canvas («$12.40 today») se etiqueta igual.
 - Tokens (`input`, `output`, `cache_read`) se muestran siempre que existan: son
@@ -107,15 +127,15 @@ No se espera a la respuesta para desarrollar.
 
 ## Evidencia del spike (2026-10-08, `spikes/sdk-capabilities/FINDINGS.md`)
 
-- Modo `personal` funciona mecánicamente sin que Keel toque credenciales:
-  `init.apiKeySource: "none"` y la query completa con la sesión de `/login` del
-  binario del usuario.
+- Modo `subscription_session` funciona mecánicamente sin que Keel toque
+  credenciales: `init.apiKeySource: "none"` y la query completa con la sesión de
+  `/login` del binario del usuario.
 - Bajo esa sesión el SDK **sí** devuelve `total_cost_usd` (estimación a precio
   de lista, `costBasis: "list"`). Decisión para §3: `cost_kind = estimated`,
   nunca `observed`.
 - El SDK emite `rate_limit_event` con utilización por ventana (`five_hour`,
   `seven_day`) y `resetsAt`: es el dato de «cuota» para la UI en modo
-  `personal`.
+  `subscription_session`.
 - Codex: el SDK usa el login de ChatGPT del CLI; la corrida falló por límite de
   uso de la cuenta, no por auth. Términos de OpenAI siguen sin verificar.
 
@@ -131,11 +151,11 @@ No se espera a la respuesta para desarrollar.
 
 **Negativas**
 
-- En modo `personal` Keel depende de un binario que no controla (versión, flags,
-  comportamiento). Mitigación: matriz de capacidades por versión (SDD 02 §8) y
-  `claude_code_version` del `init` guardado en cada run.
-- El costo en modo `personal` es probablemente `unknown`: la UI de presupuesto
-  se degrada a tokens y tiempo. Aceptado y ya contemplado en el SDD.
+- En modo `subscription_session` Keel depende de un binario que no controla
+  (versión, flags, comportamiento). Mitigación: matriz de capacidades por
+  versión (SDD 02 §8) y `claude_code_version` del `init` guardado en cada run.
+- El costo en modo `subscription_session` es probablemente `unknown`: la UI de
+  presupuesto se degrada a tokens y tiempo. Aceptado y ya contemplado en el SDD.
 - Codex con suscripción de ChatGPT no está verificado. Hasta verificarlo, Codex
   sólo en `api_key`.
 

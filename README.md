@@ -36,9 +36,9 @@ bun run spike:codex   # probe del Codex SDK
 ## Proveedores y cuentas
 
 Keel no tiene login propio, no lee ni guarda credenciales de Claude ni de Codex
-y no hace proxy de requests. En modo personal invoca el binario de Claude Code
-que el usuario ya instaló y deja que ese binario use la sesión que ya tenga; en
-modo API key usa la clave del entorno. Detalle y razones en
+y no hace proxy de requests. En modo `subscription_session` invoca el binario de
+Claude Code que el usuario ya instaló y deja que ese binario use la sesión que
+ya tenga; en modo API key usa la clave del entorno. Detalle y razones en
 [ADR-0002](docs/adr/0002-proveedores-autenticacion-y-costo.md).
 
 Keel no está afiliado a Anthropic ni a OpenAI. El uso de cada proveedor queda

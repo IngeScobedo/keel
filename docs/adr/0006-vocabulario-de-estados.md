@@ -1,8 +1,10 @@
 # ADR-0006: Vocabulario de estados — tres niveles y una proyección a tablero
 
-- **Estado:** Aceptado el 2026-10-09 por el humano, con las tres decisiones de
-  la sección «Decisiones del humano» y las correcciones al SDD 03 que exigió.
-- **Fecha:** 2026-10-08 (propuesto), 2026-10-09 (aceptado)
+- **Estado:** Propuesto. Las tres decisiones de la sección «Decisiones del
+  humano» están tomadas (2026-10-09) y aplicadas al SDD 03 y al canvas; el
+  cambio a Aceptado lo hace el humano cuando dé por resueltos los pendientes de
+  «Condiciones».
+- **Fecha:** 2026-10-08 (propuesto), 2026-10-09 (decisiones aplicadas)
 - **Criticidad:** Máxima — bloquea `StateBadge`, `StatusDot`, el tablero y la
   máquina de estados
 - **Relacionados:** SDD 01 §3, SDD 03 (`work_items.lifecycle`, `runs.status`,
@@ -54,7 +56,10 @@ badge es un badge.
    - `tool_calls.state`: `done` pasa a `succeeded` y se añaden `running`,
      `waiting_human`, `cancelled`, `interrupted`. Una traducción menos.
    - `workflow_nodes.state` y `agent_instances.state` nuevos, misma enumeración.
-   - `agent_instances.parent_source` gana `sdk` (ADR-0002 §4).
+   - `agent_instances.parent_source` gana `sdk` (ADR-0002 §4). Caso observado:
+     el spike del 2026-10-08 recibió `agent_id` y `parent_tool_use_id` en los
+     mensajes del subagente (`FINDINGS.md`, primera corrida); sin ese caso el
+     valor se habría quitado.
 
 2. **Mapeo a estado visual** (lo que el componente pinta). Son **13** visuales:
    los 11 del canvas más `needs_review` y `paused`.
@@ -96,6 +101,14 @@ badge es un badge.
    en Rust y la GUI en React pintan lo que reciben; ninguna reimplementa el
    mapeo. Es la forma de que la regla no se bifurque entre dos lenguajes.
 
+   `visual_state` es **parte del envelope versionado** de ADR-0005: sus 13
+   valores son contrato; añadir uno es un cambio de protocolo con nueva versión.
+   Los clientes tienen fallback explícito para un valor desconocido: pintar
+   neutro con el texto crudo del estado, nunca ocultar la entidad. La tabla 2 es
+   el artefacto canónico y se materializa como fixtures de conformidad
+   `(entidad, estado, purpose) → visual_state` en `@keel/core`, testeadas en el
+   daemon con cobertura exhaustiva de las tres enumeraciones.
+
 4. **`board_status` es una proyección configurable por proyecto** (SDD 01 §3) y
    **no** un cuarto vocabulario del dominio. Las columnas del canvas
    (`Backlog, Ready, In Progress, In Review, Done`) son el default; el mapeo no
@@ -129,7 +142,17 @@ badge es un badge.
    `waiting_human` inflaría la cola de atención. Mejor un visual más que un
    ámbar mentiroso.
 
-Correcciones que condicionaron la aceptación y que este ADR aplica al SDD 03:
+## Condiciones (estado al 2026-10-09)
+
+| Condición                                                            | Estado                                                                                                 |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Revalidación completa del DDL sobre el esquema corregido             | Resuelta: `bun run docs:validate-ddl`, 62 comprobaciones en `bun:sqlite` 3.53.2 con FTS5 y vec0 0.1.9. |
+| Validación versionada en el repo y en CI                             | Resuelta: `scripts/validate-ddl.ts`, `.github/workflows/ci.yml`.                                       |
+| `parent_source = 'sdk'` con caso observado                           | Resuelta: ver punto 1 y `FINDINGS.md`.                                                                 |
+| `visual_state` como contrato del protocolo                           | Texto resuelto (punto 3); la función y los fixtures en `@keel/core` son trabajo de la Fase 0.          |
+| Canvas: variantes `needs_review` y `paused`, «Needs you» como filtro | Aplicado el 2026-10-09; la forma de `needs_review` se revisó en escala de grises (inventario).         |
+
+Correcciones que condicionaron las decisiones y que este ADR aplica al SDD 03:
 `idx_live_run` con `waiting_human`, `interrupted` terminal, `runs.purpose`, el
 nivel de nodo materializado como columna `state`, y el mapeo resuelto en el
 daemon para que la TUI no lo reimplemente. El DDL modificado se re-ejecutó el
