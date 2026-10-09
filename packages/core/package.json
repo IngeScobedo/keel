@@ -1,0 +1,33 @@
+{
+  "name": "@keel/core",
+  "version": "0.0.0",
+  "description": "Envelope de eventos, esquemas Zod y correlacion heredados de Mirador. Cero I/O, runtime-agnostico.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "bun test",
+    "dev": "tsc -b --watch"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "keel": {
+    "runtime": "agnostic",
+    "dependsOn": [],
+    "io": "none"
+  }
+}

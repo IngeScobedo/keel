@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "pencil": {
+      "type": "stdio",
+      "command": "bash",
+      "args": ["tools/pencil-mcp-wsl.sh", "claudeCodeCLI"],
+      "env": {}
+    }
+  }
+}

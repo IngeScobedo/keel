@@ -1,0 +1,29 @@
+{
+  "name": "keel",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "spikes/*"
+  ],
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "scripts": {
+    "build": "bun run --filter './packages/*' build",
+    "test": "bun run --filter './packages/*' test",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "spike:sdk": "bun spikes/sdk-capabilities/src/claude-probe.ts",
+    "spike:codex": "bun spikes/sdk-capabilities/src/codex-probe.ts",
+    "clean": "rm -rf packages/*/dist spikes/*/dist packages/*/tsconfig.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.9",
+    "@types/bun": "^1.4.0",
+    "typescript": "^7.0.2"
+  }
+}

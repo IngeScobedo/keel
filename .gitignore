@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.idea/
+# capturas del spike: pueden contener rutas y texto de la máquina; se redactan antes de commitear
+spikes/sdk-capabilities/captures/
+# settings locales de Claude Code
+.claude/settings.local.json

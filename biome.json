@@ -1,0 +1,41 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": ["**", "!**/dist", "!**/*.tsbuildinfo", "!**/__fixtures__", "!**/fixtures"]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "semicolons": "asNeeded", "trailingCommas": "all" }
+  },
+  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
+  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "overrides": [
+    {
+      "includes": ["packages/core/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "bun": "core es runtime-agnostico y sin I/O (ADR-0001 de Keel, hereda la regla de Mirador).",
+                  "bun:sqlite": "core es runtime-agnostico: prohibido bun:*.",
+                  "bun:test": "Los tests viven en test/, no en src/.",
+                  "node:fs": "core no hace I/O.",
+                  "node:child_process": "core no hace I/O."
+                }
+              }
+            },
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": { "deniedGlobals": { "Bun": "core es runtime-agnostico." } }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
