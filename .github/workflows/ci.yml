@@ -15,6 +15,12 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
+      - name: Renderer GUI
+        run: bun run gui:build
+      - name: Chromium para flujos GUI
+        run: bunx playwright install --with-deps chromium
+      - name: Flujos GUI y frontera IPC simulada
+        run: bun run gui:e2e
       - run: bun run docs:lint
       - run: bun run docs:validate-ddl
       - name: Keel no toca archivos de credenciales (ADR-0002)

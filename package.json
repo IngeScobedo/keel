@@ -13,7 +13,7 @@
   "scripts": {
     "build": "bun run --filter './packages/*' build",
     "test": "bun run --filter './packages/*' test",
-    "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit && tsc -p packages/gui/tsconfig.tools.json --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
@@ -24,7 +24,11 @@
     "ddl:check": "bun scripts/extract-ddl.ts --check",
     "spike:sdk": "bun spikes/sdk-capabilities/src/claude-probe.ts",
     "spike:codex": "bun spikes/sdk-capabilities/src/codex-probe.ts",
-    "clean": "rm -rf packages/*/dist spikes/*/dist packages/*/tsconfig.tsbuildinfo"
+    "clean": "rm -rf packages/*/dist spikes/*/dist packages/*/tsconfig.tsbuildinfo",
+    "gui:dev": "bun run --cwd packages/core build && bun run --cwd packages/gui dev",
+    "gui:build": "bun run --cwd packages/core build && bun run --cwd packages/gui build",
+    "gui:e2e": "bun run --cwd packages/gui e2e",
+    "gui:desktop": "bun run --cwd packages/core build && bun run --cwd packages/gui desktop"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.9",

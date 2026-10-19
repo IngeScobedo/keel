@@ -11,3 +11,10 @@ dist/
 spikes/sdk-capabilities/captures/
 # settings locales de Claude Code
 .claude/settings.local.json
+
+# GUI: salidas de compilación y pruebas locales
+dist-types/
+packages/gui/test-results/
+packages/gui/playwright-report/
+packages/gui/src-tauri/target/
+packages/gui/src-tauri/gen/

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Eventos del transporte IPC en la ventana local; sin acceso a archivos ni shell.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

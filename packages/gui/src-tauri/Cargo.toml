@@ -1,0 +1,13 @@
+[package]
+name = "keel-gui"
+version = "0.0.0"
+description = "Cliente GUI de Keel; transporte IPC sin lógica del daemon"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+tokio = { version = "1", features = ["io-util", "net", "sync", "time", "rt"] }
