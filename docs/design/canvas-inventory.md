@@ -1,4 +1,4 @@
-# Inventario del canvas de pen.dev (2026-10-08)
+# Inventario del canvas de pen.dev (revisado 2026-10-14)
 
 Documento:
 `C:/Users/amara/.pencil/documents/e7e51bf1-eda9-4e08-ae4f-b01377e7b2ee/untitled.pen`
@@ -45,9 +45,9 @@ Windows). Útiles:
 | Qué                                                                 | Cuántos |
 | ------------------------------------------------------------------- | ------- |
 | Páginas                                                             | 17      |
-| Pantallas GUI (frames `screen/*` de 1440x900, 1920x1080 y 1280x800) | ~130    |
+| Pantallas GUI (frames `screen/*` de 1440x900, 1920x1080 y 1280x800) | 111     |
 | Pantallas TUI                                                       | 12      |
-| Componentes reutilizables `ds/*`                                    | ~110    |
+| Componentes reutilizables `ds/*`                                    | 112     |
 | Variables de diseño (con tema dark/light)                           | 107     |
 | Estados de dominio en `ds/StatusDot` y `ds/StatusBadge`             | 13      |
 
