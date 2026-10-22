@@ -10,6 +10,14 @@ core + 18 daemon). `bun run lint` pasó con un aviso informativo de versión del
 schema Biome. Las reproducciones adicionales usaron SQLite temporal, sockets
 locales y queryFn de fixtures; no ejecutaron consultas a proveedores.
 
+## Estado (2026-10-22)
+
+K-01 a K-08 están corregidos, cada uno con su prueba de regresión, que falla
+contra el código de `5996ec9`: K-01 en `dfc21ae`, K-05 en `3d609d7`, K-03 en
+`6d78ce0`, la tabla de lifecycle en `684c2b5`, K-02/K-04/K-07/K-08 en `614d699`
+y K-06 en `f8f92ff`. Sigue pendiente lo de «Pendientes encontrados durante la
+GUI» y el store de artefactos para eventos de más de 256 KiB (ADR-0004 §3).
+
 ## Hallazgos reproducidos
 
 | ID   | Prioridad | Archivo / ubicación                                                               | Resultado observado                                                                                                                                | Corrección y regresión requerida                                                                                                                             |

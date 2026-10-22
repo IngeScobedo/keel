@@ -97,7 +97,8 @@ flowchart LR
 
 - [ ] Resolver mediante ADR la convivencia/transición Mirador–Keel antes de
       cambiar paquetes existentes.
-- [ ] Daemon Rust, migraciones SQLite WAL, eventos, outbox y comandos
+- [ ] Daemon TypeScript sobre Bun (ADR-0003; Rust se reabre sólo con sus
+      disparadores medidos), migraciones SQLite WAL, eventos, outbox y comandos
       idempotentes.
 - [ ] JSON-RPC por UDS/Named Pipes, permisos de endpoint, snapshot y cursor de
       reconexión.
@@ -113,7 +114,8 @@ Windows y POSIX sin presuponer resultados submilisegundo.
 
 ### Fase 1 · Sidecar, autenticación y telemetría — semanas 3–4
 
-- [ ] Supervisor Node/TypeScript por stdio, framing, cancelación y backpressure.
+- [ ] Supervisor de procesos de proveedor dentro del daemon (ADR-0003 §1: no hay
+      sidecar separado), cancelación y backpressure.
 - [ ] Adaptadores oficiales con matriz de capacidades y versiones; login
       delegado al proveedor.
 - [ ] Verificar qué modos de cuenta/suscripción admite cada integración; API

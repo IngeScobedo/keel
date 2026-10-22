@@ -177,15 +177,17 @@ stateDiagram-v2
     blocked --> planned: todas las guardas satisfechas
     running --> needs_review: evidencia independiente válida
     running --> failed: fallo o presupuesto
+    running --> planned: run cancelado
     failed --> planned: replanificación
     needs_review --> planned: cambios solicitados
     needs_review --> done: aceptación humana
 ```
 
-El diagrama describe el recorrido normal. Un cierre forzado es un comando humano
-separado: detiene o reconcilia procesos, adjunta razón y evidencia y registra el
-bypass. Ningún agente, trigger SQL ni consumidor de eventos puede simular el
-actor humano.
+El diagrama describe el recorrido normal. La tabla ejecutable, con la autoridad
+de cada arista (humano, sistema o cierre humano), es `LIFECYCLE_EDGES` en
+`@keel/core`. Un cierre forzado es un comando humano separado: detiene o
+reconcilia procesos, adjunta razón y evidencia y registra el bypass. Ningún
+agente, trigger SQL ni consumidor de eventos puede simular el actor humano.
 
 | Entidad            | Estados                                                                                                                                         | Autoridad                                          |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
