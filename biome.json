@@ -36,6 +36,33 @@
           }
         }
       }
+    },
+    {
+      "includes": ["packages/git/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "paths": {
+                  "bun": "Las librerías corren en Node (ADR-0007 §4).",
+                  "bun:sqlite": "Las librerías corren en Node y no abren el store (ADR-0007 §1 y §4).",
+                  "bun:test": "Los tests viven en test/, no en src/.",
+                  "@keel/daemon": "Una librería no importa el producto (ADR-0007 §1).",
+                  "@keel/gui": "Una librería no importa un cliente (ADR-0007 §1)."
+                }
+              }
+            },
+            "noRestrictedGlobals": {
+              "level": "error",
+              "options": {
+                "deniedGlobals": { "Bun": "Las librerías corren en Node (ADR-0007 §4)." }
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }

@@ -1,0 +1,35 @@
+{
+  "name": "@keel/git",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Worktrees aislados por run, captura y rescate de cambios, reconciliación desde git. Librería de Keel sin decisiones de producto (ADR-0007); corre en Node.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "bun test",
+    "dev": "tsc -b --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4"
+  },
+  "keel": {
+    "runtime": "node",
+    "dependsOn": []
+  }
+}

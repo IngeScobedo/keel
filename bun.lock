@@ -30,6 +30,13 @@
         "zod": "^4.4.3",
       },
     },
+    "packages/git": {
+      "name": "@keel/git",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/node": "^26.6.4",
+      },
+    },
     "packages/gui": {
       "name": "@keel/gui",
       "version": "0.0.0",
@@ -110,6 +117,8 @@
     "@keel/core": ["@keel/core@workspace:packages/core"],
 
     "@keel/daemon": ["@keel/daemon@workspace:packages/daemon"],
+
+    "@keel/git": ["@keel/git@workspace:packages/git"],
 
     "@keel/gui": ["@keel/gui@workspace:packages/gui"],
 

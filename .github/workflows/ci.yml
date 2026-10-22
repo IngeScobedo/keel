@@ -15,6 +15,8 @@ jobs:
       - run: bun run lint
       - run: bun run typecheck
       - run: bun run test
+      - name: Las librerías cargan en Node (ADR-0007 §4)
+        run: node --input-type=module -e "await import('./packages/git/dist/index.js')"
       - name: Renderer GUI
         run: bun run gui:build
       - name: Chromium para flujos GUI

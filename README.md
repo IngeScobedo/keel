@@ -21,6 +21,7 @@ docs/design/              tokens.json exportado del canvas de pen.dev + inventar
 docs/inherited/mirador/   ADRs y backlog de Mirador, copiados íntegros como referencia. No se editan.
 packages/core             @keel/core: envelope, correlación, contrato IPC (ADR-0005), visual_state (ADR-0006). Cero I/O.
 packages/daemon           @keel/daemon: store SQLite WAL con migraciones (ADR-0004). Fase 0.
+packages/git              @keel/git: worktrees por run con estado en git, rescate y reconcile. Corre en Node (ADR-0007).
 packages/gui              @keel/gui: React/Vite, tokens del canvas, shell Tauri e integración IPC.
 docs/reviews/             revisión del backend para Claude y evidencia de implementación GUI.
 scripts/                  validate-ddl (62 checks), extract-ddl (SDD 03 -> migración 0001), png-grayscale.
