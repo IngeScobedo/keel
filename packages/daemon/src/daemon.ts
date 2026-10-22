@@ -3,13 +3,25 @@
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
 import { existsSync, readFileSync, readlinkSync } from "node:fs"
-import { ErrorCode, type MethodName } from "@keel/core"
+import {
+  allowedTransitions,
+  checkTransition,
+  ErrorCode,
+  type Lifecycle,
+  type MethodName,
+  type Methods,
+  type MutationMeta,
+  RUN_START_RULES,
+  type TransitionAuthority,
+} from "@keel/core"
+import type { z } from "zod"
 import { ClaudeAdapter, type ClaudeProfile, DEFAULT_PROFILE } from "./adapters/claude.js"
 import { EventBus } from "./bus.js"
+import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
 import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server.js"
 import { openStore, type Store } from "./store/db.js"
-import { Repo } from "./store/repo.js"
+import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
 
 export type DaemonOptions = {
   dbPath: string
@@ -70,7 +82,10 @@ export class Daemon {
     this.store.db.close()
   }
 
-  /** Runs vivos de un daemon anterior: su proceso ya no es nuestro. Se termina si sigue y el run queda `interrupted`. */
+  /**
+   * Runs vivos de un daemon anterior: su proceso ya no es nuestro. Se termina si
+   * sigue, el run queda `interrupted` y su tarea sale de `running`.
+   */
   reconcile(): { interrupted: string[]; killed: number[] } {
     const interrupted: string[] = []
     const killed: number[] = []
@@ -117,6 +132,7 @@ export class Daemon {
         payload_json: JSON.stringify({ killed_pid: p?.pid ?? null }),
       })
       interrupted.push(run.id)
+      this.settleWorkItem(this.repo.getRun(run.id) as RunRow)
     }
     return { interrupted, killed }
   }
@@ -135,40 +151,77 @@ export class Daemon {
     })
   }
 
-  /** Mutación idempotente por recibo (ADR-0005 §3). */
-  private mutation(
+  private uowDeps() {
+    return { db: this.store.db, repo: this.repo, bus: this.bus }
+  }
+
+  /** Comando idempotente del protocolo: dominio, eventos y recibo en una transacción (K-04). */
+  private mutation<P extends MutationMeta>(
     method: MethodName,
-    fn: (params: Record<string, unknown>, actorId: string) => Promise<unknown> | unknown,
+    fn: (params: P, uow: UnitOfWork) => unknown,
   ): Handler {
     return async (params, ctx) => {
-      const p = params as Record<string, unknown> & { request_id: string; idempotency_key: string }
-      const hash = await sha256Hex(
+      const p = params as P
+      const requestHash = await sha256Hex(
         canonicalJson({ method, params: { ...p, request_id: undefined } }),
       )
-      const receipt = this.repo.getReceipt(
-        this.project.project_id,
-        ctx.actor.actor_id,
-        p.idempotency_key,
+      return runCommand(
+        this.uowDeps(),
+        {
+          projectId: this.project.project_id,
+          actorId: ctx.actor.actor_id,
+          idempotencyKey: p.idempotency_key,
+          requestHash,
+        },
+        (uow) => fn(p, uow),
       )
-      if (receipt) {
-        if (receipt.request_hash !== hash)
-          throw new RpcFailure({
-            code: ErrorCode.idempotencyMismatch,
-            message: "idempotency_key reutilizada con otra request",
-            retryable: false,
-          })
-        return JSON.parse(receipt.result_json)
-      }
-      const result = await fn(p, ctx.actor.actor_id)
-      this.repo.putReceipt(
-        this.project.project_id,
-        ctx.actor.actor_id,
-        p.idempotency_key,
-        hash,
-        result,
-      )
-      return result
     }
+  }
+
+  private requireWorkItem(id: string): WorkItemRow {
+    const w = this.repo.getWorkItem(id)
+    if (!w) throw rpcError(ErrorCode.notFound, "work item no existe")
+    return w
+  }
+
+  /**
+   * Único camino para cambiar `work_items.lifecycle`: valida la arista con
+   * @keel/core, aplica compare-and-set y emite `work_item.updated` (K-07).
+   */
+  private transition(
+    uow: UnitOfWork,
+    w: WorkItemRow,
+    to: Lifecycle,
+    by: TransitionAuthority,
+    opts: { expectedRevision?: number; runId?: string | null; reason?: string } = {},
+  ): WorkItemRow {
+    if (opts.expectedRevision !== undefined && opts.expectedRevision !== w.revision)
+      throw rpcError(ErrorCode.conflict, "la tarea cambió desde la revisión esperada", {
+        expected_revision: opts.expectedRevision,
+        current_revision: w.revision,
+      })
+    const check = checkTransition(w.lifecycle, to, by)
+    if (!check.ok)
+      throw rpcError(
+        ErrorCode.invalidTransition,
+        check.reason === "wrong_authority"
+          ? `${w.lifecycle} → ${to} requiere autoridad ${check.edge?.by}`
+          : `${w.lifecycle} → ${to} no es una transición del lifecycle`,
+        { from: w.lifecycle, to, allowed: allowedTransitions(w.lifecycle, by) },
+      )
+    const updated = this.repo.setLifecycle(w.id, to, {
+      from: w.lifecycle,
+      ...(opts.expectedRevision === undefined ? {} : { revision: opts.expectedRevision }),
+    })
+    if (!updated)
+      throw rpcError(ErrorCode.conflict, "otro escritor cambió la tarea; vuelve a leerla", {
+        current_revision: this.repo.getWorkItem(w.id)?.revision ?? null,
+      })
+    uow.emit("work_item.updated", opts.runId ?? null, {
+      ...this.repo.workItemView(updated),
+      transition: { from: w.lifecycle, to, by, reason: opts.reason ?? null },
+    })
+    return updated
   }
 
   private handlers(): Handlers {
@@ -184,134 +237,142 @@ export class Daemon {
           ? Bun.file(`${this.opts.dbPath}-wal`).size
           : 0,
       }),
-      "work_items.create": this.mutation("work_items.create", (p) => {
-        const w = repo.createWorkItem({
-          project_id: project.project_id,
-          title: String(p.title),
-          kind: String(p.kind),
-          ...(typeof p.spec_markdown === "string" ? { spec_markdown: p.spec_markdown } : {}),
-        })
-        this.emit("work_item.created", null, repo.workItemView(w))
-        return repo.workItemView(w)
-      }),
-      "work_items.transition": this.mutation("work_items.transition", (p) => {
-        const w = repo.getWorkItem(String(p.work_item_id))
-        if (!w)
-          throw new RpcFailure({
-            code: ErrorCode.notFound,
-            message: "work item no existe",
-            retryable: false,
+      "work_items.create": this.mutation<Params<"work_items.create">>(
+        "work_items.create",
+        (p, uow) => {
+          const w = repo.createWorkItem({
+            project_id: project.project_id,
+            title: p.title,
+            kind: p.kind,
+            ...(p.spec_markdown === undefined ? {} : { spec_markdown: p.spec_markdown }),
           })
-        if (p.to === "done")
-          throw new RpcFailure({
-            code: ErrorCode.invalidTransition,
-            message: "`done` requiere el cierre humano explícito (SDD 01 §3); aún no implementado",
-            retryable: false,
+          const view = repo.workItemView(w)
+          uow.emit("work_item.created", null, view)
+          return view
+        },
+      ),
+      "work_items.transition": this.mutation<Params<"work_items.transition">>(
+        "work_items.transition",
+        (p, uow) => {
+          const w = this.requireWorkItem(p.work_item_id)
+          if (p.to === "done")
+            throw rpcError(
+              ErrorCode.invalidTransition,
+              "`done` requiere el cierre humano explícito (SDD 01 §3); aún no implementado",
+            )
+          const updated = this.transition(uow, w, p.to, "human", {
+            ...(p.expected_revision === undefined ? {} : { expectedRevision: p.expected_revision }),
+            ...(p.reason === undefined ? {} : { reason: p.reason }),
           })
-        const updated = repo.setLifecycle(w.id, p.to as typeof w.lifecycle)
-        this.emit("work_item.updated", null, repo.workItemView(updated))
-        return repo.workItemView(updated)
-      }),
-      "runs.start": this.mutation("runs.start", (p) => {
-        const w = repo.getWorkItem(String(p.work_item_id))
-        if (!w)
-          throw new RpcFailure({
-            code: ErrorCode.notFound,
-            message: "work item no existe",
-            retryable: false,
+          return repo.workItemView(updated)
+        },
+      ),
+      "runs.start": this.mutation<Params<"runs.start">>("runs.start", (p, uow) => {
+        const w = this.requireWorkItem(p.work_item_id)
+        if (p.expected_revision !== undefined && p.expected_revision !== w.revision)
+          throw rpcError(ErrorCode.conflict, "la tarea cambió desde la revisión esperada", {
+            expected_revision: p.expected_revision,
+            current_revision: w.revision,
           })
         if (repo.liveRunFor(w.id))
-          throw new RpcFailure({
-            code: ErrorCode.conflict,
-            message: "la tarea ya tiene un run vivo",
-            retryable: false,
+          throw rpcError(ErrorCode.conflict, "la tarea ya tiene un run vivo")
+        // K-02: elegibilidad antes de crear o despachar nada.
+        const rule = RUN_START_RULES[p.purpose]
+        if (w.lifecycle !== rule.from)
+          throw rpcError(
+            ErrorCode.invalidTransition,
+            `un run ${p.purpose} arranca desde ${rule.from}; la tarea está ${w.lifecycle}`,
+            { lifecycle: w.lifecycle, purpose: p.purpose, required: rule.from },
+          )
+        const blocks = repo.openBlocks(w.id)
+        if (blocks.length > 0)
+          throw rpcError(ErrorCode.invalidTransition, "la tarea tiene bloqueos abiertos", {
+            blocks,
           })
         const run = repo.createRun({
           project_id: project.project_id,
           work_item_id: w.id,
-          purpose: p.purpose as "plan" | "execute" | "triage_eval",
+          purpose: p.purpose,
         })
-        if (w.lifecycle === "triage" || w.lifecycle === "planned")
-          repo.setLifecycle(w.id, "running")
-        this.emit("run.created", run.id, repo.runView(run))
-        const prompt = typeof p.prompt === "string" && p.prompt.length > 0 ? p.prompt : w.title
-        // No se espera: el run corre en segundo plano y se observa por events.subscribe.
-        void this.claude.execute(run, prompt, this.profile).then((final) => {
-          const item = repo.getWorkItem(w.id)
-          if (item && item.lifecycle === "running")
-            repo.setLifecycle(
-              w.id,
-              final.status === "completed"
-                ? "needs_review"
-                : final.status === "cancelled"
-                  ? "planned"
-                  : "failed",
-            )
-          const refreshed = repo.getWorkItem(w.id)
-          if (refreshed) this.emit("work_item.updated", run.id, repo.workItemView(refreshed))
-        })
+        if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
+        const view = repo.runView(run)
+        uow.emit("run.created", run.id, view)
+        const prompt = p.prompt !== undefined && p.prompt.length > 0 ? p.prompt : w.title
+        // El run corre en segundo plano tras el commit y se observa por events.subscribe.
+        uow.afterCommit(() => this.dispatchRun(run, prompt))
+        return view
+      }),
+      "runs.cancel": this.mutation<Params<"runs.cancel">>("runs.cancel", (p, uow) => {
+        const run = repo.getRun(p.run_id)
+        if (!run) throw rpcError(ErrorCode.notFound, "run no existe")
+        uow.afterCommit(() => this.claude.cancel(run.id, p.reason ?? null))
         return repo.runView(run)
       }),
-      "runs.cancel": this.mutation("runs.cancel", (p) => {
-        const run = repo.getRun(String(p.run_id))
-        if (!run)
-          throw new RpcFailure({
-            code: ErrorCode.notFound,
-            message: "run no existe",
-            retryable: false,
-          })
-        this.claude.cancel(run.id, typeof p.reason === "string" ? p.reason : null)
-        return repo.runView(repo.getRun(run.id) as typeof run)
-      }),
-      "approvals.resolve": this.mutation("approvals.resolve", (p, actorId) => {
-        const a = repo.getApproval(String(p.approval_id))
-        if (!a)
-          throw new RpcFailure({
-            code: ErrorCode.notFound,
-            message: "aprobación no existe",
-            retryable: false,
-          })
-        if (a.operation_hash !== p.operation_hash)
-          throw new RpcFailure({
-            code: ErrorCode.conflict,
-            message: "el hash de la operación no coincide: la solicitud cambió",
-            retryable: false,
-          })
-        if (a.state !== "pending")
-          throw new RpcFailure({
-            code: ErrorCode.invalidTransition,
-            message: `la aprobación está ${a.state}`,
-            retryable: false,
-          })
-        const decision =
-          p.decision === "approve_once" || p.decision === "approve_session" ? "approved" : "denied"
-        repo.setApproval(a.id, decision, actorId)
-        this.approvalWaiters.get(a.id)?.(decision)
-        return { approval_id: a.id, state: decision }
-      }),
+      "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
+        "approvals.resolve",
+        (p, uow) => {
+          const a = repo.getApproval(p.approval_id)
+          if (!a) throw rpcError(ErrorCode.notFound, "aprobación no existe")
+          if (a.operation_hash !== p.operation_hash)
+            throw rpcError(
+              ErrorCode.conflict,
+              "el hash de la operación no coincide: la solicitud cambió",
+            )
+          if (a.state !== "pending")
+            throw rpcError(ErrorCode.invalidTransition, `la aprobación está ${a.state}`)
+          const decision =
+            p.decision === "approve_once" || p.decision === "approve_session"
+              ? "approved"
+              : "denied"
+          repo.setApproval(a.id, decision, uow.actorId)
+          uow.afterCommit(() => this.approvalWaiters.get(a.id)?.(decision))
+          return { approval_id: a.id, state: decision }
+        },
+      ),
     }
   }
 
-  private emit(kind: string, runId: string | null, payload: unknown): void {
-    const e = this.repo.appendEvent({
-      project_id: this.project.project_id,
-      run_id: runId,
-      source: "daemon",
-      source_event_key: `${kind}:${nowIso()}:${Math.random()}`,
-      fidelity: "full",
-      adapter_version: "daemon/0",
-      kind,
-      occurred_at: null,
-      payload_json: JSON.stringify(payload),
-    })
-    if (e)
-      this.bus.publish({
-        event_seq: e.event_seq,
-        kind,
-        project_id: e.project_id,
-        run_id: runId,
-        received_at: e.received_at,
-        payload,
-      })
+  /**
+   * Corre el run y, al terminar, asienta la tarea. Nunca deja una promesa
+   * rechazada sin manejar: un fallo del adaptador termina el run en `failed`
+   * con su evento en vez de dejarlo vivo (K-08).
+   */
+  private dispatchRun(run: RunRow, prompt: string): void {
+    this.claude
+      .execute(run, prompt, this.profile)
+      .catch((e: unknown) => this.claude.failRun(run, e instanceof Error ? e.message : String(e)))
+      .then((final) => this.settleWorkItem(final))
+      .catch((e: unknown) => console.error("keel: no se pudo asentar el run", run.id, e))
   }
+
+  /** Tras un run `execute` terminal, la tarea sale de `running` según cómo terminó. */
+  private settleWorkItem(final: RunRow): void {
+    if (final.purpose !== "execute") return
+    const to: Lifecycle =
+      final.status === "completed"
+        ? "needs_review"
+        : final.status === "cancelled"
+          ? "planned"
+          : "failed"
+    runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => {
+      const w = this.repo.getWorkItem(final.work_item_id)
+      if (w?.lifecycle === "running")
+        this.transition(uow, w, to, "system", { runId: final.id, reason: `run ${final.status}` })
+    })
+  }
+
+  private systemScope() {
+    return { projectId: this.project.project_id, actorId: "system:daemon" }
+  }
+}
+
+type Params<M extends MethodName> = z.infer<(typeof Methods)[M]["params"]>
+
+function rpcError(code: number, message: string, details?: unknown): RpcFailure {
+  return new RpcFailure({
+    code,
+    message,
+    retryable: false,
+    ...(details === undefined ? {} : { details }),
+  })
 }

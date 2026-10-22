@@ -206,6 +206,12 @@ describe("servidor IPC (ADR-0005)", () => {
       title: "runs",
       kind: "chore",
     })
+    await c.call("work_items.transition", {
+      request_id: "r5a",
+      idempotency_key: key(),
+      work_item_id: w.id,
+      to: "planned",
+    })
     const hang = (await c.call("runs.start", {
       request_id: "r5",
       idempotency_key: key(),
@@ -231,6 +237,10 @@ describe("servidor IPC (ADR-0005)", () => {
       await new Promise((r) => setTimeout(r, 10))
     expect(daemon.repo.getRun(hang.id)?.status).toBe("cancelled")
     expect(daemon.repo.toolCallsOfRun(hang.id).map((t) => t.state)).toEqual(["cancelled"])
+    // cancelar el run devuelve la tarea a planned
+    for (let i = 0; i < 100 && daemon.repo.getWorkItem(w.id)?.lifecycle !== "planned"; i++)
+      await new Promise((r) => setTimeout(r, 10))
+    expect(daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("planned")
 
     const run = (await c.call("runs.start", {
       request_id: "r7",
@@ -265,9 +275,11 @@ describe("servidor IPC (ADR-0005)", () => {
     c.close()
   })
 
-  test("reconciliación al arrancar: un run vivo de un daemon anterior queda interrupted", () => {
+  test("reconciliación al arrancar: un run vivo de un daemon anterior queda interrupted y su tarea sale de running", () => {
     const { project_id } = daemon.project
     const w = daemon.repo.createWorkItem({ project_id, title: "zombie", kind: "chore" })
+    daemon.repo.setLifecycle(w.id, "planned", { from: "triage" })
+    daemon.repo.setLifecycle(w.id, "running", { from: "planned" })
     const run = daemon.repo.createRun({
       project_id,
       work_item_id: w.id,
@@ -278,5 +290,6 @@ describe("servidor IPC (ADR-0005)", () => {
     const r = daemon.reconcile()
     expect(r.interrupted).toContain(run.id)
     expect(daemon.repo.getRun(run.id)?.status).toBe("interrupted")
+    expect(daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("failed")
   })
 })

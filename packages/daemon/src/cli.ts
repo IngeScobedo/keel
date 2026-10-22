@@ -74,6 +74,15 @@ if (import.meta.main) {
       kind: "chore",
     })) as { id: string; display_id: string }
     console.log(`tarea ${w.display_id} (${w.id})`)
+    // Un run execute arranca desde planned (SDD 01 §3); desde la CLI, crear y
+    // pedir la ejecución es la decisión humana de que el alcance ya está claro.
+    if (purpose === "execute")
+      await client.call("work_items.transition", {
+        request_id: key(),
+        idempotency_key: key(),
+        work_item_id: w.id,
+        to: "planned",
+      })
     const run = (await client.call("runs.start", {
       request_id: key(),
       idempotency_key: key(),

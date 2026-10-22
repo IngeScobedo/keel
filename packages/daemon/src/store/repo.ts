@@ -209,13 +209,43 @@ export class Repo {
       )
       .all(projectId)
   }
-  setLifecycle(id: string, lifecycle: Lifecycle): WorkItemRow {
+  /**
+   * Compare-and-set: cambia el lifecycle sólo si la fila sigue en `from` y, si
+   * se da, en `revision`. Devuelve null si otro escritor llegó antes. La
+   * validez de la transición la decide `checkTransition` de @keel/core.
+   */
+  setLifecycle(
+    id: string,
+    to: Lifecycle,
+    expect: { from: Lifecycle; revision?: number },
+  ): WorkItemRow | null {
+    const r = this.db
+      .query(
+        "UPDATE work_items SET lifecycle = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND lifecycle = ? AND (? IS NULL OR revision = ?)",
+      )
+      .run(to, nowIso(), id, expect.from, expect.revision ?? null, expect.revision ?? null)
+    return r.changes === 1 ? this.getWorkItem(id) : null
+  }
+
+  // --- bloqueos (guardas del scheduler, SDD 03 work_item_blocks) --------------------------
+  openBlocks(workItemId: string): { kind: string; reason_key: string }[] {
+    return this.db
+      .query<{ kind: string; reason_key: string }, [string]>(
+        "SELECT kind, reason_key FROM work_item_blocks WHERE work_item_id = ? AND cleared_at IS NULL ORDER BY kind, reason_key",
+      )
+      .all(workItemId)
+  }
+  addBlock(p: {
+    work_item_id: string
+    kind: "planning" | "dependency" | "lane" | "human" | "budget" | "environment"
+    reason_key: string
+    details?: Record<string, unknown>
+  }): void {
     this.db
       .query(
-        "UPDATE work_items SET lifecycle = ?, revision = revision + 1, updated_at = ? WHERE id = ?",
+        "INSERT INTO work_item_blocks(id, work_item_id, kind, reason_key, details_json) VALUES (?,?,?,?,?)",
       )
-      .run(lifecycle, nowIso(), id)
-    return this.getWorkItem(id) as WorkItemRow
+      .run(ulid(), p.work_item_id, p.kind, p.reason_key, JSON.stringify(p.details ?? {}))
   }
 
   // --- runs -----------------------------------------------------------------------

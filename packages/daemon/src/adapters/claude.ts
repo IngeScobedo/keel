@@ -24,6 +24,7 @@ import type {
   SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
+import { isLive } from "@keel/core"
 import type { EventBus } from "../bus.js"
 import { canonicalJson, nowIso, sha256Hex, ulid } from "../ids.js"
 import { RunProjector } from "../projector.js"
@@ -89,6 +90,8 @@ export type ClaudeAdapterDeps = {
   waitApproval: ApprovalWaiter
   /** Para tests: ruta al binario; por defecto se detecta el instalado. */
   binary?: string | null
+  /** Entorno del que hereda el hijo; por defecto el del daemon. */
+  env?: Record<string, string | undefined>
 }
 
 export function detectClaudeBinary(): string | null {
@@ -122,17 +125,16 @@ export class ClaudeAdapter {
     return true
   }
 
-  /** Ejecuta el run hasta el final. Resuelve cuando el run está en estado terminal. */
+  /**
+   * Ejecuta el run hasta el final. Resuelve cuando el run está en estado
+   * terminal; un error de configuración o de autenticación lo termina en
+   * `failed` antes del spawn, nunca deja la promesa rechazada (K-08).
+   */
   async execute(run: RunRow, prompt: string, profile: ClaudeProfile): Promise<RunRow> {
     const { repo, bus } = this.deps
-    const env = this.buildEnv(profile)
-    const binary = this.deps.binary === undefined ? detectClaudeBinary() : this.deps.binary
-    if (profile.auth_mode === "subscription_session" && !binary) {
-      return this.failBeforeStart(
-        run,
-        "subscription_session requiere el binario `claude` instalado por el usuario; no se encontró",
-      )
-    }
+    const preflight = this.preflight(profile)
+    if (!preflight.ok) return this.failRun(run, preflight.message, "run.start_failed")
+    const { env, binary } = preflight
     const rootAgentId = `${run.id}:root`
     const projector = new RunProjector({ repo, run, provider: "claude", rootAgentId })
     const abort = new AbortController()
@@ -309,10 +311,15 @@ export class ClaudeAdapter {
     return repo.getRun(run.id) as RunRow
   }
 
-  private buildEnv(profile: ClaudeProfile): Record<string, string | undefined> {
-    const env: Record<string, string | undefined> = { ...process.env }
+  /** Comprueba modo de autenticación y binario sin lanzar nada (ADR-0002: sin fallback silencioso). */
+  private preflight(
+    profile: ClaudeProfile,
+  ):
+    | { ok: true; env: Record<string, string | undefined>; binary: string | null }
+    | { ok: false; message: string } {
+    const env: Record<string, string | undefined> = { ...(this.deps.env ?? process.env) }
     if (profile.auth_mode === "subscription_session") {
-      // Sin fallback silencioso: en modo sesión el hijo no ve API keys.
+      // En modo sesión el hijo no ve API keys.
       delete env.ANTHROPIC_API_KEY
       delete env.ANTHROPIC_AUTH_TOKEN
     } else if (
@@ -320,32 +327,62 @@ export class ClaudeAdapter {
       !env.ANTHROPIC_API_KEY &&
       !env.ANTHROPIC_AUTH_TOKEN
     ) {
-      throw new Error(
-        "api_key requiere ANTHROPIC_API_KEY o ANTHROPIC_AUTH_TOKEN en el entorno del daemon",
-      )
+      return {
+        ok: false,
+        message:
+          "api_key requiere ANTHROPIC_API_KEY o ANTHROPIC_AUTH_TOKEN en el entorno del daemon",
+      }
     }
-    return env
+    const binary = this.deps.binary === undefined ? detectClaudeBinary() : this.deps.binary
+    if (profile.auth_mode === "subscription_session" && !binary)
+      return {
+        ok: false,
+        message:
+          "subscription_session requiere el binario `claude` instalado por el usuario; no se encontró",
+      }
+    return { ok: true, env, binary }
   }
 
-  private failBeforeStart(run: RunRow, message: string): RunRow {
+  /**
+   * Termina en `failed` un run que no llegó a un estado terminal, con su evento
+   * y su notificación. Si ya es terminal no lo toca.
+   */
+  failRun(run: RunRow, message: string, kind = "run.failed"): RunRow {
+    const { repo, bus } = this.deps
+    const current = repo.getRun(run.id) ?? run
+    if (!isLive(current.status)) return current
     const t = nowIso()
-    const r = this.deps.repo.updateRun(run.id, {
+    const r = repo.updateRun(run.id, {
       status: "failed",
       end_reason: "fatal_error",
-      started_at: t,
+      started_at: current.started_at ?? t,
       ended_at: t,
     })
-    this.deps.repo.appendEvent({
-      project_id: run.project_id,
-      run_id: run.id,
-      source: SOURCE,
-      source_event_key: `start-failed:${run.id}`,
-      fidelity: "full",
-      adapter_version: ADAPTER_VERSION,
-      kind: "run.start_failed",
-      occurred_at: null,
-      payload_json: JSON.stringify({ message }),
-    })
+    for (const [k, payload] of [
+      [kind, { message }],
+      ["run.updated", repo.runView(r)],
+    ] as const) {
+      const e = repo.appendEvent({
+        project_id: run.project_id,
+        run_id: run.id,
+        source: SOURCE,
+        source_event_key: `${k}:${run.id}:${ulid()}`,
+        fidelity: "full",
+        adapter_version: ADAPTER_VERSION,
+        kind: k,
+        occurred_at: null,
+        payload_json: JSON.stringify(payload),
+      })
+      if (e)
+        bus.publish({
+          event_seq: e.event_seq,
+          kind: k,
+          project_id: e.project_id,
+          run_id: run.id,
+          received_at: e.received_at,
+          payload,
+        })
+    }
     return r
   }
 }
