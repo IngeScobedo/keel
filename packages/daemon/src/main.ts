@@ -26,8 +26,8 @@ if (import.meta.main) {
     socketPath: arg("--socket") ?? d.socketPath,
     rootPath: arg("--root") ?? process.cwd(),
   })
-  const rec = daemon.reconcile()
-  daemon.start()
+  // start() reconcilia una sola vez y libera los worktrees de lo interrumpido.
+  const rec = daemon.start()
   console.log(
     `keel daemon · db ${daemon.opts.dbPath} · socket ${daemon.server.path} · proyecto ${daemon.project.project_id}`,
   )
@@ -36,8 +36,11 @@ if (import.meta.main) {
       `reconciliación: ${rec.interrupted.length} runs marcados interrupted, ${rec.killed.length} procesos terminados`,
     )
   const bye = () => {
-    daemon.stop()
-    process.exit(0)
+    // Apagado ordenado: los runs y liberaciones en curso terminan antes de cerrar la base.
+    void daemon.idle().finally(() => {
+      daemon.stop()
+      process.exit(0)
+    })
   }
   process.on("SIGINT", bye)
   process.on("SIGTERM", bye)

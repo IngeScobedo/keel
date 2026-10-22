@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ErrorCode, type EventNotification, type MethodName } from "@keel/core"
 import { Daemon, IpcClient, REPLAY_PAGE_SIZE } from "../src/index.ts"
+import { initRepo } from "./git-fixture.ts"
 import { hangingQuery, replayQuery } from "./replay.ts"
 
 let dir: string
@@ -18,7 +19,8 @@ beforeAll(() => {
   daemon = new Daemon({
     dbPath: join(dir, "keel.sqlite"),
     socketPath: join(dir, "keel.sock"),
-    rootPath: dir,
+    rootPath: initRepo(join(dir, "repo")),
+    worktreesDir: join(dir, "worktrees"),
     adapterDeps: {
       queryFn: (args) => (args.prompt === "hang" ? hangingQuery() : replayQuery())(args),
       binary: "/fake/claude",
@@ -26,7 +28,8 @@ beforeAll(() => {
   })
   daemon.start()
 })
-afterAll(() => {
+afterAll(async () => {
+  await daemon.idle()
   daemon.stop()
   rmSync(dir, { recursive: true, force: true })
 })
@@ -232,6 +235,9 @@ describe("servidor IPC (ADR-0005)", () => {
       second = (e as { rpc?: unknown }).rpc ?? e
     }
     expect(second).toMatchObject({ code: ErrorCode.conflict })
+    // cancelar con el proceso del proveedor ya corriendo y una tool call abierta
+    for (let i = 0; i < 200 && daemon.repo.toolCallsOfRun(hang.id).length === 0; i++)
+      await new Promise((r) => setTimeout(r, 10))
     await c.call("runs.cancel", { request_id: "r6b", idempotency_key: key(), run_id: hang.id })
     for (let i = 0; i < 100 && daemon.repo.getRun(hang.id)?.status !== "cancelled"; i++)
       await new Promise((r) => setTimeout(r, 10))
@@ -252,6 +258,7 @@ describe("servidor IPC (ADR-0005)", () => {
     for (let i = 0; i < 200 && !updates.some((u) => u.status === "completed"); i++)
       await new Promise((r) => setTimeout(r, 20))
     expect(updates.some((u) => u.status === "completed")).toBe(true)
+    await daemon.idle()
     const item = daemon.repo.getWorkItem(w.id)
     expect(item?.lifecycle).toBe("needs_review")
     expect(daemon.repo.workItemView(item as NonNullable<typeof item>).visual_state).toBe(

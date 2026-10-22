@@ -4,12 +4,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ErrorCode } from "@keel/core"
 import { Daemon, type DaemonOptions, IpcClient } from "../src/index.ts"
+import { initRepo } from "./git-fixture.ts"
 import { replayQuery } from "./replay.ts"
 
 // Cada test arranca su propio daemon: los casos de fallo no deben contaminar a otros.
 const open: { daemon: Daemon; dir: string; client: IpcClient }[] = []
-afterEach(() => {
+afterEach(async () => {
   for (const o of open.splice(0)) {
+    await o.daemon.idle()
     o.client.close()
     o.daemon.stop()
     rmSync(o.dir, { recursive: true, force: true })
@@ -26,7 +28,8 @@ async function boot(extra: Partial<DaemonOptions> = {}) {
   const daemon = new Daemon({
     dbPath: join(dir, "keel.sqlite"),
     socketPath: join(dir, "keel.sock"),
-    rootPath: dir,
+    rootPath: initRepo(join(dir, "repo")),
+    worktreesDir: join(dir, "worktrees"),
     ...extra,
     adapterDeps: {
       queryFn: (args) => {
@@ -253,8 +256,7 @@ describe("K-08: un fallo de configuración termina el run, no lo deja vivo", () 
       work_item_id: w.id,
       purpose: "execute",
     })) as { id: string }
-    for (let i = 0; i < 100 && daemon.repo.getWorkItem(w.id)?.lifecycle !== "failed"; i++)
-      await new Promise((r) => setTimeout(r, 10))
+    await daemon.idle()
     expect(daemon.repo.getRun(run.id)).toMatchObject({
       status: "failed",
       end_reason: "fatal_error",
@@ -296,8 +298,7 @@ describe("K-08: un fallo de configuración termina el run, no lo deja vivo", () 
       work_item_id: w.id,
       purpose: "execute",
     })) as { id: string }
-    for (let i = 0; i < 100 && daemon.repo.getRun(run.id)?.status !== "failed"; i++)
-      await new Promise((r) => setTimeout(r, 10))
+    await daemon.idle()
     expect(daemon.repo.getRun(run.id)?.status).toBe("failed")
     expect(daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("failed")
   })

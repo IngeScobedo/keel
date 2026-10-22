@@ -7,6 +7,7 @@ import {
   allowedTransitions,
   checkTransition,
   ErrorCode,
+  isLive,
   type Lifecycle,
   type MethodName,
   type Methods,
@@ -31,6 +32,7 @@ import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server
 import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
 import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
+import { defaultWorktreesDir, RunWorkspaces, releasesOnFinish } from "./workspaces.js"
 
 export type DaemonOptions = {
   dbPath: string
@@ -38,6 +40,8 @@ export type DaemonOptions = {
   rootPath: string
   profile?: Partial<ClaudeProfile>
   adapterDeps?: ClaudeAdapterDeps
+  /** Raíz de los worktrees de runs; por defecto `$XDG_STATE_HOME/keel/worktrees`. */
+  worktreesDir?: string
 }
 
 export class Daemon {
@@ -48,10 +52,15 @@ export class Daemon {
   /** Hoy el único proveedor; el daemon sólo lo usa por la interfaz `ProviderAdapter`. */
   readonly claude: ClaudeAdapter
   readonly toolGate: ApprovalGate
+  readonly workspaces: RunWorkspaces
   readonly project: { workspace_id: string; project_id: string }
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
   private readonly approvalWaiters = new Map<string, (d: "approved" | "denied") => void>()
+  /** Cancelaciones que llegan mientras se prepara el worktree, antes de que exista el proceso. */
+  private readonly cancelBeforeStart = new Set<string>()
+  /** Trabajo en segundo plano (runs, liberaciones); `idle()` espera a que termine. */
+  private readonly background = new Set<Promise<unknown>>()
   private lagMs = 0
   private lagTimer: ReturnType<typeof setInterval> | null = null
 
@@ -63,6 +72,11 @@ export class Daemon {
     this.project = this.repo.ensureDefaultProject(opts.rootPath)
     this.profile = { ...DEFAULT_PROFILE, cwd: opts.rootPath, ...opts.profile }
     this.claude = new ClaudeAdapter(opts.adapterDeps ?? {})
+    this.workspaces = new RunWorkspaces({
+      repo: this.repo,
+      rootPath: opts.rootPath,
+      worktreesDir: opts.worktreesDir ?? defaultWorktreesDir(),
+    })
     this.toolGate = new ApprovalGate({
       repo: this.repo,
       waitApproval: (id, ms) => this.waitApproval(id, ms),
@@ -76,8 +90,11 @@ export class Daemon {
     })
   }
 
-  start(): void {
-    this.reconcile()
+  /** Reconcilia (una vez), abre el socket y devuelve lo reconciliado. */
+  start(): { interrupted: string[]; killed: number[] } {
+    const reconciled = this.reconcile()
+    // Un run interrumpido libera su worktree igual que uno fallido.
+    for (const runId of reconciled.interrupted) this.track(this.releaseWorkspaces(runId))
     this.server.start()
     let last = performance.now()
     this.lagTimer = setInterval(() => {
@@ -85,6 +102,18 @@ export class Daemon {
       this.lagMs = Math.max(0, t - last - 100)
       last = t
     }, 100)
+    return reconciled
+  }
+
+  /** Espera a que terminen los runs y liberaciones en curso (tests, apagado ordenado). */
+  async idle(): Promise<void> {
+    while (this.background.size > 0) await Promise.allSettled([...this.background])
+  }
+
+  private track(p: Promise<unknown>): void {
+    const tracked = p.catch((e: unknown) => console.error("keel: tarea en segundo plano falló", e))
+    this.background.add(tracked)
+    void tracked.finally(() => this.background.delete(tracked))
   }
 
   stop(): void {
@@ -232,6 +261,12 @@ export class Daemon {
       ...this.repo.workItemView(updated),
       transition: { from: w.lifecycle, to, by, reason: opts.reason ?? null },
     })
+    // El worktree de un run completed se conserva para la revisión; salir de ella lo libera.
+    if (w.lifecycle === "needs_review")
+      uow.afterCommit(() => {
+        for (const runId of this.repo.runsWithWorktrees(w.id))
+          this.track(this.releaseWorkspaces(runId))
+      })
     return updated
   }
 
@@ -310,13 +345,16 @@ export class Daemon {
         uow.emit("run.created", run.id, view)
         const prompt = p.prompt !== undefined && p.prompt.length > 0 ? p.prompt : w.title
         // El run corre en segundo plano tras el commit y se observa por events.subscribe.
-        uow.afterCommit(() => this.dispatchRun(run, prompt))
+        uow.afterCommit(() => this.track(this.dispatchRun(run, w, prompt)))
         return view
       }),
       "runs.cancel": this.mutation<Params<"runs.cancel">>("runs.cancel", (p, uow) => {
         const run = repo.getRun(p.run_id)
         if (!run) throw rpcError(ErrorCode.notFound, "run no existe")
-        uow.afterCommit(() => this.claude.cancel(run.id, p.reason ?? null))
+        uow.afterCommit(() => {
+          if (!this.claude.cancel(run.id, p.reason ?? null) && isLive(run.status))
+            this.cancelBeforeStart.add(run.id)
+        })
         return repo.runView(run)
       }),
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
@@ -344,11 +382,11 @@ export class Daemon {
   }
 
   /**
-   * Corre el run y, al terminar, asienta la tarea. Nunca deja una promesa
-   * rechazada sin manejar: un fallo del adaptador termina el run en `failed`
-   * con su evento en vez de dejarlo vivo (K-08).
+   * Prepara el espacio del run, lo corre, asienta la tarea, captura los cambios
+   * y libera el worktree según cómo terminó. Nunca rechaza: un fallo del
+   * adaptador o de git termina el run en `failed` con su evento (K-08).
    */
-  private dispatchRun(run: RunRow, prompt: string): void {
+  private async dispatchRun(run: RunRow, item: WorkItemRow, prompt: string): Promise<void> {
     const provider: ProviderAdapter<ClaudeProfile> = this.claude
     const ctx = createRunContext({
       repo: this.repo,
@@ -358,11 +396,61 @@ export class Daemon {
       source: SOURCE,
       adapterVersion: provider.adapterVersion,
     })
-    provider
-      .execute(ctx, prompt, this.profile)
-      .catch((e: unknown) => ctx.fail(e instanceof Error ? e.message : String(e)))
-      .then((final) => this.settleWorkItem(final))
-      .catch((e: unknown) => console.error("keel: no se pudo asentar el run", run.id, e))
+    let final: RunRow
+    try {
+      const ws = await this.workspaces.provision(run, item)
+      if (!ws.ok) final = ctx.fail(ws.message, "run.start_failed")
+      else {
+        if (ws.worktree) this.emitSystem("worktree.created", run.id, ws.worktree)
+        if (this.cancelBeforeStart.delete(run.id)) final = this.cancelUnstarted(run)
+        // Sin await entre la comprobación y execute: el adaptador registra el abort en
+        // la parte síncrona de execute, así que una cancelación posterior lo alcanza.
+        else final = await provider.execute(ctx, prompt, { ...this.profile, cwd: ws.cwd })
+      }
+    } catch (e) {
+      final = ctx.fail(e instanceof Error ? e.message : String(e))
+    }
+    // La tarea refleja el final del run sin esperar a git; los cambios llegan después.
+    this.settleWorkItem(final)
+    for (const { worktree, changes } of await this.workspaces.capture(run.id))
+      this.emitSystem("worktree.changes", run.id, {
+        worktree_id: worktree.id,
+        branch: worktree.branch_name,
+        base_sha: worktree.base_sha,
+        head_sha: changes.headSha,
+        commits_ahead: changes.commitsAhead,
+        dirty: changes.dirty,
+        files: changes.files,
+      })
+    if (releasesOnFinish(final.status)) await this.releaseWorkspaces(run.id)
+  }
+
+  private async releaseWorkspaces(runId: string): Promise<void> {
+    for (const { worktree, result } of await this.workspaces.release(runId))
+      this.emitSystem("worktree.released", runId, {
+        worktree_id: worktree.id,
+        branch: worktree.branch_name,
+        rescue_ref: result.rescueRef,
+        branch_kept: result.branchKept,
+      })
+  }
+
+  /** Cancelado antes de existir el proceso del proveedor: el daemon cierra el run. */
+  private cancelUnstarted(run: RunRow): RunRow {
+    const t = nowIso()
+    const r = this.repo.updateRun(run.id, {
+      status: "cancelled",
+      end_reason: "cancelled",
+      started_at: t,
+      ended_at: t,
+    })
+    this.emitSystem("run.cancelled", run.id, { message: "cancelado antes de arrancar" })
+    this.emitSystem("run.updated", run.id, this.repo.runView(r))
+    return r
+  }
+
+  private emitSystem(kind: string, runId: string, payload: unknown): void {
+    runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => uow.emit(kind, runId, payload))
   }
 
   /** Tras un run `execute` terminal, la tarea sale de `running` según cómo terminó. */

@@ -26,6 +26,7 @@
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.295",
         "@keel/core": "workspace:*",
+        "@keel/git": "workspace:*",
         "sqlite-vec": "^0.1.9",
         "zod": "^4.4.3",
       },

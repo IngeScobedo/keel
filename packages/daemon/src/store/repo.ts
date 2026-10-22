@@ -84,6 +84,20 @@ export type ToolCallRow = {
   error_message: string | null
 }
 
+export type ProjectRepoRow = { id: string; project_id: string; alias: string; local_path: string }
+export type RunWorktreeRow = {
+  id: string
+  project_id: string
+  run_id: string
+  project_repo_id: string
+  slot: string
+  worktree_path: string
+  base_sha: string
+  head_sha: string | null
+  branch_name: string
+  access_mode: "read" | "write"
+}
+
 export class Repo {
   readonly db: Database
   constructor(db: Database) {
@@ -114,6 +128,74 @@ export class Repo {
         )
         .run(projectId, workspaceId)
     return { workspace_id: workspaceId, project_id: projectId }
+  }
+
+  // --- repos del proyecto y worktrees de runs (SDD 03) ----------------------------
+  /** Registra (o devuelve) el repo primario del proyecto en `localPath`. */
+  ensurePrimaryRepo(p: {
+    project_id: string
+    local_path: string
+    alias: string
+    repo_url: string
+  }): ProjectRepoRow {
+    const existing = this.db
+      .query<ProjectRepoRow, [string, string]>(
+        "SELECT id, project_id, alias, local_path FROM project_repos WHERE project_id = ? AND local_path = ?",
+      )
+      .get(p.project_id, p.local_path)
+    if (existing) return existing
+    const id = ulid()
+    this.db
+      .query(
+        "INSERT INTO project_repos(id, project_id, alias, repo_url, local_path, is_primary) VALUES (?,?,?,?,?,1)",
+      )
+      .run(id, p.project_id, p.alias, p.repo_url, p.local_path)
+    return { id, project_id: p.project_id, alias: p.alias, local_path: p.local_path }
+  }
+  getProjectRepo(id: string): ProjectRepoRow | null {
+    return this.db
+      .query<ProjectRepoRow, [string]>(
+        "SELECT id, project_id, alias, local_path FROM project_repos WHERE id = ?",
+      )
+      .get(id)
+  }
+  addRunWorktree(w: Omit<RunWorktreeRow, "id" | "head_sha">): RunWorktreeRow {
+    const id = ulid()
+    this.db
+      .query(
+        "INSERT INTO run_worktrees(id, project_id, run_id, project_repo_id, slot, worktree_path, base_sha, branch_name, access_mode) VALUES (?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        w.project_id,
+        w.run_id,
+        w.project_repo_id,
+        w.slot,
+        w.worktree_path,
+        w.base_sha,
+        w.branch_name,
+        w.access_mode,
+      )
+    return { ...w, id, head_sha: null }
+  }
+  runWorktrees(runId: string): RunWorktreeRow[] {
+    return this.db
+      .query<RunWorktreeRow, [string]>(
+        "SELECT id, project_id, run_id, project_repo_id, slot, worktree_path, base_sha, head_sha, branch_name, access_mode FROM run_worktrees WHERE run_id = ? ORDER BY created_at",
+      )
+      .all(runId)
+  }
+  setWorktreeHead(id: string, headSha: string): void {
+    this.db.query("UPDATE run_worktrees SET head_sha = ? WHERE id = ?").run(headSha, id)
+  }
+  /** Runs de la tarea que tienen worktrees registrados, del más reciente al más antiguo. */
+  runsWithWorktrees(workItemId: string): string[] {
+    return this.db
+      .query<{ id: string }, [string]>(
+        "SELECT DISTINCT r.id FROM runs r JOIN run_worktrees w ON w.run_id = r.id WHERE r.work_item_id = ? ORDER BY r.created_at DESC",
+      )
+      .all(workItemId)
+      .map((r) => r.id)
   }
 
   // --- eventos (append-only) ---------------------------------------------------
