@@ -166,21 +166,27 @@ export class IpcServer {
     }
   }
 
+  /**
+   * Nunca rechaza: se invoca sin `await` desde el callback del socket, y una
+   * promesa rechazada ahí tumba el proceso. Todo fallo, también el de validar,
+   * se convierte en una respuesta de error para ese `id`.
+   */
   private async handleLine(state: ClientState, line: string): Promise<void> {
-    const decoded = decodeFrame(line)
-    if (!decoded.ok) {
-      this.send(state, failure(decoded.id, decoded.error))
-      return
-    }
-    const frame = decoded.frame
-    if (!("method" in frame)) return // respuestas de cliente: no se esperan
-    const id: JsonRpcId | null = "id" in frame ? frame.id : null
-    const v = validateParams(frame.method, frame.params)
-    if (!v.ok) {
-      if (id !== null) this.send(state, failure(id, v.error))
-      return
-    }
+    let id: JsonRpcId | null = null
     try {
+      const decoded = decodeFrame(line)
+      if (!decoded.ok) {
+        this.send(state, failure(decoded.id, decoded.error))
+        return
+      }
+      const frame = decoded.frame
+      if (!("method" in frame)) return // respuestas de cliente: no se esperan
+      id = "id" in frame ? frame.id : null
+      const v = validateParams(frame.method, frame.params)
+      if (!v.ok) {
+        if (id !== null) this.send(state, failure(id, v.error))
+        return
+      }
       const result = await this.dispatch(v.method, v.params, state)
       if (id !== null) this.send(state, success(id, result))
     } catch (e) {
@@ -210,7 +216,7 @@ export class IpcServer {
       state.subscriptions.delete(subscription_id)
       return { ok: true as const }
     }
-    const h = this.opts.handlers[method]
+    const h = Object.hasOwn(this.opts.handlers, method) ? this.opts.handlers[method] : undefined
     if (!h)
       throw new RpcFailure({
         code: ErrorCode.methodNotFound,

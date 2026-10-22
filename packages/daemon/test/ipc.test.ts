@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ErrorCode, type EventNotification } from "@keel/core"
+import { ErrorCode, type EventNotification, type MethodName } from "@keel/core"
 import { Daemon, IpcClient } from "../src/index.ts"
 import { hangingQuery, replayQuery } from "./replay.ts"
 
@@ -54,6 +54,16 @@ describe("servidor IPC (ADR-0005)", () => {
     const h = await c.call("daemon.health", {})
     expect(h).toBeDefined()
     expect(errors.length).toBeGreaterThanOrEqual(1)
+    c.close()
+  })
+
+  test("K-01: métodos heredados de Object son methodNotFound y el daemon sigue vivo", async () => {
+    const c = await IpcClient.connect(daemon.server.path)
+    for (const m of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"])
+      await expect(c.call(m as MethodName, {})).rejects.toMatchObject({
+        rpc: { code: ErrorCode.methodNotFound },
+      })
+    expect(await c.call("daemon.health", {})).toBeDefined()
     c.close()
   })
 

@@ -354,7 +354,9 @@ export function validateParams(
   method: string,
   params: unknown,
 ): { ok: true; method: MethodName; params: unknown } | { ok: false; error: RpcError } {
-  if (!(method in Methods))
+  // `in` también ve propiedades heredadas (`toString`, `constructor`, `__proto__`):
+  // sólo cuentan las propias del catálogo.
+  if (!Object.hasOwn(Methods, method))
     return {
       ok: false,
       error: {

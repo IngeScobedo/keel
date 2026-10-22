@@ -73,6 +73,12 @@ describe("ADR-0005: contrato IPC", () => {
     const r = validateParams("nope.method", {})
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error.code).toBe(ErrorCode.methodNotFound)
+    // K-01: propiedades heredadas de Object no son métodos del catálogo
+    for (const inherited of ["toString", "constructor", "__proto__", "hasOwnProperty"]) {
+      const h = validateParams(inherited, {})
+      expect(h.ok).toBe(false)
+      if (!h.ok) expect(h.error.code).toBe(ErrorCode.methodNotFound)
+    }
     for (const m of [
       "work_items.create",
       "work_items.transition",
