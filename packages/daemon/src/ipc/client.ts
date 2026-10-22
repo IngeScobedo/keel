@@ -12,12 +12,14 @@ import {
   request,
 } from "@keel/core"
 import type { Socket } from "bun"
+import { LineDecoder, LineWriter } from "./framing.js"
 
 type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void }
 
 export class IpcClient {
   private socket: Socket<undefined> | null = null
-  private buffer = ""
+  private readonly decoder = new LineDecoder()
+  private readonly writer = new LineWriter()
   private nextId = 1
   private readonly pending = new Map<JsonRpcId, Pending>()
   private readonly listeners = new Set<(method: string, params: unknown) => void>()
@@ -28,7 +30,8 @@ export class IpcClient {
     c.socket = await Bun.connect<undefined>({
       unix: path,
       socket: {
-        data: (_s, chunk) => c.onData(chunk.toString()),
+        data: (_s, chunk) => c.onData(chunk),
+        drain: () => c.flush(),
         close: () => c.onClose(),
         error: (_s, e) => c.onClose(e),
       },
@@ -54,13 +57,13 @@ export class IpcClient {
     const p = new Promise<T>((resolve, reject) =>
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject }),
     )
-    this.socket.write(`${encodeFrame(frame)}\n`)
+    this.write(encodeFrame(frame))
     return p
   }
 
   /** Manda una línea cruda (para probar errores de protocolo). */
   raw(line: string): void {
-    this.socket?.write(`${line}\n`)
+    this.write(line)
   }
 
   close(): void {
@@ -68,14 +71,20 @@ export class IpcClient {
     this.socket?.end()
   }
 
-  private onData(text: string): void {
-    this.buffer += text
-    let nl = this.buffer.indexOf("\n")
-    while (nl >= 0) {
-      const line = this.buffer.slice(0, nl)
-      this.buffer = this.buffer.slice(nl + 1)
-      if (line.trim()) this.onFrame(line)
-      nl = this.buffer.indexOf("\n")
+  private write(line: string): void {
+    this.writer.enqueue(line)
+    this.flush()
+  }
+
+  private flush(): void {
+    const socket = this.socket
+    if (socket && !this.closed) this.writer.flush((bytes) => socket.write(bytes))
+  }
+
+  private onData(chunk: Uint8Array): void {
+    for (const d of this.decoder.push(chunk)) {
+      if (d.ok) this.onFrame(d.line)
+      else for (const l of this.listeners) l("protocol.error", d)
     }
   }
 

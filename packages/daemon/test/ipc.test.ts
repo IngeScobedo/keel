@@ -67,6 +67,35 @@ describe("servidor IPC (ADR-0005)", () => {
     c.close()
   })
 
+  test("K-05: una ñ partida entre dos chunks del socket llega intacta al store", async () => {
+    const frame = `${JSON.stringify({
+      jsonrpc: "2.0",
+      keel_protocol: 1,
+      id: 1,
+      method: "work_items.create",
+      params: { request_id: "utf8", idempotency_key: key(), title: "Español 🦀", kind: "docs" },
+    })}\n`
+    const bytes = new TextEncoder().encode(frame)
+    const cut = bytes.indexOf(0xc3) + 1 // entre los dos bytes de «ñ»
+    let reply = ""
+    const sock = await Bun.connect({
+      unix: daemon.server.path,
+      socket: {
+        data: (_s, chunk) => {
+          reply += new TextDecoder().decode(chunk)
+        },
+      },
+    })
+    sock.write(bytes.subarray(0, cut))
+    await new Promise((r) => setTimeout(r, 30))
+    sock.write(bytes.subarray(cut))
+    for (let i = 0; i < 100 && !reply.includes("\n"); i++)
+      await new Promise((r) => setTimeout(r, 10))
+    sock.end()
+    const id = (JSON.parse(reply) as { result: { id: string } }).result.id
+    expect(daemon.repo.getWorkItem(id)?.title).toBe("Español 🦀")
+  })
+
   test("mutación idempotente por recibo: misma key devuelve el mismo resultado; otra request con la misma key es error", async () => {
     const c = await IpcClient.connect(daemon.server.path)
     const k = key()
@@ -92,7 +121,8 @@ describe("servidor IPC (ADR-0005)", () => {
         kind: "feature",
       }),
     ).rejects.toMatchObject({ rpc: { code: ErrorCode.idempotencyMismatch } })
-    expect(daemon.repo.listWorkItems(daemon.project.project_id)).toHaveLength(1)
+    const titles = daemon.repo.listWorkItems(daemon.project.project_id).map((w) => w.title)
+    expect(titles.filter((t) => t === "Tarea A" || t === "Otra")).toEqual(["Tarea A"])
     c.close()
   })
 
@@ -104,8 +134,11 @@ describe("servidor IPC (ADR-0005)", () => {
       project_id: daemon.project.project_id,
       after_event_seq: 0,
     })) as { cursor: number; snapshot: { work_items: { visual_state: string }[] } }
-    expect(sub.snapshot.work_items).toHaveLength(1)
-    expect(sub.snapshot.work_items[0]?.visual_state).toBe("queued")
+    // los tests comparten daemon: el snapshot tiene todo lo creado hasta aquí
+    expect(sub.snapshot.work_items).toHaveLength(
+      daemon.repo.listWorkItems(daemon.project.project_id).length,
+    )
+    expect(sub.snapshot.work_items.every((w) => w.visual_state === "queued")).toBe(true)
     await new Promise((r) => setTimeout(r, 50))
     const replayed = got.length
     expect(replayed).toBeGreaterThanOrEqual(1) // work_item.created

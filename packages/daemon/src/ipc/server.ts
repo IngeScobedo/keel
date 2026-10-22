@@ -27,6 +27,7 @@ import {
 import type { Socket } from "bun"
 import type { EventBus } from "../bus.js"
 import type { Repo } from "../store/repo.js"
+import { LineDecoder, LineWriter } from "./framing.js"
 
 export type Actor = { actor_id: string; kind: "human" | "system" }
 export type HandlerContext = { actor: Actor; client: ClientState }
@@ -44,9 +45,8 @@ export class RpcFailure extends Error {
 export type ClientState = {
   id: number
   socket: Socket<ClientState>
-  buffer: string
-  queue: string[]
-  queuedBytes: number
+  decoder: LineDecoder
+  writer: LineWriter
   subscriptions: Map<string, { project_id: string | null; unsubscribe: () => void }>
   closed: boolean
 }
@@ -88,9 +88,8 @@ export class IpcServer {
           const state: ClientState = {
             id: this.nextClient++,
             socket,
-            buffer: "",
-            queue: [],
-            queuedBytes: 0,
+            decoder: new LineDecoder(),
+            writer: new LineWriter(),
             subscriptions: new Map(),
             closed: false,
           }
@@ -99,13 +98,9 @@ export class IpcServer {
         },
         data: (socket, chunk) => {
           const state = socket.data
-          state.buffer += chunk.toString()
-          let nl = state.buffer.indexOf("\n")
-          while (nl >= 0) {
-            const line = state.buffer.slice(0, nl)
-            state.buffer = state.buffer.slice(nl + 1)
-            if (line.trim().length > 0) void this.handleLine(state, line)
-            nl = state.buffer.indexOf("\n")
+          for (const d of state.decoder.push(chunk)) {
+            if (d.ok) void this.handleLine(state, d.line)
+            else this.send(state, failure(null, framingError(d.reason, d.bytes)))
           }
         },
         drain: (socket) => this.flush(socket.data),
@@ -137,13 +132,18 @@ export class IpcServer {
   /** Escritura con cola: si el socket no drena, acumula hasta el tope y luego corta (backpressure, ADR-0005 §4). */
   send(state: ClientState, frame: Frame): void {
     if (state.closed) return
-    const line = `${encodeFrame(frame)}\n`
-    state.queue.push(line)
-    state.queuedBytes += line.length
-    if (state.queuedBytes > MAX_QUEUED_BYTES) {
-      state.queue = [
-        `${encodeFrame(failure(null, { code: ErrorCode.backpressure, message: "cliente demasiado lento; conexión cerrada", retryable: true }))}\n`,
-      ]
+    state.writer.enqueue(encodeFrame(frame))
+    if (state.writer.queuedBytes > MAX_QUEUED_BYTES) {
+      state.writer.clear()
+      state.writer.enqueue(
+        encodeFrame(
+          failure(null, {
+            code: ErrorCode.backpressure,
+            message: "cliente demasiado lento; conexión cerrada",
+            retryable: true,
+          }),
+        ),
+      )
       this.flush(state)
       state.socket.end()
       this.dropClient(state)
@@ -153,17 +153,8 @@ export class IpcServer {
   }
 
   private flush(state: ClientState): void {
-    while (state.queue.length > 0 && !state.closed) {
-      const line = state.queue[0] as string
-      const written = state.socket.write(line)
-      if (written < line.length) {
-        state.queue[0] = line.slice(Math.max(0, written))
-        state.queuedBytes -= Math.max(0, written)
-        return
-      }
-      state.queue.shift()
-      state.queuedBytes -= line.length
-    }
+    if (state.closed) return
+    state.writer.flush((bytes) => state.socket.write(bytes))
   }
 
   /**
@@ -276,4 +267,14 @@ export class IpcServer {
       payload,
     }
   }
+}
+
+function framingError(reason: "frame_too_large" | "invalid_utf8", bytes: number): RpcError {
+  return reason === "frame_too_large"
+    ? {
+        code: ErrorCode.frameTooLarge,
+        message: `frame de al menos ${bytes} bytes supera el tope; descartado hasta el siguiente salto de línea`,
+        retryable: false,
+      }
+    : { code: ErrorCode.parseError, message: "frame con UTF-8 inválido", retryable: false }
 }
