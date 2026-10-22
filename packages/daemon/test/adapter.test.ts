@@ -4,13 +4,16 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { EventNotification } from "@keel/core"
 import {
+  ApprovalGate,
   type ApprovalWaiter,
   ClaudeAdapter,
+  createRunContext,
   DEFAULT_PROFILE,
   EventBus,
   INLINE_JSON_MAX_BYTES,
   openStore,
   Repo,
+  SOURCE,
 } from "../src/index.ts"
 import { askingQuery, hangingQuery, loadRecordedRun, replayQuery } from "./replay.ts"
 
@@ -27,7 +30,16 @@ function setup(
   const { project_id } = repo.ensureDefaultProject(dir)
   const w = repo.createWorkItem({ project_id, title: "lista src", kind: "chore" })
   const run = repo.createRun({ project_id, work_item_id: w.id, purpose: "execute" })
-  const adapter = new ClaudeAdapter({ repo, bus, queryFn, waitApproval, binary: "/fake/claude" })
+  const adapter = new ClaudeAdapter({ queryFn, binary: "/fake/claude" })
+  // El daemon pone eventos, proyección y política; el adaptador sólo traduce el SDK.
+  const ctx = createRunContext({
+    repo,
+    bus,
+    run,
+    gate: new ApprovalGate({ repo, waitApproval, timeoutMs: 20 }),
+    source: SOURCE,
+    adapterVersion: adapter.adapterVersion,
+  })
   return {
     dir,
     store,
@@ -36,6 +48,7 @@ function setup(
     published,
     project_id,
     run,
+    ctx,
     adapter,
     done: () => rmSync(dir, { recursive: true, force: true }),
   }
@@ -44,7 +57,7 @@ function setup(
 describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada del spike", () => {
   test("proyecta run, árbol de agentes con parent_source sdk, tool calls y costo estimado", async () => {
     const s = setup(replayQuery())
-    const final = await s.adapter.execute(s.run, "Usa el subagente lister", {
+    const final = await s.adapter.execute(s.ctx, "Usa el subagente lister", {
       ...DEFAULT_PROFILE,
       cwd: s.dir,
     })
@@ -93,7 +106,7 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
     const body = { filenames: ["x".repeat(300_000)], numFiles: 1 }
     post.input = { ...post.input, tool_response: body }
     const s = setup(replayQuery(entries))
-    const final = await s.adapter.execute(s.run, "grande", { ...DEFAULT_PROFILE, cwd: s.dir })
+    const final = await s.adapter.execute(s.ctx, "grande", { ...DEFAULT_PROFILE, cwd: s.dir })
     expect(final.status).toBe("completed")
 
     const row = s.store.db
@@ -125,7 +138,7 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
 
   test("cancelación: sin result del SDK, el daemon sintetiza cancelled en run y tool calls (FINDINGS §1)", async () => {
     const s = setup(hangingQuery())
-    const p = s.adapter.execute(s.run, "cuelga", { ...DEFAULT_PROFILE, cwd: s.dir })
+    const p = s.adapter.execute(s.ctx, "cuelga", { ...DEFAULT_PROFILE, cwd: s.dir })
     await new Promise((r) => setTimeout(r, 50))
     expect(s.adapter.activeRuns).toBe(1)
     expect(s.adapter.cancel(s.run.id, "test")).toBe(true)
@@ -141,10 +154,9 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
 
   test("canUseTool sin decisión humana → deny-on-timeout y solicitud expirada en el inbox (SDD 02 §9)", async () => {
     const s = setup(askingQuery())
-    const final = await s.adapter.execute(s.run, "borra", {
+    const final = await s.adapter.execute(s.ctx, "borra", {
       ...DEFAULT_PROFILE,
       cwd: s.dir,
-      approval_timeout_ms: 20,
     })
     expect(final.status).toBe("completed")
     const kinds = s.published.map((n) => n.kind)
@@ -164,7 +176,7 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
 
   test("canUseTool aprobado por el humano → allow y aprobación consumida", async () => {
     const s = setup(askingQuery(), async () => "approved" as const)
-    await s.adapter.execute(s.run, "borra", { ...DEFAULT_PROFILE, cwd: s.dir })
+    await s.adapter.execute(s.ctx, "borra", { ...DEFAULT_PROFILE, cwd: s.dir })
     const req = s.published.find((n) => n.kind === "approval.requested")?.payload as {
       approval_id: string
     }
@@ -179,16 +191,13 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
 
   test("subscription_session sin binario instalado falla antes de arrancar, sin fallback a API key", async () => {
     const s = setup(replayQuery())
-    const adapter = new ClaudeAdapter({
-      repo: s.repo,
-      bus: s.bus,
-      queryFn: replayQuery(),
-      waitApproval: async () => "expired",
-      binary: null,
-    })
-    const final = await adapter.execute(s.run, "x", { ...DEFAULT_PROFILE, cwd: s.dir })
+    const adapter = new ClaudeAdapter({ queryFn: replayQuery(), binary: null })
+    const profile = { ...DEFAULT_PROFILE, cwd: s.dir }
+    expect(adapter.preflight(profile)).toMatchObject({ ok: false })
+    const final = await adapter.execute(s.ctx, "x", profile)
     expect(final.status).toBe("failed")
     expect(final.end_reason).toBe("fatal_error")
+    expect(s.published.map((n) => n.kind)).toContain("run.start_failed")
     s.store.db.close()
     s.done()
   })

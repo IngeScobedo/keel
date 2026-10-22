@@ -15,11 +15,20 @@ import {
   type TransitionAuthority,
 } from "@keel/core"
 import type { z } from "zod"
-import { ClaudeAdapter, type ClaudeProfile, DEFAULT_PROFILE } from "./adapters/claude.js"
+import {
+  ClaudeAdapter,
+  type ClaudeAdapterDeps,
+  type ClaudeProfile,
+  DEFAULT_PROFILE,
+  SOURCE,
+} from "./adapters/claude.js"
+import type { ProviderAdapter } from "./adapters/provider.js"
+import { ApprovalGate } from "./approvals.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
 import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server.js"
+import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
 import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
 
@@ -28,7 +37,7 @@ export type DaemonOptions = {
   socketPath: string
   rootPath: string
   profile?: Partial<ClaudeProfile>
-  adapterDeps?: Partial<ConstructorParameters<typeof ClaudeAdapter>[0]>
+  adapterDeps?: ClaudeAdapterDeps
 }
 
 export class Daemon {
@@ -36,7 +45,9 @@ export class Daemon {
   readonly repo: Repo
   readonly bus = new EventBus()
   readonly server: IpcServer
+  /** Hoy el único proveedor; el daemon sólo lo usa por la interfaz `ProviderAdapter`. */
   readonly claude: ClaudeAdapter
+  readonly toolGate: ApprovalGate
   readonly project: { workspace_id: string; project_id: string }
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
@@ -51,11 +62,11 @@ export class Daemon {
     this.repo = new Repo(this.store.db)
     this.project = this.repo.ensureDefaultProject(opts.rootPath)
     this.profile = { ...DEFAULT_PROFILE, cwd: opts.rootPath, ...opts.profile }
-    this.claude = new ClaudeAdapter({
+    this.claude = new ClaudeAdapter(opts.adapterDeps ?? {})
+    this.toolGate = new ApprovalGate({
       repo: this.repo,
-      bus: this.bus,
       waitApproval: (id, ms) => this.waitApproval(id, ms),
-      ...opts.adapterDeps,
+      timeoutMs: this.profile.approval_timeout_ms,
     })
     this.server = new IpcServer({
       socketPath: opts.socketPath,
@@ -338,9 +349,18 @@ export class Daemon {
    * con su evento en vez de dejarlo vivo (K-08).
    */
   private dispatchRun(run: RunRow, prompt: string): void {
-    this.claude
-      .execute(run, prompt, this.profile)
-      .catch((e: unknown) => this.claude.failRun(run, e instanceof Error ? e.message : String(e)))
+    const provider: ProviderAdapter<ClaudeProfile> = this.claude
+    const ctx = createRunContext({
+      repo: this.repo,
+      bus: this.bus,
+      run,
+      gate: this.toolGate,
+      source: SOURCE,
+      adapterVersion: provider.adapterVersion,
+    })
+    provider
+      .execute(ctx, prompt, this.profile)
+      .catch((e: unknown) => ctx.fail(e instanceof Error ? e.message : String(e)))
       .then((final) => this.settleWorkItem(final))
       .catch((e: unknown) => console.error("keel: no se pudo asentar el run", run.id, e))
   }

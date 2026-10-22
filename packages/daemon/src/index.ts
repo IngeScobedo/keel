@@ -2,6 +2,8 @@
  * @keel/daemon — superficie pública (Fase 0: store, protocolo, adaptador Claude).
  */
 export * from "./adapters/claude.js"
+export * from "./adapters/provider.js"
+export * from "./approvals.js"
 export * from "./bus.js"
 export * from "./daemon.js"
 export * from "./ids.js"
@@ -10,6 +12,7 @@ export * from "./ipc/framing.js"
 export * from "./ipc/server.js"
 export * from "./payload.js"
 export * from "./projector.js"
+export * from "./run-context.js"
 export * from "./store/db.js"
 export * from "./store/migrate.js"
 export * from "./store/repo.js"

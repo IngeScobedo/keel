@@ -113,6 +113,7 @@ export const NodeStateSchema = z.enum([
   "orphan",
 ])
 export const CostKindSchema = z.enum(["observed", "estimated", "unknown"])
+export type CostKind = z.infer<typeof CostKindSchema>
 
 /** Toda entidad proyectada que viaja por el protocolo lleva su visual ya resuelto (ADR-0006 §3). */
 const projected = { visual_state: VisualStateSchema, revision: z.number().int().nonnegative() }

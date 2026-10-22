@@ -1,7 +1,7 @@
 /**
  * Proyección de eventos del Claude Agent SDK a `runs`, `agent_instances` y
  * `tool_calls` (ADR-0004 §4: proyecciones, no verdad). Pura respecto al SDK:
- * recibe mensajes y hooks ya serializados y escribe por el `Repo`.
+ * recibe mensajes y hooks ya serializados y escribe por el `ProjectionStore`.
  *
  * Identidad de agentes (ADR-0002 §4, canal 0 `sdk`): un mensaje con `agent_id`
  * es de un subagente; su `parent_tool_use_id` es el bloque `tool_use` `Agent`
@@ -9,14 +9,15 @@
  */
 import type { NodeState, RunStatus } from "@keel/core"
 import { toolCallLabel } from "@keel/core"
+import type { ProjectionStore } from "./adapters/provider.js"
 import { nowIso } from "./ids.js"
 import { inlineOrPreview } from "./payload.js"
-import type { Repo, RunRow } from "./store/repo.js"
+import type { RunRow } from "./store/repo.js"
 
 type Json = Record<string, unknown>
 
 export type ProjectorContext = {
-  repo: Repo
+  store: ProjectionStore
   run: RunRow
   provider: "claude"
   /** id del agente raíz en `agent_instances` */
@@ -43,7 +44,7 @@ export class RunProjector {
     if (this.rootCreated) return
     this.rootCreated = true
     const t = nowIso()
-    this.ctx.repo.upsertAgent({
+    this.ctx.store.upsertAgent({
       id: this.ctx.rootAgentId,
       run_id: this.ctx.run.id,
       provider: this.ctx.provider,
@@ -68,7 +69,7 @@ export class RunProjector {
       this.sessionId = String(m.session_id ?? "")
       this.model = typeof m.model === "string" ? m.model : null
       this.ensureRoot(this.sessionId, this.model)
-      this.ctx.repo.updateRun(this.ctx.run.id, {
+      this.ctx.store.updateRun(this.ctx.run.id, {
         status: "running",
         started_at: this.ctx.run.started_at ?? t,
       })
@@ -82,7 +83,7 @@ export class RunProjector {
         const parentAgentId = parentToolUse
           ? (this.toolUseOwner.get(parentToolUse) ?? this.ctx.rootAgentId)
           : null
-        this.ctx.repo.upsertAgent({
+        this.ctx.store.upsertAgent({
           id: agentId,
           run_id: this.ctx.run.id,
           provider: this.ctx.provider,
@@ -137,8 +138,8 @@ export class RunProjector {
         // El SDK estima a precio de lista incluso con sesión de suscripción (FINDINGS); nunca es `observed`.
         cost_kind: cost === null ? "unknown" : "estimated",
       }
-      this.ctx.repo.updateRun(this.ctx.run.id, patch)
-      this.ctx.repo.setAgentState(this.ctx.rootAgentId, isError ? "failed" : "succeeded", t)
+      this.ctx.store.updateRun(this.ctx.run.id, patch)
+      this.ctx.store.setAgentState(this.ctx.rootAgentId, isError ? "failed" : "succeeded", t)
       const orphans = this.closeOpenToolCalls("orphan", t)
       return { run: patch, agent: this.ctx.rootAgentId, toolCalls: orphans }
     }
@@ -159,7 +160,7 @@ export class RunProjector {
     const sdkAgent = typeof input.agent_id === "string" ? input.agent_id : null
     const agentId = this.agentRowId(sdkAgent)
     if (name === "SubagentStart" && sdkAgent) {
-      this.ctx.repo.upsertAgent({
+      this.ctx.store.upsertAgent({
         id: agentId,
         run_id: this.ctx.run.id,
         provider: this.ctx.provider,
@@ -177,7 +178,7 @@ export class RunProjector {
       return { agent: agentId }
     }
     if (name === "SubagentStop" && sdkAgent) {
-      this.ctx.repo.setAgentState(agentId, "succeeded", t)
+      this.ctx.store.setAgentState(agentId, "succeeded", t)
       return { agent: agentId }
     }
     if (name === "PreToolUse" && typeof input.tool_use_id === "string") {
@@ -186,7 +187,7 @@ export class RunProjector {
       const toolName = String(input.tool_name ?? "?")
       const inputJson = input.tool_input === undefined ? null : JSON.stringify(input.tool_input)
       const label = toolCallLabel(toolName, (input.tool_input as Json) ?? null) ?? toolName
-      const row = this.ctx.repo.openToolCall({
+      const row = this.ctx.store.openToolCall({
         run_id: this.ctx.run.id,
         agent_id: agentId,
         tool_use_id: toolUse,
@@ -212,7 +213,7 @@ export class RunProjector {
                 : `tool_use:${input.tool_use_id}`,
             )
           : null
-      const row = this.ctx.repo.closeToolCall({
+      const row = this.ctx.store.closeToolCall({
         run_id: this.ctx.run.id,
         tool_use_id: input.tool_use_id,
         state: ok ? "succeeded" : "failed",
@@ -225,7 +226,7 @@ export class RunProjector {
       return { agent: agentId, toolCalls: row ? [row.id] : [] }
     }
     if (name === "StopFailure") {
-      this.ctx.repo.setAgentState(
+      this.ctx.store.setAgentState(
         agentId,
         "interrupted",
         t,
@@ -248,18 +249,18 @@ export class RunProjector {
       end_reason: reason === "cancelled" ? "cancelled" : "interrupted",
       ended_at: t,
     }
-    this.ctx.repo.updateRun(this.ctx.run.id, patch)
-    for (const a of this.ctx.repo.agentsOfRun(this.ctx.run.id))
+    this.ctx.store.updateRun(this.ctx.run.id, patch)
+    for (const a of this.ctx.store.agentsOfRun(this.ctx.run.id))
       if (["running", "waiting_human", "pending"].includes(a.state))
-        this.ctx.repo.setAgentState(a.id, reason, t, message)
+        this.ctx.store.setAgentState(a.id, reason, t, message)
     const closed = this.closeOpenToolCalls(reason, t)
     return { run: patch, toolCalls: closed }
   }
 
   private closeOpenToolCalls(state: NodeState, t: string): string[] {
     const ids: string[] = []
-    for (const tc of this.ctx.repo.openToolCalls(this.ctx.run.id)) {
-      const row = this.ctx.repo.closeToolCall({
+    for (const tc of this.ctx.store.openToolCalls(this.ctx.run.id)) {
+      const row = this.ctx.store.closeToolCall({
         run_id: this.ctx.run.id,
         tool_use_id: tc.tool_use_id,
         state,

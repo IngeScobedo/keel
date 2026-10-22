@@ -6,9 +6,9 @@
  *   usuario y quita cualquier API key del entorno del hijo (sin fallback
  *   silencioso). Keel no lee ni escribe credenciales.
  * - Modo `api_key`: exige `ANTHROPIC_API_KEY` en el entorno; si no está, falla.
- * - Cada mensaje y cada hook se persiste en `events` (raw íntegro) y se proyecta.
- * - `canUseTool` con temporizador del daemon: al expirar, deniega y deja la
- *   solicitud en `approval_requests` (SDD 02 §9; FINDINGS §3: el SDK no lo hace).
+ * - Implementa `ProviderAdapter` (ADR-0007 §7): cada mensaje y cada hook va
+ *   íntegro a `RunContext.record` y se proyecta por `RunContext.store`.
+ * - `canUseTool` delega en la política del daemon (`RunContext.decideTool`).
  * - Registra pid + cwd + session_id del proceso `claude` en el manifest del run
  *   para reconciliar al arrancar.
  */
@@ -25,10 +25,10 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
 import { isLive } from "@keel/core"
-import type { EventBus } from "../bus.js"
-import { canonicalJson, nowIso, sha256Hex, ulid } from "../ids.js"
+import { nowIso, ulid } from "../ids.js"
 import { RunProjector } from "../projector.js"
-import type { Repo, RunRow } from "../store/repo.js"
+import type { RunRow } from "../store/repo.js"
+import type { Preflight, ProviderAdapter, ProviderCapabilities, RunContext } from "./provider.js"
 
 export const ADAPTER_VERSION = "claude-sdk/0.3.295"
 export const SOURCE = "claude-sdk"
@@ -78,16 +78,8 @@ export type QueryFn = (args: {
   options: Options
 }) => Query | AsyncIterable<SDKMessage>
 
-export type ApprovalWaiter = (
-  approvalId: string,
-  timeoutMs: number,
-) => Promise<"approved" | "denied" | "expired">
-
 export type ClaudeAdapterDeps = {
-  repo: Repo
-  bus: EventBus
   queryFn?: QueryFn
-  waitApproval: ApprovalWaiter
   /** Para tests: ruta al binario; por defecto se detecta el instalado. */
   binary?: string | null
   /** Entorno del que hereda el hijo; por defecto el del daemon. */
@@ -107,10 +99,22 @@ export function detectClaudeBinary(): string | null {
   )
 }
 
-export class ClaudeAdapter {
-  private readonly running = new Map<string, { abort: AbortController; projector: RunProjector }>()
+export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
+  readonly provider = "claude"
+  readonly adapterVersion = ADAPTER_VERSION
+  /** Medido en el spike (spikes/sdk-capabilities/FINDINGS.md, ADR-0003). */
+  readonly capabilities: ProviderCapabilities = {
+    auth_modes: ["subscription_session", "api_key", "bedrock", "vertex"],
+    subagents: true,
+    tool_approval: true,
+    // El SDK estima a precio de lista incluso con suscripción: nunca `observed`.
+    cost_kind: "estimated",
+    // Tras abortar no llega `result` (FINDINGS §1): el daemon sintetiza `cancelled`.
+    cancel_emits_result: false,
+  }
+  private readonly running = new Map<string, AbortController>()
   private readonly deps: ClaudeAdapterDeps
-  constructor(deps: ClaudeAdapterDeps) {
+  constructor(deps: ClaudeAdapterDeps = {}) {
     this.deps = deps
   }
 
@@ -119,10 +123,15 @@ export class ClaudeAdapter {
   }
 
   cancel(runId: string, reason: string | null): boolean {
-    const r = this.running.get(runId)
-    if (!r) return false
-    r.abort.abort(reason ?? "cancelled")
+    const abort = this.running.get(runId)
+    if (!abort) return false
+    abort.abort(reason ?? "cancelled")
     return true
+  }
+
+  preflight(profile: ClaudeProfile): Preflight {
+    const r = this.resolveLaunch(profile)
+    return r.ok ? { ok: true } : r
   }
 
   /**
@@ -130,72 +139,43 @@ export class ClaudeAdapter {
    * terminal; un error de configuración o de autenticación lo termina en
    * `failed` antes del spawn, nunca deja la promesa rechazada (K-08).
    */
-  async execute(run: RunRow, prompt: string, profile: ClaudeProfile): Promise<RunRow> {
-    const { repo, bus } = this.deps
-    const preflight = this.preflight(profile)
-    if (!preflight.ok) return this.failRun(run, preflight.message, "run.start_failed")
-    const { env, binary } = preflight
-    const rootAgentId = `${run.id}:root`
-    const projector = new RunProjector({ repo, run, provider: "claude", rootAgentId })
+  async execute(ctx: RunContext, prompt: string, profile: ClaudeProfile): Promise<RunRow> {
+    const { run, store } = ctx
+    const launch = this.resolveLaunch(profile)
+    if (!launch.ok) return ctx.fail(launch.message, "run.start_failed")
+    const { env, binary } = launch
+    const projector = new RunProjector({
+      store,
+      run,
+      provider: "claude",
+      rootAgentId: `${run.id}:root`,
+    })
     const abort = new AbortController()
-    this.running.set(run.id, { abort, projector })
+    this.running.set(run.id, abort)
 
-    /** Persiste y publica; devuelve el id del evento (null si ya existía). */
-    const record = (
-      kind: string,
-      key: string,
-      payload: unknown,
-      occurredAt: string | null,
-    ): string | null => {
-      const e = repo.appendEvent({
-        project_id: run.project_id,
-        run_id: run.id,
-        source: SOURCE,
-        source_event_key: key,
-        fidelity: "full",
-        adapter_version: ADAPTER_VERSION,
-        kind,
-        occurred_at: occurredAt,
-        payload_json: JSON.stringify(payload),
-      })
-      if (e)
-        bus.publish({
-          event_seq: e.event_seq,
-          kind: e.kind,
-          project_id: e.project_id,
-          run_id: e.run_id,
-          received_at: e.received_at,
-          payload: payload,
-        })
-      return e?.id ?? null
-    }
-    const notifyRun = () => {
-      const r = repo.getRun(run.id)
-      if (r) record("run.updated", `run.updated:${run.id}:${ulid()}`, repo.runView(r), null)
-    }
-
-    const hook: HookCallback = async (input: HookInput, toolUseID) => {
-      const name = input.hook_event_name
-      const key = `hook:${input.session_id}:${name}:${toolUseID ?? ""}:${ulid()}`
-      const eventId = record(
-        `hook.${name}`,
-        key,
-        { ...input, tool_use_id_callback: toolUseID ?? null },
-        null,
-      )
-      const changed = projector.onHook(
-        name,
-        input as unknown as Record<string, unknown>,
-        toolUseID,
-        eventId,
-      )
+    const notifyProjection = (key: string, changed: { agent?: string; toolCalls?: string[] }) => {
       if (changed.agent || changed.toolCalls?.length)
-        record(
+        ctx.record(
           "projection.updated",
           `proj:${key}`,
           { agent: changed.agent ?? null, tool_calls: changed.toolCalls ?? [] },
           null,
         )
+    }
+
+    const hook: HookCallback = async (input: HookInput, toolUseID) => {
+      const name = input.hook_event_name
+      const key = `hook:${input.session_id}:${name}:${toolUseID ?? ""}:${ulid()}`
+      const eventId = ctx.record(
+        `hook.${name}`,
+        key,
+        { ...input, tool_use_id_callback: toolUseID ?? null },
+        null,
+      )
+      notifyProjection(
+        key,
+        projector.onHook(name, input as unknown as Record<string, unknown>, toolUseID, eventId),
+      )
       return {}
     }
     const hooks = Object.fromEntries(
@@ -207,51 +187,10 @@ export class ClaudeAdapter {
       input: Record<string, unknown>,
       opts: { signal: AbortSignal },
     ): Promise<PermissionResult> => {
-      const operation = { tool: toolName, input, run_id: run.id }
-      const hash = await sha256Hex(canonicalJson(operation))
-      const expires = new Date(Date.now() + profile.approval_timeout_ms).toISOString()
-      const approvalId = repo.createApproval({
-        project_id: run.project_id,
-        run_id: run.id,
-        operation_hash: hash,
-        operation,
-        expires_at: expires,
-      })
-      repo.updateRun(run.id, { status: "waiting_human" })
-      record(
-        "approval.requested",
-        `approval:${approvalId}`,
-        { approval_id: approvalId, operation_hash: hash, tool: toolName, expires_at: expires },
-        null,
-      )
-      notifyRun()
-      const decision = await Promise.race([
-        this.deps.waitApproval(approvalId, profile.approval_timeout_ms),
-        new Promise<"denied">((resolve) =>
-          opts.signal.addEventListener("abort", () => resolve("denied"), { once: true }),
-        ),
-      ])
-      const current = repo.getRun(run.id)
-      if (current?.status === "waiting_human") repo.updateRun(run.id, { status: "running" })
-      if (decision === "expired") repo.setApproval(approvalId, "expired", null)
-      record(
-        "approval.resolved",
-        `approval:${approvalId}:${decision}`,
-        { approval_id: approvalId, decision },
-        null,
-      )
-      notifyRun()
-      if (decision === "approved") {
-        repo.setApproval(approvalId, "consumed", null)
-        return { behavior: "allow", updatedInput: input }
-      }
-      return {
-        behavior: "deny",
-        message:
-          decision === "expired"
-            ? `Keel: sin decisión humana en ${Math.round(profile.approval_timeout_ms / 1000)} s; denegado (deny-on-timeout). La solicitud ${approvalId} queda en el inbox.`
-            : `Keel: denegado por el humano (${approvalId}).`,
-      }
+      const d = await ctx.decideTool({ tool: toolName, input, signal: opts.signal })
+      return d.behavior === "allow"
+        ? { behavior: "allow", updatedInput: d.input }
+        : { behavior: "deny", message: d.message }
     }
 
     const options: Options = {
@@ -267,14 +206,14 @@ export class ClaudeAdapter {
       hooks,
       canUseTool,
     }
-    repo.updateRun(run.id, { status: "initializing", started_at: nowIso() })
-    repo.mergeManifest(run.id, {
+    store.updateRun(run.id, { status: "initializing", started_at: nowIso() })
+    store.mergeManifest(run.id, {
       adapter: ADAPTER_VERSION,
       auth_mode: profile.auth_mode,
       binary,
       model: profile.model,
     })
-    notifyRun()
+    ctx.notifyRun()
 
     const queryFn = this.deps.queryFn ?? ((a) => sdkQuery(a))
     let processRecorded = false
@@ -282,54 +221,43 @@ export class ClaudeAdapter {
       for await (const message of queryFn({ prompt, options })) {
         const m = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
         const key = m.uuid ? `msg:${m.uuid}` : `msg:${m.type}:${ulid()}`
-        record(`sdk.${m.type}`, key, m, typeof m.timestamp === "string" ? m.timestamp : null)
+        ctx.record(`sdk.${m.type}`, key, m, typeof m.timestamp === "string" ? m.timestamp : null)
         const changed = projector.onMessage(m)
         if (!processRecorded && m.type === "system" && binary) {
           processRecorded = true
           const proc = findChildProcess(binary, profile.cwd)
-          repo.mergeManifest(run.id, {
+          store.mergeManifest(run.id, {
             provider_process: proc ? { ...proc, session_id: projector.sessionId } : null,
           })
         }
-        if (changed.run) notifyRun()
-        if (changed.agent || changed.toolCalls?.length)
-          record(
-            "projection.updated",
-            `proj:${key}`,
-            { agent: changed.agent ?? null, tool_calls: changed.toolCalls ?? [] },
-            null,
-          )
+        if (changed.run) ctx.notifyRun()
+        notifyProjection(key, changed)
       }
-      const final = repo.getRun(run.id)
-      if (
-        final &&
-        !["completed", "failed", "cancelled", "interrupted", "budget_exceeded"].includes(
-          final.status,
-        )
-      ) {
+      const final = store.getRun(run.id)
+      if (final && isLive(final.status)) {
         // El stream terminó sin `result`: no inventar éxito.
         projector.onCancelled("interrupted", "el stream del SDK terminó sin mensaje result")
-        notifyRun()
+        ctx.notifyRun()
       }
     } catch (e) {
       const aborted = abort.signal.aborted
       const msg = e instanceof Error ? e.message : String(e)
       const changed = projector.onCancelled(aborted ? "cancelled" : "interrupted", msg)
-      record(
+      ctx.record(
         aborted ? "run.cancelled" : "run.interrupted",
         `end:${run.id}`,
         { message: msg, tool_calls: changed.toolCalls },
         null,
       )
-      notifyRun()
+      ctx.notifyRun()
     } finally {
       this.running.delete(run.id)
     }
-    return repo.getRun(run.id) as RunRow
+    return store.getRun(run.id) as RunRow
   }
 
-  /** Comprueba modo de autenticación y binario sin lanzar nada (ADR-0002: sin fallback silencioso). */
-  private preflight(
+  /** Modo de autenticación, entorno del hijo y binario, sin lanzar nada (ADR-0002: sin fallback silencioso). */
+  private resolveLaunch(
     profile: ClaudeProfile,
   ):
     | { ok: true; env: Record<string, string | undefined>; binary: string | null }
@@ -358,49 +286,6 @@ export class ClaudeAdapter {
           "subscription_session requiere el binario `claude` instalado por el usuario; no se encontró",
       }
     return { ok: true, env, binary }
-  }
-
-  /**
-   * Termina en `failed` un run que no llegó a un estado terminal, con su evento
-   * y su notificación. Si ya es terminal no lo toca.
-   */
-  failRun(run: RunRow, message: string, kind = "run.failed"): RunRow {
-    const { repo, bus } = this.deps
-    const current = repo.getRun(run.id) ?? run
-    if (!isLive(current.status)) return current
-    const t = nowIso()
-    const r = repo.updateRun(run.id, {
-      status: "failed",
-      end_reason: "fatal_error",
-      started_at: current.started_at ?? t,
-      ended_at: t,
-    })
-    for (const [k, payload] of [
-      [kind, { message }],
-      ["run.updated", repo.runView(r)],
-    ] as const) {
-      const e = repo.appendEvent({
-        project_id: run.project_id,
-        run_id: run.id,
-        source: SOURCE,
-        source_event_key: `${k}:${run.id}:${ulid()}`,
-        fidelity: "full",
-        adapter_version: ADAPTER_VERSION,
-        kind: k,
-        occurred_at: null,
-        payload_json: JSON.stringify(payload),
-      })
-      if (e)
-        bus.publish({
-          event_seq: e.event_seq,
-          kind: k,
-          project_id: e.project_id,
-          run_id: run.id,
-          received_at: e.received_at,
-          payload,
-        })
-    }
-    return r
   }
 }
 
