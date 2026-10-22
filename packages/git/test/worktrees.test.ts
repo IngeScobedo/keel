@@ -154,6 +154,35 @@ describe("@keel/git: worktrees por run con el estado en el propio repo (ADR-0007
   })
 })
 
+describe("@keel/git: ids jerárquicos (SDD 02: keel/<work-item>/<run>/<lane>)", () => {
+  test("crea, reconcilia, rescata y quita con un id de varios segmentos", async () => {
+    const { repo, root, wt } = await fixture()
+    const id = "KEEL-7/run-1/root"
+    const w = await createWorktree(repo, { runId: id, path: wt("k7-root") })
+    expect(w.branch).toBe("keel/KEEL-7/run-1/root")
+    await createWorktree(repo, { runId: "KEEL-7/run-1/lane-a", path: wt("k7-a") })
+    expect((await reconcile(repo)).map((x) => x.runId)).toEqual([
+      "KEEL-7/run-1/lane-a",
+      "KEEL-7/run-1/root",
+    ])
+    writeFileSync(join(wt("k7-root"), "f.txt"), "x\n")
+    const r = await removeWorktree(repo, id)
+    expect(r.rescueRef?.startsWith(`${RESCUE_REF_PREFIX}${id}/`)).toBe(true)
+    expect(refs(root, RUN_REF_PREFIX)).toEqual([`${RUN_REF_PREFIX}KEEL-7/run-1/lane-a`])
+  })
+
+  test("un id prefijo de otro por segmentos es conflict; segmentos inválidos, invalid_argument", async () => {
+    const { repo, wt } = await fixture()
+    await createWorktree(repo, { runId: "a/b", path: wt("ab") })
+    expect(await kindOf(createWorktree(repo, { runId: "a", path: wt("a") }))).toBe("conflict")
+    for (const bad of ["a//b", "/a", "a/", "a/.x", "a/b.lock", "a/..", "a b"])
+      expect(await kindOf(createWorktree(repo, { runId: bad, path: wt("bad") }))).toBe(
+        "invalid_argument",
+      )
+    expect((await reconcile(repo)).map((x) => x.runId)).toEqual(["a/b"])
+  })
+})
+
 describe("@keel/git: reconciliar tras un crash sólo con git", () => {
   test("directorio borrado → missing; ref sin worktree → orphan_ref; rama keel/* sin ref → unregistered", async () => {
     const { repo, root, wt } = await fixture()

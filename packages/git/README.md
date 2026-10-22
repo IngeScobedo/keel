@@ -20,6 +20,11 @@ El ref del run se escribe antes de crear el worktree y se borra después de
 quitarlo. Un crash en medio deja un ref huérfano, que `reconcile()` ve; nunca
 deja un worktree que nadie reconoce.
 
+El `runId` puede ser jerárquico, con segmentos separados por `/`. Por ejemplo,
+`KEEL-7/run-1/root` produce la rama `keel/KEEL-7/run-1/root`, el esquema
+`keel/<work-item>/<run>/<lane>` del SDD 02. Un id no puede ser prefijo de otro
+por segmentos (`a` y `a/b`): git lo rechaza y la librería devuelve `conflict`.
+
 ## API
 
 ```ts

@@ -72,11 +72,20 @@ export type KeelWorktree = {
   meta: WorktreeMeta | null
 }
 
-const RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
+const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 
+/**
+ * El id puede ser jerárquico, en segmentos separados por `/`: el SDD 02 nombra
+ * las ramas `keel/<work-item>/<run>/<lane>`. Ningún id puede ser prefijo de otro
+ * por segmentos (`a` y `a/b`): git no admite un ref y un directorio con el mismo
+ * nombre, y lo rechaza como `conflict`.
+ */
 function assertRunId(runId: string): void {
-  if (!RUN_ID.test(runId) || runId.endsWith(".lock") || runId.includes(".."))
-    throw new GitError("invalid_argument", `run_id no sirve como nombre de ref: ${runId}`)
+  const segments = runId.split("/")
+  const ok =
+    segments.length <= 8 &&
+    segments.every((seg) => SEGMENT.test(seg) && !seg.endsWith(".lock") && !seg.includes(".."))
+  if (!ok) throw new GitError("invalid_argument", `run_id no sirve como nombre de ref: ${runId}`)
 }
 
 /** Escribe en el `.git` común: serializado en el proceso y con reintento ante locks ajenos. */
