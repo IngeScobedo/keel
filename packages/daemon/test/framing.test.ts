@@ -48,7 +48,11 @@ describe("K-05: framing NDJSON por bytes (ADR-0005 §2)", () => {
     expect(size).toBe(enc('{"t":"ñ🦀"}\n').length)
     const sink: number[] = []
     // el socket acepta 3 bytes por vez
-    while (!w.flush((b) => (sink.push(...b.subarray(0, 3)), Math.min(3, b.length)))) {}
+    const acceptThree = (b: Uint8Array) => {
+      sink.push(...b.subarray(0, 3))
+      return Math.min(3, b.length)
+    }
+    while (!w.flush(acceptThree)) {}
     expect(w.queuedBytes).toBe(0)
     expect(new TextDecoder().decode(new Uint8Array(sink))).toBe('{"t":"ñ🦀"}\n')
   })

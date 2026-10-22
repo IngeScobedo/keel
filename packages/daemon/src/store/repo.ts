@@ -149,18 +149,24 @@ export class Repo {
       .query<EventRow, [string]>("SELECT * FROM events WHERE id = ?")
       .get(id) as EventRow
   }
-  eventsAfter(seq: number, projectId: string | null, limit = 1000): EventRow[] {
+  /** Una página de eventos con `seq < event_seq <= upTo`, en orden. */
+  eventsAfter(
+    seq: number,
+    projectId: string | null,
+    limit = 1000,
+    upTo = Number.MAX_SAFE_INTEGER,
+  ): EventRow[] {
     return projectId
       ? this.db
-          .query<EventRow, [number, string, number]>(
-            "SELECT * FROM events WHERE event_seq > ? AND project_id = ? ORDER BY event_seq LIMIT ?",
+          .query<EventRow, [number, number, string, number]>(
+            "SELECT * FROM events WHERE event_seq > ? AND event_seq <= ? AND project_id = ? ORDER BY event_seq LIMIT ?",
           )
-          .all(seq, projectId, limit)
+          .all(seq, upTo, projectId, limit)
       : this.db
-          .query<EventRow, [number, number]>(
-            "SELECT * FROM events WHERE event_seq > ? ORDER BY event_seq LIMIT ?",
+          .query<EventRow, [number, number, number]>(
+            "SELECT * FROM events WHERE event_seq > ? AND event_seq <= ? ORDER BY event_seq LIMIT ?",
           )
-          .all(seq, limit)
+          .all(seq, upTo, limit)
   }
   lastEventSeq(): number {
     return (

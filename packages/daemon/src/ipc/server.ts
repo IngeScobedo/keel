@@ -52,6 +52,7 @@ export type ClientState = {
 }
 
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024
+export const REPLAY_PAGE_SIZE = 1000
 
 export type IpcServerOptions = {
   socketPath: string
@@ -228,12 +229,17 @@ export class IpcServer {
     const runs = projectId ? repo.listRuns(projectId).map((r) => repo.runView(r)) : []
     const cursor = repo.lastEventSeq()
     // Un cursor por delante del último evento significa «desde ahora»: no se puede
-    // saltar el futuro. Replay de lo que el cliente no vio; luego el bus.
+    // saltar el futuro. Replay paginado de lo que el cliente no vio, hasta el cursor
+    // capturado; luego el bus. Todo es síncrono, así que ningún evento se publica
+    // entre el final del replay y el alta en el bus.
     let last = Math.min(p.after_event_seq, cursor)
-    for (const e of repo.eventsAfter(last, projectId)) {
-      this.send(state, notification("events.event", this.toNotification(e)))
-      last = e.event_seq
+    while (!state.closed) {
+      const page = repo.eventsAfter(last, projectId, REPLAY_PAGE_SIZE, cursor)
+      for (const e of page) this.send(state, notification("events.event", this.toNotification(e)))
+      if (page.length < REPLAY_PAGE_SIZE) break
+      last = (page.at(-1) as (typeof page)[number]).event_seq
     }
+    last = cursor
     const unsubscribe = this.opts.bus.subscribe((n) => {
       if (projectId && n.project_id !== projectId) return
       if (n.event_seq <= last) return

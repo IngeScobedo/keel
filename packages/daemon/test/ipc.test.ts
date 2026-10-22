@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ErrorCode, type EventNotification, type MethodName } from "@keel/core"
-import { Daemon, IpcClient } from "../src/index.ts"
+import { Daemon, IpcClient, REPLAY_PAGE_SIZE } from "../src/index.ts"
 import { hangingQuery, replayQuery } from "./replay.ts"
 
 let dir: string
@@ -153,6 +153,44 @@ describe("servidor IPC (ADR-0005)", () => {
     expect(got.at(-1)?.kind).toBe("work_item.created")
     const seqs = got.map((g) => g.event_seq)
     expect([...seqs].sort((x, y) => x - y)).toEqual(seqs)
+    c.close()
+  })
+
+  test("K-03: el replay recorre todas las páginas hasta el cursor y enlaza sin huecos con el stream", async () => {
+    const { project_id } = daemon.project
+    const from = daemon.repo.lastEventSeq()
+    const backlog = REPLAY_PAGE_SIZE * 2 + 345
+    daemon.store.db.transaction(() => {
+      for (let i = 0; i < backlog; i++)
+        daemon.repo.appendEvent({
+          project_id,
+          run_id: null,
+          source: "test",
+          source_event_key: `k03:${from}:${i}`,
+          fidelity: "full",
+          adapter_version: "test/0",
+          kind: "test.backlog",
+          occurred_at: null,
+          payload_json: JSON.stringify({ i }),
+        })
+    })()
+    const c = await IpcClient.connect(daemon.server.path)
+    const seqs: number[] = []
+    c.onEvent((n) => seqs.push(n.event_seq))
+    const sub = (await c.call("events.subscribe", { project_id, after_event_seq: from })) as {
+      cursor: number
+    }
+    expect(sub.cursor).toBe(from + backlog)
+    await c.call("work_items.create", {
+      request_id: "k03",
+      idempotency_key: key(),
+      title: "después del replay",
+      kind: "chore",
+    })
+    for (let i = 0; i < 100 && seqs.length < backlog + 1; i++)
+      await new Promise((r) => setTimeout(r, 10))
+    // contiguo, sin duplicados: todo el backlog y luego el evento en vivo
+    expect(seqs).toEqual(Array.from({ length: backlog + 1 }, (_, i) => from + 1 + i))
     c.close()
   })
 
