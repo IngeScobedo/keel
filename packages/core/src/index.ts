@@ -7,6 +7,7 @@
 
 export * from "./correlation.js"
 export * from "./envelope.js"
+export * from "./lifecycle.js"
 export * from "./protocol.js"
 export * from "./schemas.js"
 export * from "./ulid.js"
