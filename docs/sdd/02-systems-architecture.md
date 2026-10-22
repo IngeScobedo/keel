@@ -163,6 +163,18 @@ argv. El pool registra creación y cleanup como operaciones recuperables. No
 elimina worktrees con cambios sin preservar; TTL solo hace un árbol candidato a
 recolección.
 
+Decisiones del humano (2026-10-22), implementadas con `@keel/git` (ADR-0007 §5):
+
+- Los worktrees viven fuera del repo, en
+  `$XDG_STATE_HOME/keel/worktrees/<project>/<repo>/<work-item>/<run>/<lane>`.
+- Se liberan según el final del run. `cancelled`, `failed`, `interrupted` y
+  `budget_exceeded` liberan al terminar. `completed` conserva el worktree
+  mientras la tarea está en `needs_review` y lo libera al salir de ahí. Liberar
+  siempre rescata antes los cambios sin commit en `refs/keel/rescue/`.
+- Un run `execute` sin repositorio git falla explícito antes del spawn. Los runs
+  `plan` y `triage_eval` son de sólo lectura y corren en la raíz. El modo sin
+  VCS es trabajo de la Fase 1 (SDD 04).
+
 Los locks usan `(target_id, project_repo_id, file_scope)`, con normalización
 propia del filesystem. Globs se analizan incluyendo `**`, `?`, clases y archivos
 todavía inexistentes. Una comparación solo de prefijos anteriores a `*` no

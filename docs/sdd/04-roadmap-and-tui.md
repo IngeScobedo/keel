@@ -102,8 +102,12 @@ flowchart LR
       idempotentes.
 - [ ] JSON-RPC por UDS/Named Pipes, permisos de endpoint, snapshot y cursor de
       reconexión.
-- [ ] Git engine con worktrees aislados, base SHA, cleanup recuperable y
-      preservación de cambios.
+- [x] Git engine con worktrees aislados, base SHA, cleanup recuperable y
+      preservación de cambios. `@keel/git` más
+      `packages/daemon/src/workspaces.ts`; evidencia en
+      `packages/daemon/test/phase0.test.ts`, que cubre la tarea, el worktree
+      real, el cambio, el reintento idempotente, la liberación,
+      `foreign_key_check` y el crash.
 - [ ] Esquema preparado para múltiples repos aunque el primer recorrido use uno.
 
 **DoD:** una integración crea workspace/proyecto/tarea, aprovisiona un worktree
@@ -126,6 +130,17 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       orphans visibles.
 - [ ] Permisos mínimos, límites de tiempo/tokens/concurrencia y presupuesto
       antes de spawn.
+- [ ] Aislamiento desacoplado de git (deuda de la Fase 0, decidida el
+      2026-10-22). Una abstracción tipo `WorkspaceDriver` con dos drivers:
+      `GitWorktreeDriver`, el de hoy, y `DirectFsDriver` para carpetas sin VCS
+      (dotfiles, scratchpads, tareas sobre el SO). El rescate de este último no
+      depende de refs: usa un snapshot previo a la mutación. La UI indica cuando
+      el workspace opera sin control de versiones. `@keel/git` expone además
+      tools para el agente, como servidor MCP (ADR-0007 §6): inspeccionar el
+      entorno, inicializar un repo externo (p. ej. `~/dotfiles`), gestionar
+      symlinks y vincular el repo al proyecto en runtime. Desde ese momento los
+      runs siguientes pasan a `GitWorktreeDriver`. Requiere ADR antes de
+      implementarse.
 
 **DoD:** un agente autorizado consulta archivos reales de un worktree y emite
 eventos correlacionados. Fixtures redactados producen el oráculo esperado. Auth
