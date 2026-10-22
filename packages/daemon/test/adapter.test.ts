@@ -8,10 +8,11 @@ import {
   ClaudeAdapter,
   DEFAULT_PROFILE,
   EventBus,
+  INLINE_JSON_MAX_BYTES,
   openStore,
   Repo,
 } from "../src/index.ts"
-import { askingQuery, hangingQuery, replayQuery } from "./replay.ts"
+import { askingQuery, hangingQuery, loadRecordedRun, replayQuery } from "./replay.ts"
 
 function setup(
   queryFn: ReturnType<typeof replayQuery>,
@@ -79,6 +80,45 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
     expect(JSON.parse(s.repo.getRun(s.run.id)?.context_manifest_json ?? "{}").auth_mode).toBe(
       "subscription_session",
     )
+    s.store.db.close()
+    s.done()
+  })
+
+  test("K-06: una tool_response de 300 000 caracteres deja preview JSON válido y referencia al cuerpo íntegro", async () => {
+    const entries = loadRecordedRun()
+    const post = entries.find(
+      (e) => e.kind === "hook" && e.name === "PostToolUse" && e.input.tool_name === "Glob",
+    )
+    if (post?.kind !== "hook") throw new Error("la corrida grabada no tiene PostToolUse de Glob")
+    const body = { filenames: ["x".repeat(300_000)], numFiles: 1 }
+    post.input = { ...post.input, tool_response: body }
+    const s = setup(replayQuery(entries))
+    const final = await s.adapter.execute(s.run, "grande", { ...DEFAULT_PROFILE, cwd: s.dir })
+    expect(final.status).toBe("completed")
+
+    const row = s.store.db
+      .query<{ state: string; output_json: string; artifact_ref: string }, [string]>(
+        "SELECT state, output_json, artifact_ref FROM tool_calls WHERE run_id = ? AND tool_name = 'Glob'",
+      )
+      .get(s.run.id)
+    expect(row?.state).toBe("succeeded")
+    const full = JSON.stringify(body)
+    const preview = JSON.parse(row?.output_json ?? "null")
+    expect(preview).toMatchObject({
+      keel_preview: 1,
+      bytes: full.length,
+      sha256: new Bun.CryptoHasher("sha256").update(full).digest("hex"),
+      body_ref: row?.artifact_ref,
+    })
+    expect(full.length).toBeGreaterThan(INLINE_JSON_MAX_BYTES)
+    expect((row?.output_json.length ?? 0) < 8 * 1024).toBe(true)
+
+    // la referencia lleva al evento con el cuerpo íntegro
+    const [, eventId] = /^event:([^#]+)#\/tool_response$/.exec(row?.artifact_ref ?? "") ?? []
+    const ev = s.store.db
+      .query<{ payload_json: string }, [string]>("SELECT payload_json FROM events WHERE id = ?")
+      .get(eventId ?? "")
+    expect(JSON.parse(ev?.payload_json ?? "{}").tool_response).toEqual(body)
     s.store.db.close()
     s.done()
   })

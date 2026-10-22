@@ -140,7 +140,13 @@ export class ClaudeAdapter {
     const abort = new AbortController()
     this.running.set(run.id, { abort, projector })
 
-    const record = (kind: string, key: string, payload: unknown, occurredAt: string | null) => {
+    /** Persiste y publica; devuelve el id del evento (null si ya existía). */
+    const record = (
+      kind: string,
+      key: string,
+      payload: unknown,
+      occurredAt: string | null,
+    ): string | null => {
       const e = repo.appendEvent({
         project_id: run.project_id,
         run_id: run.id,
@@ -161,6 +167,7 @@ export class ClaudeAdapter {
           received_at: e.received_at,
           payload: payload,
         })
+      return e?.id ?? null
     }
     const notifyRun = () => {
       const r = repo.getRun(run.id)
@@ -170,8 +177,18 @@ export class ClaudeAdapter {
     const hook: HookCallback = async (input: HookInput, toolUseID) => {
       const name = input.hook_event_name
       const key = `hook:${input.session_id}:${name}:${toolUseID ?? ""}:${ulid()}`
-      record(`hook.${name}`, key, { ...input, tool_use_id_callback: toolUseID ?? null }, null)
-      const changed = projector.onHook(name, input as unknown as Record<string, unknown>, toolUseID)
+      const eventId = record(
+        `hook.${name}`,
+        key,
+        { ...input, tool_use_id_callback: toolUseID ?? null },
+        null,
+      )
+      const changed = projector.onHook(
+        name,
+        input as unknown as Record<string, unknown>,
+        toolUseID,
+        eventId,
+      )
       if (changed.agent || changed.toolCalls?.length)
         record(
           "projection.updated",

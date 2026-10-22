@@ -10,6 +10,7 @@
 import type { NodeState, RunStatus } from "@keel/core"
 import { toolCallLabel } from "@keel/core"
 import { nowIso } from "./ids.js"
+import { inlineOrPreview } from "./payload.js"
 import type { Repo, RunRow } from "./store/repo.js"
 
 type Json = Record<string, unknown>
@@ -144,11 +145,15 @@ export class RunProjector {
     return {}
   }
 
-  /** Hook in-process del SDK. */
+  /**
+   * Hook in-process del SDK. `sourceEventId` es el evento que guardó el hook
+   * íntegro: un cuerpo que no cabe en la proyección apunta a él.
+   */
   onHook(
     name: string,
     input: Json,
     toolUseId: string | undefined,
+    sourceEventId: string | null = null,
   ): { agent?: string; toolCalls?: string[] } {
     const t = nowIso()
     const sdkAgent = typeof input.agent_id === "string" ? input.agent_id : null
@@ -197,16 +202,24 @@ export class RunProjector {
       typeof input.tool_use_id === "string"
     ) {
       const ok = name === "PostToolUse"
+      // K-06: preview JSON válido + referencia al cuerpo íntegro, nunca un slice.
+      const output =
+        ok && input.tool_response !== undefined
+          ? inlineOrPreview(
+              input.tool_response,
+              sourceEventId
+                ? `event:${sourceEventId}#/tool_response`
+                : `tool_use:${input.tool_use_id}`,
+            )
+          : null
       const row = this.ctx.repo.closeToolCall({
         run_id: this.ctx.run.id,
         tool_use_id: input.tool_use_id,
         state: ok ? "succeeded" : "failed",
         ended_at: t,
         duration_ms: typeof input.duration_ms === "number" ? input.duration_ms : null,
-        output_json:
-          ok && input.tool_response !== undefined
-            ? JSON.stringify(input.tool_response).slice(0, 256 * 1024)
-            : null,
+        output_json: output?.json ?? null,
+        artifact_ref: output?.artifactRef ?? null,
         error_message: ok ? null : String((input as { error?: unknown }).error ?? "tool failed"),
       })
       return { agent: agentId, toolCalls: row ? [row.id] : [] }

@@ -404,6 +404,7 @@ export class Repo {
     ended_at: string
     duration_ms: number | null
     output_json: string | null
+    artifact_ref?: string | null
     error_message: string | null
   }): ToolCallRow | null {
     const row = this.db
@@ -415,7 +416,7 @@ export class Repo {
     const wall = new Date(p.ended_at).getTime() - new Date(row.started_at).getTime()
     this.db
       .query(
-        "UPDATE tool_calls SET state = ?, ended_at = ?, wall_ms = ?, duration_ms = ?, output_json = ?, error_message = ? WHERE id = ?",
+        "UPDATE tool_calls SET state = ?, ended_at = ?, wall_ms = ?, duration_ms = ?, output_json = ?, artifact_ref = ?, error_message = ? WHERE id = ?",
       )
       .run(
         p.state,
@@ -423,6 +424,7 @@ export class Repo {
         Math.max(0, wall),
         p.duration_ms,
         p.output_json,
+        p.artifact_ref ?? null,
         p.error_message,
         row.id,
       )
