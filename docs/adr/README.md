@@ -16,6 +16,7 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0004](./0004-store-sqlite-wal.md)                          | Store: SQLite WAL local, envelope de Mirador conservado                                         | Propuesto                         | Alta       |
 | [0005](./0005-ipc-json-rpc-ndjson-sobre-socket-local.md)    | IPC: JSON-RPC 2.0 en NDJSON sobre socket Unix / Named Pipe; los clientes nunca escriben la base | Propuesto                         | Alta       |
 | [0006](./0006-vocabulario-de-estados.md)                    | Vocabulario de estados: tres niveles (tarea, run, nodo de ejecución) y proyección a tablero     | Propuesto (decisiones tomadas)    | **Máxima** |
+| [0007](./0007-keel-como-kit-librerias-reutilizables.md)     | Keel como kit: librerías reutilizables y el daemon como composición                             | Propuesto                         | Alta       |
 
 ## Estado «Propuesto»
 
@@ -29,8 +30,9 @@ escribe como si fuera a aceptarse, y se reescribe si no.
 
 ## Orden de lectura
 
-0001 → 0002 → 0006 → 0004 → 0005 → 0003. Los dos primeros son el porqué; 0006 es
-lo que bloquea el primer componente de UI; los otros tres son consecuencias.
+0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007. Los dos primeros son el porqué;
+0006 es lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son
+consecuencias; 0007 reparte el código en librerías reutilizables y producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 
