@@ -1,11 +1,17 @@
 /**
  * Entrada del daemon:  bun packages/daemon/src/main.ts [--db ruta] [--socket ruta] [--root dir]
  * Defaults: ~/.keel/keel.sqlite y $XDG_RUNTIME_DIR/keel/keel.sock (fallback ~/.keel/keel.sock).
+ *
+ * Mantenimiento del store (SDD 03 §7), seguro con el daemon en marcha:
+ *   main.ts backup  [--db ruta] --out dir             → manifest con sha256
+ *   main.ts restore --manifest ruta --db ruta-nueva   → nunca pisa una base existente
  */
 import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { Daemon } from "./daemon.js"
+import { backupStore, restoreStore } from "./store/backup.js"
+import { openStore } from "./store/db.js"
 
 export function defaultPaths(): { dbPath: string; socketPath: string } {
   const home = join(homedir(), ".keel")
@@ -19,7 +25,29 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined
 }
 
-if (import.meta.main) {
+function maintenance(command: string): void {
+  const d = defaultPaths()
+  if (command === "backup") {
+    const out = arg("--out")
+    if (!out) throw new Error("backup necesita --out <dir>")
+    const store = openStore(arg("--db") ?? d.dbPath)
+    try {
+      const { manifestPath, manifest } = backupStore(store, out)
+      console.log(`backup ${manifest.bytes} bytes · sha256 ${manifest.sha256} · ${manifestPath}`)
+    } finally {
+      store.db.close()
+    }
+  } else {
+    const manifest = arg("--manifest")
+    const db = arg("--db")
+    if (!manifest || !db) throw new Error("restore necesita --manifest <ruta> y --db <ruta nueva>")
+    console.log(JSON.stringify(restoreStore(manifest, db), null, 2))
+  }
+}
+
+if (import.meta.main && (process.argv[2] === "backup" || process.argv[2] === "restore")) {
+  maintenance(process.argv[2])
+} else if (import.meta.main) {
   const d = defaultPaths()
   const daemon = new Daemon({
     dbPath: arg("--db") ?? d.dbPath,
