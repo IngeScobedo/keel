@@ -104,6 +104,8 @@ export function Modal({
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     ref.current?.showModal()
+    // showModal enfoca el primer control (el botón de cerrar); el campo marcado gana.
+    ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus()
     return () => ref.current?.close()
   }, [])
   return (

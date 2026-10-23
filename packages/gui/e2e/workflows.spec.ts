@@ -35,7 +35,9 @@ test("Needs you is a filter and can be reset after an empty result", async ({ pa
 })
 test("create task via keyboard without launching an agent", async ({ page }) => {
   await page.keyboard.press("c")
-  await page.getByLabel("Title", { exact: true }).fill("Validate shared contract revision")
+  // El título recibe el foco al abrir: se escribe sin hacer clic.
+  await expect(page.getByLabel("Title", { exact: true })).toBeFocused()
+  await page.keyboard.type("Validate shared contract revision")
   await page
     .getByLabel("Spec / acceptance criteria")
     .fill("Given a contract v2, reconcile the typed client.")

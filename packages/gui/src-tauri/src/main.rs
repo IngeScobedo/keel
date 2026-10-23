@@ -60,7 +60,22 @@ async fn ipc_disconnect(bridge: State<'_, Bridge>) -> Result<(), String> {
     Ok(())
 }
 
+/// En WSLg la ventana por Wayland no tiene GPU (EGL falla) y WebKitGTK no recibe
+/// bien clics ni teclado: no se podía crear una tarea. Por X11 (XWayland) sí,
+/// medido el 2026-10-23. Sólo si el usuario no eligió backend.
+#[cfg(target_os = "linux")]
+fn prefer_x11_on_wsl() {
+    let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
+        || std::fs::read_to_string("/proc/version").is_ok_and(|v| v.to_lowercase().contains("microsoft"));
+    if wsl && std::env::var_os("GDK_BACKEND").is_none() {
+        // Antes de iniciar GTK y de crear hilos.
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    prefer_x11_on_wsl();
     tauri::Builder::default()
         // Sólo el diálogo de abrir carpeta (ADR-0019 §2); la ventana no lee archivos.
         .plugin(tauri_plugin_dialog::init())
