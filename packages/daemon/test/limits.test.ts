@@ -9,7 +9,7 @@ import { join } from "node:path"
 import { ErrorCode } from "@keel/core"
 import { Daemon, IpcClient, type Limits, nowIso, type QueryFn } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
-import { hangingQuery, replayQuery } from "./replay.ts"
+import { firstPrompt, hangingQuery, replayQuery } from "./replay.ts"
 
 const open: { d: Daemon; c: IpcClient; dir: string }[] = []
 afterEach(async () => {
@@ -31,7 +31,7 @@ async function boot(limits: Partial<Limits> = {}) {
   const queryFn: QueryFn = (args) => {
     seen.calls++
     seen.maxBudgetUsd.push(args.options.maxBudgetUsd)
-    return (args.prompt === "hang" ? hangingQuery() : replayQuery())(args)
+    return (firstPrompt(args.prompt) === "hang" ? hangingQuery() : replayQuery())(args)
   }
   const d = new Daemon({
     dbPath: join(dir, "keel.sqlite"),

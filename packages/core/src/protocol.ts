@@ -395,6 +395,23 @@ export const Methods = {
     }),
     result: RunViewSchema,
   },
+  /** ADR-0019 §3: un mensaje humano a un run vivo; queda como `run.user_message`. */
+  "runs.message": {
+    params: MutationMeta.extend({ run_id: z.string(), text: z.string().min(1).max(20_000) }),
+    result: z.object({ run_id: z.string(), delivered: z.literal(true) }),
+  },
+  /**
+   * Continúa un run terminado: run hijo (`parent_run_id`) que retoma la sesión
+   * del proveedor y, si ejecuta, el worktree del padre.
+   */
+  "runs.continue": {
+    params: MutationMeta.extend({
+      run_id: z.string(),
+      text: z.string().min(1).max(20_000),
+      options: RunOptionsSchema.optional(),
+    }),
+    result: RunViewSchema,
+  },
   "runs.pause": { params: MutationMeta.extend({ run_id: z.string() }), result: RunViewSchema },
   "runs.resume": {
     params: MutationMeta.extend({ run_id: z.string(), directive: z.string().optional() }),

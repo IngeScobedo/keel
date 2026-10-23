@@ -2067,3 +2067,11 @@ progress::-moz-progress-bar {
   flex: 1;
   min-width: 0;
 }
+.chat-divider {
+  text-align: center;
+  margin: 8px 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  border-top: 1px dashed var(--color-border-subtle);
+  padding-top: 6px;
+}

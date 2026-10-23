@@ -359,7 +359,13 @@ export class Daemon {
     w: WorkItemRow,
     to: Lifecycle,
     by: TransitionAuthority,
-    opts: { expectedRevision?: number; runId?: string | null; reason?: string } = {},
+    opts: {
+      expectedRevision?: number
+      runId?: string | null
+      reason?: string
+      /** Continuar la conversación: el worktree pasa al run hijo, no se libera. */
+      keepWorkspaces?: boolean
+    } = {},
   ): WorkItemRow {
     if (opts.expectedRevision !== undefined && opts.expectedRevision !== w.revision)
       throw rpcError(ErrorCode.conflict, "la tarea cambió desde la revisión esperada", {
@@ -388,7 +394,7 @@ export class Daemon {
       transition: { from: w.lifecycle, to, by, reason: opts.reason ?? null },
     })
     // El worktree de un run completed se conserva para la revisión; salir de ella lo libera.
-    if (w.lifecycle === "needs_review")
+    if (w.lifecycle === "needs_review" && !opts.keepWorkspaces)
       for (const runId of this.repo.runsWithWorkspaces(w.id))
         this.enqueueRelease(uow, runId, "review_exit")
     return updated
@@ -570,6 +576,56 @@ export class Daemon {
             this.codex.cancel(run.id, p.reason ?? null),
         )
         return repo.runView(run)
+      }),
+      "runs.message": this.mutation<Params<"runs.message">>("runs.message", (p, uow, ctx) => {
+        requireHuman(ctx, "escribirle a un run")
+        const run = repo.getRun(p.run_id)
+        if (!run) throw rpcError(ErrorCode.notFound, "el run no existe")
+        if (!ACTIVE_RUN_STATUSES.includes(run.status))
+          throw rpcError(
+            ErrorCode.invalidTransition,
+            `el run está ${run.status}; para seguir la conversación usa runs.continue`,
+          )
+        const provider = this.providerOf(run)
+        if (!provider.sendMessage(run.id, p.text))
+          throw rpcError(ErrorCode.conflict, "el run ya no acepta mensajes; está terminando")
+        uow.emit("run.user_message", run.id, { text: p.text, actor: actorOf(ctx) })
+        return { run_id: run.id, delivered: true as const }
+      }),
+      "runs.continue": this.mutation<Params<"runs.continue">>("runs.continue", (p, uow, ctx) => {
+        requireHuman(ctx, "continuar un run")
+        const parent = repo.getRun(p.run_id)
+        if (!parent) throw rpcError(ErrorCode.notFound, "el run no existe")
+        if (ACTIVE_RUN_STATUSES.includes(parent.status))
+          throw rpcError(
+            ErrorCode.invalidTransition,
+            "el run sigue vivo; escríbele con runs.message",
+          )
+        const manifest = JSON.parse(parent.context_manifest_json) as {
+          provider?: string
+          options?: Params<"runs.start">["options"]
+        }
+        // Una ejecución revisada o fallida vuelve a planned por decisión del humano
+        // (las mismas aristas que work_items.transition) y sigue en su worktree.
+        const w = this.requireWorkItem(parent.work_item_id)
+        if (
+          parent.purpose === "execute" &&
+          (w.lifecycle === "needs_review" || w.lifecycle === "failed")
+        )
+          this.transition(uow, w, "planned", "human", {
+            runId: parent.id,
+            reason: "continuar la conversación",
+            keepWorkspaces: true,
+          })
+        const run = this.startRunIn(uow, {
+          work_item_id: parent.work_item_id,
+          purpose: parent.purpose,
+          prompt: p.text,
+          profile: manifest.provider ?? "claude",
+          options: { ...manifest.options, ...p.options },
+          parent_run_id: parent.id,
+        })
+        return run
       }),
       "runs.request": this.mutation<Params<"runs.request">>("runs.request", (p, uow, ctx) => {
         // Un agente pide; arrancar es del humano (ADR-0009 §5). Un humano usa runs.start.
@@ -957,6 +1013,7 @@ export class Daemon {
             ? await this.codex.execute(ctx, prompt, {
                 ...this.codexProfile,
                 ...(opt ? { model: opt.model, permission_mode: opt.permission_mode } : {}),
+                resume_thread_id: this.resumeOf(run, ws.cwd),
                 env,
                 cwd: ws.cwd,
                 mcp_servers,
@@ -970,6 +1027,7 @@ export class Daemon {
                       permission_mode: opt.permission_mode,
                     }
                   : {}),
+                resume_session_id: this.resumeOf(run, ws.cwd),
                 env,
                 cwd: ws.cwd,
                 max_budget_usd: budget === undefined ? null : budget / 1_000_000,
@@ -1119,6 +1177,12 @@ export class Daemon {
     const view = repo.runView(run)
     uow.emit("run.created", run.id, view)
     const prompt = p.prompt !== undefined && p.prompt.length > 0 ? p.prompt : w.title
+    // El chat del run empieza con lo que se le pidió al agente, venga de quien venga.
+    uow.emit("run.prompt", run.id, {
+      text: prompt,
+      source: p.prompt ? "human" : "task",
+      actor: { id: uow.actorId },
+    })
     // Despacho durable: si el daemon cae tras el commit, se entrega al arrancar.
     uow.enqueue(RUN_DISPATCH, run.id, `${RUN_DISPATCH}:${run.id}`, {
       run_id: run.id,
@@ -1156,6 +1220,37 @@ export class Daemon {
           permission_mode: mode,
         }
       : { model: o?.model ?? this.codexProfile.model, max_turns: null, permission_mode: mode }
+  }
+
+  private providerOf(run: RunRow): ClaudeAdapter | CodexAdapter {
+    const m = JSON.parse(run.context_manifest_json) as { provider?: string }
+    return m.provider === "codex" ? this.codex : this.claude
+  }
+
+  /**
+   * Sesión del proveedor del run padre, para retomarla (ADR-0019 §3). Sólo si
+   * el hijo trabaja en la misma carpeta: el proveedor busca la sesión por ella.
+   */
+  private resumeOf(run: RunRow, cwd: string): string | null {
+    if (!run.parent_run_id) return null
+    const parent = this.repo.getRun(run.parent_run_id)
+    if (!parent) return null
+    const m = JSON.parse(parent.context_manifest_json) as {
+      session_id?: string
+      cwd?: string
+      provider_process?: { session_id?: string; cwd?: string | null }
+    }
+    const id = m.session_id ?? m.provider_process?.session_id ?? null
+    const parentCwd = m.cwd ?? m.provider_process?.cwd ?? null
+    if (id && parentCwd && parentCwd !== cwd) {
+      this.emitSystem("run.resume_skipped", run.id, {
+        reason: "el worktree del run anterior ya no existe; el agente empieza una sesión nueva",
+        parent_cwd: parentCwd,
+        cwd,
+      })
+      return null
+    }
+    return id
   }
 
   /** La conexión viva que pidió este emparejamiento, si sigue abierta. */

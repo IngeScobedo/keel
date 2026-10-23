@@ -6,6 +6,8 @@ export default defineConfig({
   ...(process.env.CI ? { workers: 2 } : {}),
   forbidOnly: !!process.env.CI,
   retries: 0,
+  // La prueba contra el daemon real arranca procesos y git: bajo carga, 5 s se quedan cortos.
+  expect: { timeout: 10_000 },
   reporter: "list",
   use: { baseURL: "http://localhost:5173", trace: "retain-on-failure" },
   projects: [

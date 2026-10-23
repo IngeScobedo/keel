@@ -311,6 +311,10 @@ export class Repo {
       )
     return { ...w, id, head_sha: null }
   }
+  /** La conversación continúa: los worktrees del run padre pasan al hijo. */
+  transferWorktrees(fromRunId: string, toRunId: string): void {
+    this.db.query("UPDATE run_worktrees SET run_id = ? WHERE run_id = ?").run(toRunId, fromRunId)
+  }
   runWorktrees(runId: string): RunWorktreeRow[] {
     return this.db
       .query<RunWorktreeRow, [string]>(

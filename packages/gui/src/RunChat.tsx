@@ -2,8 +2,9 @@ import type { EventNotification } from "@keel/core"
 import { Bot, Check, ChevronDown, ChevronRight, CircleAlert, Send, User, X } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ApprovalActions } from "./ApprovalActions.js"
-import { buildChat, type ChatItem } from "./model.js"
-import { Button, Empty } from "./ui.js"
+import { mutationMeta } from "./client.js"
+import { buildChat, type ChatItem, type Run } from "./model.js"
+import { Empty } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -16,12 +17,39 @@ export function RunChat({
   events,
   call,
   running,
+  runId,
+  onContinued,
 }: {
   events: EventNotification[]
   call?: Call
   running: boolean
+  runId: string
+  /** Al continuar un run terminado nace uno nuevo: la vista pasa a él. */
+  onContinued?: (run: Run) => void
 }) {
   const items = buildChat(events)
+  const [draft, setDraft] = useState("")
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState("")
+  async function send() {
+    const text = draft.trim()
+    if (!text || !call || sending) return
+    setSending(true)
+    setError("")
+    try {
+      if (running) await call("runs.message", { ...mutationMeta(), run_id: runId, text })
+      else {
+        const child = await call("runs.continue", { ...mutationMeta(), run_id: runId, text })
+        onContinued?.(child)
+      }
+      setDraft("")
+      pinned.current = true
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSending(false)
+    }
+  }
   const box = useRef<HTMLDivElement>(null)
   const pinned = useRef(true)
   useLayoutEffect(() => {
@@ -44,17 +72,47 @@ export function RunChat({
         {items.length === 0 && <Empty title="El agente aún no ha dicho nada" />}
         {running && <p className="chat-typing muted">El agente está trabajando…</p>}
       </div>
-      <div className="chat-composer">
+      {error && (
+        <p className="error-banner" role="alert">
+          {error}
+        </p>
+      )}
+      <form
+        className="chat-composer"
+        onSubmit={(e) => {
+          e.preventDefault()
+          void send()
+        }}
+      >
         <textarea
           aria-label="Mensaje al agente"
           rows={2}
-          disabled
-          placeholder="Escribir al agente durante el run llega en el siguiente paso (el daemon aún no lo admite)."
+          disabled={!call || sending}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault()
+              void send()
+            }
+          }}
+          placeholder={
+            !call
+              ? "Conecta el daemon para escribirle al agente."
+              : running
+                ? "Escribe al agente mientras trabaja (Enter envía, Shift+Enter salto de línea)"
+                : "El run terminó: escribe para continuar la conversación"
+          }
         />
-        <Button icon={Send} disabled>
-          Enviar
-        </Button>
-      </div>
+        <button
+          type="submit"
+          className="button primary"
+          disabled={!call || sending || !draft.trim()}
+        >
+          <Send size={13} />
+          {running ? "Enviar" : "Continuar"}
+        </button>
+      </form>
     </div>
   )
 }
@@ -68,6 +126,19 @@ function ChatRow({ item, call }: { item: ChatItem; call?: Call }) {
           <User size={14} aria-hidden="true" />
           <p className="text-block">{item.text}</p>
         </div>
+      )
+    case "human":
+      return (
+        <div className="chat-msg from-human" data-testid="chat-human">
+          <User size={14} aria-hidden="true" />
+          <p className="text-block">{item.text}</p>
+        </div>
+      )
+    case "divider":
+      return (
+        <p className="chat-divider" data-testid="chat-divider">
+          {item.text}
+        </p>
       )
     case "agent":
       return (

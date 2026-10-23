@@ -164,7 +164,8 @@ describe("ADR-0008: transporte app_server", () => {
     expect(threadStart).toMatchObject({
       sandbox: "read-only",
       approvalPolicy: "never",
-      ephemeral: true,
+      // Persistido por Codex para poder continuar la conversación (ADR-0019 §3).
+      ephemeral: false,
     })
   })
 

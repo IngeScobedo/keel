@@ -12,7 +12,7 @@ import { join } from "node:path"
 import { canonical } from "@keel/git"
 import { Daemon, type DaemonOptions, IpcClient, type QueryFn } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
-import { hangingQuery, replayQuery } from "./replay.ts"
+import { firstPrompt, hangingQuery, replayQuery } from "./replay.ts"
 
 const dirs: string[] = []
 const daemons: Daemon[] = []
@@ -42,7 +42,7 @@ function writingQuery(calls: { cwd: string[] }): QueryFn {
   return (args) => {
     const cwd = String(args.options.cwd)
     calls.cwd.push(cwd)
-    if (args.prompt === "hang") return hangingQuery()(args)
+    if (firstPrompt(args.prompt) === "hang") return hangingQuery()(args)
     writeFileSync(join(cwd, "AGENTE.md"), "cambio del agente\n")
     return replayQuery()(args)
   }

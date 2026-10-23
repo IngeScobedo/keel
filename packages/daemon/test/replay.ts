@@ -98,6 +98,11 @@ export function hangingQuery(): QueryFn {
     })()
 }
 
+/** El prompt inicial, venga como texto o como la entrada en streaming del adaptador. */
+export function firstPrompt(prompt: unknown): string {
+  return typeof prompt === "string" ? prompt : String((prompt as { first?: string }).first ?? "")
+}
+
 /** Un run que pide permiso por `canUseTool` y termina según la decisión. */
 export function askingQuery(input: Record<string, unknown> = { command: "rm -rf build" }): QueryFn {
   return ({ options }) =>

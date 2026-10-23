@@ -85,6 +85,25 @@ describe("modo live: identidad y resumen de eventos", () => {
 })
 
 describe("el run como conversación", () => {
+  test("el prompt del humano y su mensaje no se duplican; cambiar de run deja un separador", () => {
+    const at = (seq: number, run_id: string, kind: string, payload: unknown) => ({
+      event_seq: seq,
+      kind,
+      payload,
+      project_id: "p",
+      run_id,
+      received_at: "2026-10-23T00:00:00Z",
+    })
+    const chat = buildChat([
+      at(1, "r1", "run.prompt", { text: "Título de la tarea", source: "task" }),
+      at(2, "r1", "hook.UserPromptSubmit", { prompt: "Título de la tarea" }),
+      at(3, "r1", "run.user_message", { text: "y pruebas" }),
+      at(4, "r1", "hook.UserPromptSubmit", { prompt: "y pruebas" }),
+      at(5, "r2", "run.prompt", { text: "continúa", source: "human" }),
+      at(6, "r2", "hook.UserPromptSubmit", { prompt: "continúa" }),
+    ])
+    expect(chat.map((c) => c.kind)).toEqual(["prompt", "human", "divider", "human"])
+  })
   const at = (seq: number, kind: string, payload: unknown) => ({
     event_seq: seq,
     kind,

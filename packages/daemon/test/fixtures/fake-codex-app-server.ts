@@ -28,6 +28,7 @@ const THREAD = "th-fake"
 const TURN = "tu-fake"
 let child: ChildProcess | null = null
 let interrupted: (() => void) | null = null
+let steered: ((text: string) => void) | null = null
 
 function turnCompleted(status: string, error: Json | null = null) {
   notify("turn/completed", {
@@ -128,6 +129,26 @@ async function scenario(text: string) {
     return
   }
   if (text.startsWith("crash")) process.exit(3)
+  if (text.startsWith("wait")) {
+    // Espera a que el humano escriba durante el turno (`turn/steer`).
+    const said = await new Promise<string>((resolve) => {
+      steered = resolve
+    })
+    notify("item/completed", {
+      item: { type: "agentMessage", id: "m-steer", text: `recibido: ${said}` },
+      threadId: THREAD,
+      turnId: TURN,
+    })
+    turnCompleted("completed")
+    return
+  }
+  // Cualquier otro texto: un turno que contesta y termina.
+  notify("item/completed", {
+    item: { type: "agentMessage", id: `m-${Date.now()}`, text: `eco: ${text}` },
+    threadId: THREAD,
+    turnId: TURN,
+  })
+  turnCompleted("completed")
 }
 
 let buf = ""
@@ -146,6 +167,13 @@ process.stdin.on("end", () => {
   child?.kill("SIGKILL")
   process.exit(0)
 })
+
+function startTurn(msg: Json) {
+  send({ id: msg.id, result: { turn: { id: TURN, status: "inProgress" } } })
+  notify("turn/started", { threadId: THREAD, turn: { id: TURN, status: "inProgress" } })
+  const text = ((msg.params as Json).input as { text: string }[])[0]?.text ?? ""
+  return scenario(text)
+}
 
 async function handle(msg: Json) {
   const id = msg.id as string | number | undefined
@@ -168,12 +196,19 @@ async function handle(msg: Json) {
       log({ threadStart: msg.params })
       reply({ thread: { id: THREAD } })
       return notify("thread/started", { thread: { id: THREAD, model: "fake-model" } })
-    case "turn/start": {
-      reply({ turn: { id: TURN, status: "inProgress" } })
-      notify("turn/started", { threadId: THREAD, turn: { id: TURN, status: "inProgress" } })
+    case "thread/resume":
+      log({ threadResume: msg.params })
+      return reply({ thread: { id: (msg.params as Json).threadId } })
+    case "turn/steer": {
+      log({ steer: msg.params })
+      reply({ turnId: TURN })
       const text = ((msg.params as Json).input as { text: string }[])[0]?.text ?? ""
-      return scenario(text)
+      steered?.(text)
+      return
     }
+    case "turn/start":
+      log({ turnStart: (msg.params as Json).input })
+      return startTurn(msg)
     case "turn/interrupt":
       log({ interrupt: msg.params })
       reply({})

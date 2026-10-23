@@ -188,6 +188,8 @@ export type ChatItem =
       decision: string | null
     }
   | { kind: "status"; key: string; text: string; tone: "info" | "error" }
+  | { kind: "human"; key: string; text: string }
+  | { kind: "divider"; key: string; text: string }
   | {
       kind: "auto"
       key: string
@@ -214,12 +216,45 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
   const tools = new Map<string, Extract<ChatItem, { kind: "tool" }>>()
   const approvals = new Map<string, Extract<ChatItem, { kind: "approval" }>>()
   let lastAgent = ""
+  // Lo que escribió el humano llega dos veces: como `run.user_message` y como el
+  // prompt que ve el proveedor. Se muestra una.
+  const said = new Set<string>()
+  let currentRun: string | null = null
   for (const e of [...events].sort((a, b) => a.event_seq - b.event_seq)) {
     const p = (e.payload ?? {}) as Loose
     const key = String(e.event_seq)
+    if (e.run_id && e.run_id !== currentRun) {
+      if (currentRun !== null)
+        items.push({
+          kind: "divider",
+          key: `div:${key}`,
+          text: "La conversación continúa en un run nuevo",
+        })
+      currentRun = e.run_id
+    }
     switch (e.kind) {
+      case "run.prompt":
+        if (typeof p.text === "string") {
+          said.add(p.text)
+          items.push({
+            kind: p.source === "human" ? "human" : "prompt",
+            key,
+            text: p.text,
+          })
+        }
+        break
+      case "run.user_message":
+        if (typeof p.text === "string") {
+          said.add(p.text)
+          items.push({ kind: "human", key, text: p.text })
+        }
+        break
       case "hook.UserPromptSubmit":
-        if (typeof p.prompt === "string") items.push({ kind: "prompt", key, text: p.prompt })
+        if (typeof p.prompt === "string" && !said.has(p.prompt))
+          items.push({ kind: "prompt", key, text: p.prompt })
+        break
+      case "run.resume_skipped":
+        items.push({ kind: "status", key, tone: "info", text: String(p.reason) })
         break
       case "sdk.assistant": {
         const content = ((p.message as Loose | undefined)?.content ?? []) as Loose[]

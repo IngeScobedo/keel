@@ -19,6 +19,7 @@
  * daemon. Este módulo no publica eventos: devuelve lo que pasó y el daemon lo
  * emite.
  */
+import { existsSync } from "node:fs"
 import { basename, join } from "node:path"
 import {
   BRANCH_PREFIX,
@@ -87,6 +88,25 @@ export class GitWorktreeDriver implements WorkspaceDriver {
     const { repo, worktreesDir } = this.deps
     const rootPath = this.deps.rootOf(run.project_id)
     if (run.purpose !== "execute") return { ok: true, cwd: rootPath, events: [] }
+    // Continuar una conversación (ADR-0019 §3): el run hijo se lleva el worktree del
+    // padre si sigue en disco; así el agente retoma en la misma carpeta y rama.
+    if (run.parent_run_id) {
+      const inherited = repo
+        .runWorktrees(run.parent_run_id)
+        .filter((w) => existsSync(w.worktree_path))
+      if (inherited.length > 0) {
+        repo.transferWorktrees(run.parent_run_id, run.id)
+        const root = inherited.find((w) => w.slot === "root") ?? (inherited[0] as RunWorktreeRow)
+        return {
+          ok: true,
+          cwd: root.worktree_path,
+          events: inherited.map((w) => ({
+            kind: "worktree.inherited",
+            payload: { ...w, run_id: run.id, from_run_id: run.parent_run_id },
+          })),
+        }
+      }
+    }
     let gitRepo: GitRepo
     try {
       gitRepo = await this.gitRepo(rootPath)

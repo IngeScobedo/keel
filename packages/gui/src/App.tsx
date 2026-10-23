@@ -412,6 +412,8 @@ export function App() {
                 if (runTask) openTask(runTask)
               }}
               {...(workspace.mode === "live" ? { call: workspace.call } : {})}
+              runs={workspace.runs}
+              onRun={openRun}
             />
           ) : (
             <div className="padded">

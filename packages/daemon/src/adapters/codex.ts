@@ -73,6 +73,8 @@ export type CodexProfile = {
   permission_mode: PermissionMode
   /** Variables extra del proceso del agente (atribución en git, ADR-0018 §1). */
   env: Record<string, string>
+  /** Hilo de Codex que retoma este run (continuar una conversación, ADR-0019 §3). */
+  resume_thread_id: string | null
 }
 
 export const DEFAULT_CODEX_PROFILE: CodexProfile = {
@@ -80,6 +82,7 @@ export const DEFAULT_CODEX_PROFILE: CodexProfile = {
   approval_policy: "on-request",
   permission_mode: "ask",
   env: {},
+  resume_thread_id: null,
   auth_mode: "subscription_session",
   subscription_enabled: false,
   model: null,
@@ -92,7 +95,7 @@ export const DEFAULT_CODEX_PROFILE: CodexProfile = {
 }
 
 /** Lo mínimo del SDK que usa el adaptador; los tests lo sustituyen. */
-export type CodexLike = Pick<Codex, "startThread">
+export type CodexLike = Pick<Codex, "startThread"> & Partial<Pick<Codex, "resumeThread">>
 export type CodexAdapterDeps = {
   /** Tabla de procesos para registrar la identidad del app-server (processes.ts). */
   processes?: ProcessTable
@@ -130,6 +133,8 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
   readonly adapterVersion = CODEX_ADAPTER_VERSION
   readonly capabilities: ProviderCapabilities
   private readonly running = new Map<string, AbortController>()
+  /** Entrega de mensajes humanos a los runs vivos con `app_server` (ADR-0019 §3). */
+  private readonly live = new Map<string, (text: string) => boolean>()
   private readonly abortCause = new Map<string, "cancelled" | "timeout">()
   private readonly deps: CodexAdapterDeps
   constructor(deps: CodexAdapterDeps = {}, transport: CodexProfile["transport"] = "app_server") {
@@ -139,6 +144,10 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
 
   get activeRuns(): number {
     return this.running.size
+  }
+
+  sendMessage(runId: string, text: string): boolean {
+    return this.live.get(runId)?.(text) ?? false
   }
 
   cancel(runId: string, reason: string | null): boolean {
@@ -194,6 +203,7 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
       adapter: CODEX_ADAPTER_VERSION,
       provider: "codex",
       transport: "sdk",
+      cwd: profile.cwd,
       auth_mode: profile.auth_mode,
       model: profile.model,
       sandbox: threadOptions.sandboxMode,
@@ -237,7 +247,10 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     let seq = 0
     let thrown: string | null = null
     try {
-      const thread = codex.startThread(threadOptions)
+      const thread =
+        profile.resume_thread_id && codex.resumeThread
+          ? codex.resumeThread(profile.resume_thread_id, threadOptions)
+          : codex.startThread(threadOptions)
       const turn: TurnOptions = { signal: abort.signal }
       const { events } = await thread.runStreamed(prompt, turn)
       for await (const raw of events) {
@@ -292,6 +305,7 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
       adapter: CODEX_ADAPTER_VERSION,
       provider: "codex",
       transport: "app_server",
+      cwd: profile.cwd,
       auth_mode: profile.auth_mode,
       model: profile.model,
       sandbox,
@@ -322,9 +336,30 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     let turnId: string | null = null
     let message: string | null = null
     let seq = 0
+    // Un turno a la vez; el humano puede escribir durante el turno (`turn/steer`) o
+    // dejar el mensaje para el siguiente (ADR-0019 §3).
     let settle: (status: string) => void = () => {}
-    const turnDone = new Promise<string>((resolve) => {
-      settle = resolve
+    let turnOpen = false
+    let serverGone = false
+    // Se resuelve con el id del turno en cuanto `turn/start` responde.
+    let turnReady: Promise<string | null> = Promise.resolve(null)
+    let markReady: (id: string | null) => void = () => {}
+    const queue: string[] = []
+    let finished = false
+    this.live.set(run.id, (text) => {
+      // Tras el último turno ya nadie leería la cola: el run no acepta más mensajes.
+      if (finished) return false
+      if (!turnOpen) {
+        queue.push(text)
+        return true
+      }
+      void turnReady.then((id) => {
+        if (!id || !threadId || !turnOpen) return queue.push(text)
+        return server
+          .request("turn/steer", { threadId, expectedTurnId: id, input: [{ type: "text", text }] })
+          .catch(() => queue.push(text))
+      })
+      return true
     })
 
     server.onNotification((method, params) => {
@@ -371,7 +406,10 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
       // Refresco de tokens, permisos y lo desconocido: no se atiende (ADR-0002).
       return undefined
     })
-    void server.exited.then(() => settle("server_exited"))
+    void server.exited.then(() => {
+      serverGone = true
+      settle("server_exited")
+    })
 
     let thrown: string | null = null
     try {
@@ -393,34 +431,70 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
         }
       }
       if (!signals.providerError && !abort.signal.aborted) {
-        const started = await server.request<{ thread: { id: string } }>("thread/start", {
-          cwd: profile.cwd,
-          sandbox,
-          approvalPolicy,
-          ephemeral: true,
-          ...(profile.model ? { model: profile.model } : {}),
-        })
-        threadId = started.thread.id
-        const turn = await server.request<{ turn: { id: string } }>("turn/start", {
-          threadId,
-          input: [{ type: "text", text: prompt }],
-          ...(profile.reasoning_effort ? { effort: profile.reasoning_effort } : {}),
-        })
-        turnId = turn.turn.id
+        // Hilos persistidos por Codex (no efímeros) para poder continuarlos después.
+        const opened = profile.resume_thread_id
+          ? await server.request<{ thread: { id: string } }>("thread/resume", {
+              threadId: profile.resume_thread_id,
+              cwd: profile.cwd,
+              sandbox,
+              approvalPolicy,
+              ...(profile.model ? { model: profile.model } : {}),
+            })
+          : await server.request<{ thread: { id: string } }>("thread/start", {
+              cwd: profile.cwd,
+              sandbox,
+              approvalPolicy,
+              ephemeral: false,
+              ...(profile.model ? { model: profile.model } : {}),
+            })
+        threadId = opened.thread.id
         const aborted = new Promise<string>((resolve) =>
           abort.signal.addEventListener("abort", () => resolve("aborted"), { once: true }),
         )
-        if ((await Promise.race([turnDone, aborted])) === "aborted") {
-          // Interrumpir cierra el turno, pero el comando sigue vivo: luego se cierra el proceso.
-          await server.request("turn/interrupt", { threadId, turnId }).catch(() => undefined)
-          await Promise.race([turnDone, Bun.sleep(5_000)])
+        let next: string | undefined = prompt
+        while (next !== undefined && !abort.signal.aborted && !serverGone) {
+          const turnDone = new Promise<string>((resolve) => {
+            settle = resolve
+          })
+          turnId = null
+          turnReady = new Promise((resolve) => {
+            markReady = resolve
+          })
+          turnOpen = true
+          const turn = await server
+            .request<{ turn: { id: string } }>("turn/start", {
+              threadId,
+              input: [{ type: "text", text: next }],
+              ...(profile.reasoning_effort ? { effort: profile.reasoning_effort } : {}),
+            })
+            .catch((e: unknown) => {
+              markReady(null)
+              throw e
+            })
+          turnId = turn.turn.id
+          markReady(turnId)
+          const status = await Promise.race([turnDone, aborted])
+          turnOpen = false
+          markReady(null)
+          if (status === "aborted") {
+            // Interrumpir cierra el turno, pero el comando sigue vivo: luego se cierra el proceso.
+            await server.request("turn/interrupt", { threadId, turnId }).catch(() => undefined)
+            await Promise.race([turnDone, Bun.sleep(5_000)])
+            break
+          }
+          // Un turno fallido termina el run; si no, lo que escribió el humano abre otro.
+          if (status !== "completed") break
+          next = queue.shift()
         }
+        finished = true
       }
     } catch (e) {
       thrown = e instanceof Error ? e.message : String(e)
     } finally {
+      finished = true
       clearTimeout(deadline)
       this.running.delete(run.id)
+      this.live.delete(run.id)
     }
     const exit = await server.close()
     if (exit.code !== 0 && exit.code !== null && server.stderr)

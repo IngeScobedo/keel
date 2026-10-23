@@ -25,6 +25,7 @@ import type {
   PermissionResult,
   Query,
   SDKMessage,
+  SDKUserMessage,
   SpawnedProcess,
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
@@ -62,6 +63,8 @@ export type ClaudeProfile = {
   permission_mode: PermissionMode
   /** Variables extra del proceso del agente (atribución en git, ADR-0018 §1). */
   env: Record<string, string>
+  /** Sesión del proveedor que retoma este run (continuar una conversación, ADR-0019 §3). */
+  resume_session_id: string | null
 }
 
 /** Modo de Keel → modo del SDK. `bypass` exige además `allowDangerouslySkipPermissions`. */
@@ -85,6 +88,7 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   mcp_servers: {},
   permission_mode: "ask",
   env: {},
+  resume_session_id: null,
 }
 
 const HOOK_EVENTS = [
@@ -107,9 +111,82 @@ const HOOK_EVENTS = [
 ] as const
 
 export type QueryFn = (args: {
-  prompt: string
+  prompt: string | AsyncIterable<SDKUserMessage>
   options: Options
 }) => Query | AsyncIterable<SDKMessage>
+
+/**
+ * Entrada del run en modo streaming (ADR-0019 §3): el primer turno es el prompt
+ * y el humano puede añadir mensajes mientras el agente trabaja. Se cierra en
+ * cuanto cada mensaje enviado tiene su `result` y no queda nada en cola; así
+ * el run termina como antes cuando nadie escribe.
+ */
+export class TurnInput implements AsyncIterable<SDKUserMessage> {
+  private readonly pending: string[] = []
+  private waiter: ((r: IteratorResult<SDKUserMessage>) => void) | null = null
+  private closed = false
+  private sent = 0
+  private results = 0
+  /** El prompt con el que arranca el run. */
+  readonly first: string
+  constructor(first: string) {
+    this.first = first
+    this.pending.push(first)
+  }
+  get isOpen(): boolean {
+    return !this.closed
+  }
+  /** false si el run ya no acepta mensajes. */
+  push(text: string): boolean {
+    if (this.closed) return false
+    if (this.waiter) {
+      const w = this.waiter
+      this.waiter = null
+      this.sent++
+      w({ done: false, value: userMessage(text) })
+    } else this.pending.push(text)
+    return true
+  }
+  /** Un turno terminó; si no queda nada por contestar, la entrada se cierra. */
+  onResult(): void {
+    this.results++
+    if (this.results >= this.sent && this.pending.length === 0) this.close()
+  }
+  close(): void {
+    this.closed = true
+    const w = this.waiter
+    this.waiter = null
+    w?.({ done: true, value: undefined })
+  }
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => {
+        const text = this.pending.shift()
+        if (text !== undefined) {
+          this.sent++
+          return Promise.resolve({ done: false, value: userMessage(text) })
+        }
+        if (this.closed) return Promise.resolve({ done: true, value: undefined })
+        return new Promise((resolve) => {
+          this.waiter = resolve
+        })
+      },
+      return: () => {
+        this.close()
+        return Promise.resolve({ done: true, value: undefined })
+      },
+    }
+  }
+}
+
+function userMessage(text: string): SDKUserMessage {
+  return {
+    type: "user",
+    message: { role: "user", content: text },
+    parent_tool_use_id: null,
+    session_id: "",
+  } as SDKUserMessage
+}
 
 export type ClaudeAdapterDeps = {
   /** Identidad de procesos para el registro; por defecto la de la plataforma. */
@@ -173,6 +250,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     cancel_emits_result: false,
   }
   private readonly running = new Map<string, AbortController>()
+  private readonly inputs = new Map<string, TurnInput>()
   /** Por qué abortó Keel un run: lo canceló el humano o venció su tiempo máximo. */
   private readonly abortCause = new Map<string, "cancelled" | "timeout">()
   private readonly deps: ClaudeAdapterDeps
@@ -184,6 +262,10 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
 
   get activeRuns(): number {
     return this.running.size
+  }
+
+  sendMessage(runId: string, text: string): boolean {
+    return this.inputs.get(runId)?.push(text) ?? false
   }
 
   cancel(runId: string, reason: string | null): boolean {
@@ -291,6 +373,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       permissionMode: SDK_PERMISSION_MODE[profile.permission_mode],
       ...(profile.permission_mode === "bypass" ? { allowDangerouslySkipPermissions: true } : {}),
       env: { ...env, ...profile.env },
+      ...(profile.resume_session_id ? { resume: profile.resume_session_id } : {}),
       abortController: abort,
       hooks,
       canUseTool,
@@ -302,6 +385,8 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       binary,
       model: profile.model,
       mcp_servers: Object.keys(profile.mcp_servers),
+      cwd: profile.cwd,
+      ...(profile.resume_session_id ? { resumed_session: profile.resume_session_id } : {}),
     })
     ctx.notifyRun()
 
@@ -312,8 +397,11 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       abort.abort("timeout")
     }, profile.max_wall_ms)
     let thrown: string | null = null
+    const input = new TurnInput(prompt)
+    let sessionSaved: string | null = null
+    this.inputs.set(run.id, input)
     try {
-      for await (const message of queryFn({ prompt, options })) {
+      for await (const message of queryFn({ prompt: input, options })) {
         const raw = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
         const key = raw.uuid ? `msg:${raw.uuid}` : `msg:${raw.type}:${ulid()}`
         const { payload: m } = ctx.ingest(
@@ -323,15 +411,24 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
           typeof raw.timestamp === "string" ? raw.timestamp : null,
         )
         const changed = projector.onMessage(m)
-        if (m.type === "system" && projector.sessionId)
+        if (m.type === "system" && projector.sessionId) {
           launched.update({ session_id: projector.sessionId })
+          // Para continuar la conversación hace falta la sesión aunque no haya proceso propio.
+          if (sessionSaved !== projector.sessionId) {
+            sessionSaved = projector.sessionId
+            store.mergeManifest(run.id, { session_id: sessionSaved })
+          }
+        }
         if (changed.run) ctx.notifyRun()
         notifyProjection(key, changed)
+        if (m.type === "result") input.onResult()
       }
     } catch (e) {
       thrown = e instanceof Error ? e.message : String(e)
     } finally {
       clearTimeout(deadline)
+      input.close()
+      this.inputs.delete(run.id)
     }
     // Un único punto decide cómo terminó (run-outcome de @keel/core). La salida del
     // proceso puede llegar justo después del fin del stream: se espera un momento.

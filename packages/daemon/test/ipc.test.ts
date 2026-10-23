@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { ErrorCode, type EventNotification, type MethodName } from "@keel/core"
 import { Daemon, IpcClient, REPLAY_PAGE_SIZE } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
-import { hangingQuery, replayQuery } from "./replay.ts"
+import { firstPrompt, hangingQuery, replayQuery } from "./replay.ts"
 
 let dir: string
 let daemon: Daemon
@@ -22,7 +22,8 @@ beforeAll(() => {
     rootPath: initRepo(join(dir, "repo")),
     worktreesDir: join(dir, "worktrees"),
     adapterDeps: {
-      queryFn: (args) => (args.prompt === "hang" ? hangingQuery() : replayQuery())(args),
+      queryFn: (args) =>
+        (firstPrompt(args.prompt) === "hang" ? hangingQuery() : replayQuery())(args),
       binary: "/fake/claude",
     },
   })

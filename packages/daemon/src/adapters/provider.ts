@@ -114,4 +114,10 @@ export interface ProviderAdapter<Profile> {
    */
   execute(ctx: RunContext, prompt: string, profile: Profile): Promise<RunRow>
   cancel(runId: string, reason: string | null): boolean
+  /**
+   * Un mensaje humano a un run vivo (ADR-0019 §3). Devuelve false si el run ya
+   * no acepta mensajes; la entrega real puede ser asíncrona (Codex: `turn/steer`
+   * o el turno siguiente).
+   */
+  sendMessage(runId: string, text: string): boolean
 }

@@ -165,6 +165,14 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.getByTestId("chat-tool").first()).toBeVisible()
   await expect(page.getByTestId("chat-agent").last()).toBeVisible()
   await expect(page.locator(".run-summary")).toContainText("raíz del repo")
+  // Continuar la conversación desde el chat: nace un run hijo y la vista pasa a él.
+  const planUrlRun = await page.locator(".run-page .toolbar > span.mono").textContent()
+  await page.getByLabel("Mensaje al agente").fill("detalla los pasos")
+  await page.getByRole("button", { name: "Continuar", exact: true }).click()
+  await expect(page.locator(".run-page .toolbar > span.mono")).not.toHaveText(planUrlRun ?? "")
+  await expect(page.getByTestId("chat-divider")).toBeVisible()
+  await expect(page.getByTestId("chat-human").last()).toContainText("detalla los pasos")
+  await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
 
   // 2. Pasarla a planned y ejecutar con Codex: el comando pide aprobación.
   await page.locator(".run-page .toolbar .text-link").click()
@@ -206,7 +214,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await rule.getByRole("button", { name: "Revocar" }).click()
   await expect(rule).toHaveCount(0)
   await page.getByRole("button", { name: "Runs", exact: true }).click()
-  await expect(page.locator("tbody tr")).toHaveCount(2)
+  await expect(page.locator("tbody tr")).toHaveCount(3)
 
   // 3. Una sesión externa pide entrar; se aprueba desde el Inbox con tarea y scopes.
   const external = await Line.open(daemon.socket)
@@ -266,4 +274,22 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.locator(".workspace-popover").getByRole("button", { name: /^repo/ }).click()
   await expect(page.getByRole("button", { name: "Proyecto" })).toContainText("repo")
   await expect(page.locator(".task-card")).toHaveCount(1)
+
+  // 5. Escribirle a Codex mientras trabaja: el mensaje entra en el turno (turn/steer).
+  await page.getByRole("button", { name: "New task", exact: false }).click()
+  await page.getByLabel("Title", { exact: true }).fill("Con Codex")
+  await page.getByRole("button", { name: "Create task", exact: true }).click()
+  await page.getByRole("button", { name: "Mover a planned" }).click()
+  await page.getByLabel("Proveedor").selectOption("codex")
+  await page.getByLabel("Instrucción para el agente").fill("wait")
+  await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()
+  await expect(page.getByText("El agente está trabajando")).toBeVisible()
+  await page.getByLabel("Mensaje al agente").fill("usa bun")
+  await page.getByRole("button", { name: "Enviar", exact: true }).click()
+  // La instrucción inicial y el mensaje, ambos tuyos y en orden.
+  await expect(page.getByTestId("chat-human")).toHaveText(["wait", "usa bun"])
+  await expect(page.getByTestId("chat-agent").last()).toContainText("recibido: usa bun")
+  await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
+  if (process.env.KEEL_E2E_SHOTS)
+    await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "chat.png") })
 })

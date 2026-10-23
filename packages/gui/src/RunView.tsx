@@ -75,6 +75,8 @@ export function RunView({
   onBack,
   onTask,
   call,
+  runs,
+  onRun,
 }: {
   run: Run
   task?: WorkItem
@@ -83,6 +85,9 @@ export function RunView({
   onBack: () => void
   onTask: () => void
   call?: ReturnType<typeof useWorkspace>["call"]
+  /** Para mostrar la cadena de runs de una conversación (ADR-0019 §3). */
+  runs?: Run[]
+  onRun?: (run: Run) => void
 }) {
   const [tab, setTab] = useState<(typeof runTabs)[number]>(demo ? "Agents" : "Timeline")
   const [raw, setRaw] = useState(false)
@@ -94,6 +99,14 @@ export function RunView({
     `${tool.name} ${tool.label}`.toLowerCase().includes(query.toLowerCase()),
   )
   const runEvents = events.filter((event) => event.run_id === run.id)
+  // La conversación es la cadena de runs: los padres primero, este al final.
+  const chain = new Set<string>([run.id])
+  for (let r: Run | undefined = run; r?.parent_run_id; ) {
+    chain.add(r.parent_run_id)
+    const parentId: string = r.parent_run_id
+    r = runs?.find((x) => x.id === parentId)
+  }
+  const chainEvents = events.filter((e) => e.run_id !== null && chain.has(e.run_id))
   const where = workspaceOf(run, runEvents)
   return (
     <div className="page run-page">
@@ -298,9 +311,11 @@ export function RunView({
             ))}
           {tab === "Timeline" && !demo && !raw && (
             <RunChat
-              events={runEvents}
+              events={chainEvents}
               running={!TERMINAL.has(run.status)}
+              runId={run.id}
               {...(call ? { call } : {})}
+              {...(onRun ? { onContinued: onRun } : {})}
             />
           )}
           {tab === "Timeline" && !demo && (
