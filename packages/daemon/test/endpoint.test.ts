@@ -10,9 +10,9 @@ describe("ADR-0005 §1: endpoint por plataforma", () => {
         env: { XDG_RUNTIME_DIR: "/run/user/1000" },
         home: "/h",
       }),
-    ).toBe("/run/user/1000/keel/keel.sock")
+    ).toBe(join("/run/user/1000", "keel", "keel.sock"))
     expect(defaultEndpoint({ platform: "darwin", env: {}, home: "/Users/a" })).toBe(
-      "/Users/a/.keel/keel.sock",
+      join("/Users/a", ".keel", "keel.sock"),
     )
   })
 

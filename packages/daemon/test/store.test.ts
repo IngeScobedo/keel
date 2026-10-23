@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { loadMigrations, MIGRATIONS_DIR, MigrationChecksumError, openStore } from "../src/index.ts"
@@ -64,7 +64,7 @@ describe("ADR-0004: store SQLite WAL con migraciones", () => {
     const path = join(dir, "keel.sqlite")
     openStore(path).db.close()
     const altered = join(dir, "migrations")
-    Bun.spawnSync(["cp", "-r", MIGRATIONS_DIR, altered])
+    cpSync(MIGRATIONS_DIR, altered, { recursive: true })
     const f = join(altered, "0001-initial.sql")
     writeFileSync(f, `${readFileSync(f, "utf8")}\n-- cambio ilegal\n`)
     expect(() => openStore(path, { migrationsDir: altered })).toThrow(MigrationChecksumError)

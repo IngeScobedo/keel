@@ -36,7 +36,8 @@ afterAll(async () => {
 
 describe("servidor IPC (ADR-0005)", () => {
   test("el socket es 0600 y daemon.health responde con lag del loop", async () => {
-    expect(statSync(daemon.server.path).mode & 0o777).toBe(0o600)
+    // Los bits de modo no existen en Windows; allí la frontera es la ACL del pipe (endpoint.ts).
+    if (process.platform !== "win32") expect(statSync(daemon.server.path).mode & 0o777).toBe(0o600)
     const c = await IpcClient.connect(daemon.server.path)
     const h = (await c.call("daemon.health", {})) as { version: string; event_loop_lag_ms: number }
     expect(typeof h.event_loop_lag_ms).toBe("number")

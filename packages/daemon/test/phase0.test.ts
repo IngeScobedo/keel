@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Daemon, type DaemonOptions, IpcClient, type QueryFn } from "../src/index.ts"
@@ -61,7 +61,7 @@ async function boot(opts: { git?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "keel-p0-"))
   dirs.push(dir)
   if (opts.git ?? true) initRepo(join(dir, "repo"))
-  else execFileSync("mkdir", ["-p", join(dir, "repo")])
+  else mkdirSync(join(dir, "repo"), { recursive: true })
   const calls = { cwd: [] as string[] }
   const daemon = new Daemon(
     options(dir, { adapterDeps: { queryFn: writingQuery(calls), binary: "/fake/claude" } }),
