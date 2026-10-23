@@ -27,6 +27,7 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0015](./0015-operaciones-git-con-plan-aprobado.md)             | Operaciones de git del agente con plan aprobado y verificado                                                         | Propuesto                         | Alta       |
 | [0016](./0016-investigaciones-y-reportes-con-evidencia.md)      | Investigaciones y reportes con evidencia                                                                             | Propuesto                         | Alta       |
 | [0017](./0017-contexto-para-agentes-y-busqueda.md)              | Contexto para agentes: tarea vinculada, recursos MCP y búsqueda                                                      | Propuesto                         | Media      |
+| [0018](./0018-identidad-del-agente-en-el-sistema.md)            | Identidad del agente fuera de las tools: dos puertas, shell aislada y atribución                                     | Propuesto                         | **Máxima** |
 
 ## Estado «Propuesto»
 
@@ -41,10 +42,10 @@ reescribe si no.
 
 ## Orden de lectura
 
-0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0008 → 0010 → 0011 →
-0012 → 0013 → 0015 → 0014 → 0016 → 0017. Los dos primeros son el porqué; 0006 es
-lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son consecuencias;
-0007 reparte el código en librerías reutilizables y producto.
+0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0018 → 0008 → 0010 →
+0011 → 0012 → 0013 → 0015 → 0014 → 0016 → 0017. Los dos primeros son el porqué;
+0006 es lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son
+consecuencias; 0007 reparte el código en librerías reutilizables y producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 
