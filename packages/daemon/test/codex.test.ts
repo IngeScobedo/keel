@@ -270,6 +270,7 @@ describe("ADR-0008: adaptador de Codex, transporte sdk", () => {
     const keel = config.mcp_servers.keel
     expect(keel?.env.KEEL_RUN_TOKEN_FILE).toEndWith(".token")
     expect(keel?.env.KEEL_SOCKET).toBe(daemon.server.path)
+    expect(keel).toMatchObject({ default_tools_approval_mode: "approve" })
   })
 
   test("reglas de errores de Codex, versionadas", () => {

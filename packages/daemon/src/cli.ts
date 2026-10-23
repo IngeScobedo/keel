@@ -2,7 +2,7 @@
  * Cliente mínimo de línea de comandos (ADR-0005: sólo habla el protocolo).
  *
  *   bun packages/daemon/src/cli.ts health
- *   bun packages/daemon/src/cli.ts run "prompt" [--purpose execute]
+ *   bun packages/daemon/src/cli.ts run "prompt" [--purpose execute] [--profile claude|codex]
  *   bun packages/daemon/src/cli.ts tail                # eventos en vivo con visual_state
  *   bun packages/daemon/src/cli.ts approve <id> <hash> # o deny
  */
@@ -89,6 +89,7 @@ if (import.meta.main) {
       work_item_id: w.id,
       purpose,
       prompt,
+      ...(rest.includes("--profile") ? { profile: rest[rest.indexOf("--profile") + 1] } : {}),
     })) as { id: string }
     console.log(`run ${run.id} arrancado; esperando eventos…`)
     const done = new Set(["completed", "failed", "cancelled", "interrupted", "budget_exceeded"])
@@ -118,7 +119,7 @@ if (import.meta.main) {
     client.close()
   } else {
     console.log(
-      "uso: health | tail | run <prompt> [--purpose plan|execute] | approve <id> <hash> | deny <id> <hash>",
+      "uso: health | tail | run <prompt> [--purpose plan|execute] [--profile claude|codex] | approve <id> <hash> | deny <id> <hash>",
     )
     client.close()
   }

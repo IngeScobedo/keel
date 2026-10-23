@@ -436,7 +436,17 @@ function mcpConfig(servers: CodexProfile["mcp_servers"]): Pick<CodexOptions, "co
       mcp_servers: Object.fromEntries(
         names.map((n) => {
           const s = servers[n] as CodexProfile["mcp_servers"][string]
-          return [n, { command: s.command, args: s.args, env: s.env }]
+          // Sin esto, con approvalPolicy never Codex bloquea toda tool MCP (corrida real del
+          // 2026-10-22). La autoridad la comprueba el daemon en cada operación (ADR-0009 §5).
+          return [
+            n,
+            {
+              command: s.command,
+              args: s.args,
+              env: s.env,
+              default_tools_approval_mode: "approve",
+            },
+          ]
         }),
       ),
     },
