@@ -1217,6 +1217,27 @@ export class Repo {
     return this.getPermissionRule(id)
   }
 
+  getSetting(key: string): { value: unknown; updated_by: string; updated_at: string } | null {
+    const r = this.db
+      .query<{ value_json: string; updated_by: string; updated_at: string }, [string]>(
+        "SELECT value_json, updated_by, updated_at FROM user_settings WHERE key = ?",
+      )
+      .get(key)
+    return r
+      ? { value: JSON.parse(r.value_json), updated_by: r.updated_by, updated_at: r.updated_at }
+      : null
+  }
+
+  setSetting(key: string, value: unknown, actor: string): void {
+    this.db
+      .query(
+        `INSERT INTO user_settings(key, value_json, updated_by) VALUES (?,?,?)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json,
+           updated_by = excluded.updated_by, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+      )
+      .run(key, JSON.stringify(value), actor)
+  }
+
   setApproval(
     id: string,
     state: "approved" | "denied" | "expired" | "consumed",

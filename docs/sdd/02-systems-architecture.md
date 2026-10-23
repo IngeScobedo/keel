@@ -75,6 +75,7 @@ protocolo; diagnósticos saneados van por stderr.
 | `session.pair`, `session.pair_status`, `session.pair_resolve`               | Sesión externa: pide entrar, espera y el humano aprueba con scopes.                                                                                                                                               |
 | `projects.set_vcs`, `snapshots.restore`                                     | Modo sin VCS confirmado y restauración, sólo humanos (ADR-0010).                                                                                                                                                  |
 | `projects.list`, `projects.open`, `projects.use`, `projects.status`         | Varios proyectos por daemon (ADR-0019 §2): abrir una carpeta, cambiar el activo de la conexión y leer rama, HEAD y cambios.                                                                                       |
+| `settings.get`, `settings.codex_subscription_set`                           | Ajustes del usuario para todo el daemon (migración 0011). Hoy: usar Codex con su sesión de ChatGPT (ADR-0008 §2), sólo un humano lo cambia y queda con su autor.                                                  |
 
 Los comandos de mutación llevan `request_id`, `idempotency_key` y revisión
 esperada cuando aplique. Identidad humana y permisos provienen de la conexión

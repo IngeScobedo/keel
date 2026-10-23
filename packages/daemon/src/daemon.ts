@@ -23,6 +23,7 @@ import {
   patternFor,
   RUN_START_RULES,
   redact,
+  type SettingsView,
   type TransitionAuthority,
 } from "@keel/core"
 import {
@@ -451,6 +452,23 @@ export class Daemon {
         },
         (uow) => fn(p, uow, ctx),
       )
+    }
+  }
+
+  /** El flag de arranque manda; si no, lo que el humano eligió en la GUI (ADR-0008 §2). */
+  settingsView(): SettingsView {
+    if (this.codexProfile.subscription_enabled)
+      return {
+        codex_subscription: { enabled: true, source: "flag", updated_by: null, updated_at: null },
+      }
+    const s = this.repo.getSetting(CODEX_SUBSCRIPTION)
+    return {
+      codex_subscription: {
+        enabled: s?.value === true,
+        source: s?.value === true ? "setting" : "off",
+        updated_by: s?.updated_by ?? null,
+        updated_at: s?.updated_at ?? null,
+      },
     }
   }
 
@@ -1411,6 +1429,17 @@ export class Daemon {
           return view
         },
       ),
+      "settings.get": () => this.settingsView(),
+      "settings.codex_subscription_set": this.mutation<Params<"settings.codex_subscription_set">>(
+        "settings.codex_subscription_set",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "cambiar el uso de la suscripción de Codex")
+          repo.setSetting(CODEX_SUBSCRIPTION, p.enabled, uow.actorId)
+          const view = this.settingsView()
+          uow.emit("settings.changed", null, view)
+          return view
+        },
+      ),
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
         "approvals.resolve",
         (p, uow) => {
@@ -1528,6 +1557,7 @@ export class Daemon {
           final = useCodex
             ? await this.codex.execute(ctx, prompt, {
                 ...this.codexProfile,
+                subscription_enabled: this.settingsView().codex_subscription.enabled,
                 ...(opt ? { model: opt.model, permission_mode: opt.permission_mode } : {}),
                 resume_thread_id: this.resumeOf(run, ws.cwd),
                 env,
@@ -2287,6 +2317,9 @@ function requireHuman(ctx: HandlerContext, what: string): void {
       retryable: false,
     })
 }
+
+/** Clave del ajuste de ADR-0008 §2 (migración 0011). */
+const CODEX_SUBSCRIPTION = "codex.subscription_enabled"
 
 /** Estados de un run en los que su agente conserva la capacidad. */
 const ACTIVE_RUN_STATUSES: readonly string[] = [

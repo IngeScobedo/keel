@@ -14,8 +14,11 @@ import { expect, type Page, test } from "@playwright/test"
 const FIXTURE = join(import.meta.dirname, "..", "..", "daemon", "test", "fixtures", "e2e-daemon.ts")
 
 type Daemon = { proc: ChildProcess; socket: string; project_id: string; other_repo: string }
-async function bootDaemon(): Promise<Daemon> {
-  const proc = spawn("bun", [FIXTURE], { stdio: ["pipe", "pipe", "inherit"] })
+async function bootDaemon(env: Record<string, string> = {}): Promise<Daemon> {
+  const proc = spawn("bun", [FIXTURE], {
+    stdio: ["pipe", "pipe", "inherit"],
+    env: { ...process.env, ...env },
+  })
   const line = await new Promise<string>((resolve, reject) => {
     const rl = createInterface({ input: proc.stdout as NodeJS.ReadableStream })
     rl.once("line", resolve)
@@ -390,4 +393,23 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(report).toContainText("Versión 1")
   await report.getByRole("button", { name: "Leer" }).click()
   await expect(page.getByTestId("report-body")).toContainText("El depósito se duplicó")
+})
+
+test("Codex con la suscripción: el humano lo enciende en Ajustes y queda a su nombre", async ({
+  page,
+}) => {
+  // Este daemon arranca sin --codex-subscription; el del beforeEach se cierra en afterEach.
+  const off = await bootDaemon({ KEEL_E2E_CODEX_OFF: "1" })
+  await nativeShell(page, off)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Project setup", exact: true }).click()
+  const toggle = page.getByLabel("Usar Codex con mi suscripción de ChatGPT")
+  await expect(toggle).not.toBeChecked()
+  // El estado lo confirma el daemon: la casilla cambia cuando responde.
+  await toggle.click()
+  await expect(toggle).toBeChecked()
+  await expect(page.locator(".plugins").first()).toContainText("Encendido por")
+  off.proc.stdin?.end()
+  await new Promise((r) => off.proc.once("exit", r))
 })

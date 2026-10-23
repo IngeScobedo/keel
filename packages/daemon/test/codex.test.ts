@@ -214,6 +214,26 @@ describe("ADR-0008: adaptador de Codex, transporte sdk", () => {
     expect(seen.thread).toBeUndefined()
   })
 
+  test("el humano habilita la suscripción desde la GUI y el ajuste queda con su autor", async () => {
+    const { daemon, seen, start } = boot(ok, { subscription_enabled: false })
+    const human = await IpcClient.connect(daemon.server.path)
+    expect(await human.call("settings.get", {})).toMatchObject({
+      codex_subscription: { enabled: false, source: "off" },
+    })
+    const set = (await human.call("settings.codex_subscription_set", {
+      ...meta(),
+      enabled: true,
+    })) as { codex_subscription: { enabled: boolean; source: string; updated_by: string } }
+    expect(set.codex_subscription).toMatchObject({ enabled: true, source: "setting" })
+    expect(set.codex_subscription.updated_by).toBeTruthy()
+    const { client, run } = await start()
+    await daemon.idle()
+    client.close()
+    human.close()
+    expect(daemon.repo.getRun(run.id)?.status).toBe("completed")
+    expect(seen.thread).toBeDefined()
+  })
+
   test("sin sesión de codex, el run falla como auth y pide codex login, sin fallback", async () => {
     const { daemon, seen, start, stored } = boot(ok, {}, 1)
     const { client, run } = await start()

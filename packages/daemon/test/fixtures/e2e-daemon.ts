@@ -27,7 +27,8 @@ const daemon = new Daemon({
   adapterDeps: { queryFn: replayQuery(), binary: "/fake/claude" },
   mcpBridge: false,
   profile: { approval_timeout_ms: 120_000 },
-  codex: { subscription_enabled: true },
+  // Con KEEL_E2E_CODEX_OFF=1 arranca sin el flag: la suscripción se enciende desde la GUI.
+  codex: { subscription_enabled: process.env.KEEL_E2E_CODEX_OFF !== "1" },
   codexDeps: {
     appServerLaunch: (args) => ({
       command: process.execPath,

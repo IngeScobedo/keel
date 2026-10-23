@@ -365,6 +365,18 @@ export const NodeViewSchema = z.object({
 })
 
 // --- métodos ------------------------------------------------------------------------
+/** Ajustes del usuario; `source` dice de dónde sale el valor vigente. */
+export const SettingsViewSchema = z.object({
+  codex_subscription: z.object({
+    enabled: z.boolean(),
+    /** `flag`: `--codex-subscription` al arrancar; `setting`: lo eligió en la GUI. */
+    source: z.enum(["flag", "setting", "off"]),
+    updated_by: z.string().nullable(),
+    updated_at: z.string().nullable(),
+  }),
+})
+export type SettingsView = z.infer<typeof SettingsViewSchema>
+
 export const Methods = {
   "work_items.create": {
     params: MutationMeta.extend({
@@ -868,6 +880,19 @@ export const Methods = {
   "permissions.rule_revoke": {
     params: MutationMeta.extend({ rule_id: z.string() }),
     result: PermissionRuleViewSchema,
+  },
+  /** Ajustes del usuario que valen para todo el daemon (migración 0011). */
+  "settings.get": {
+    params: z.object({}),
+    result: SettingsViewSchema,
+  },
+  /**
+   * ADR-0008 §2: usar Codex con la sesión de ChatGPT del usuario es una opción
+   * explícita suya. Sólo un humano la cambia; queda guardada con su autor.
+   */
+  "settings.codex_subscription_set": {
+    params: MutationMeta.extend({ enabled: z.boolean() }),
+    result: SettingsViewSchema,
   },
   "events.subscribe": {
     params: z.object({

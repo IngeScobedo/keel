@@ -935,12 +935,12 @@ CREATE INDEX idx_pairings_pending ON session_pairings(state) WHERE state = 'pend
 
 ### 0004 · Uso interactivo: reglas de permiso, conversación y proyectos (ADR-0019)
 
-`permission_rules` guarda lo que el humano decidió «permitir siempre» (o
-negar) en un proyecto. Una regla nombra la herramienta y, para comandos, el
-prefijo (`git status`) o el comando exacto; `prefix` nulo cubre toda la
-herramienta. Se revoca, no se borra, para que la vista de permisos conserve el
-historial. `runs.parent_run_id` encadena la continuación de una conversación:
-cada mensaje después del final es un run hijo con su propio costo y estado.
+`permission_rules` guarda lo que el humano decidió «permitir siempre» (o negar)
+en un proyecto. Una regla nombra la herramienta y, para comandos, el prefijo
+(`git status`) o el comando exacto; `prefix` nulo cubre toda la herramienta. Se
+revoca, no se borra, para que la vista de permisos conserve el historial.
+`runs.parent_run_id` encadena la continuación de una conversación: cada mensaje
+después del final es un run hijo con su propio costo y estado.
 `projects.last_opened_at` ordena los proyectos recientes; cada carpeta abierta
 es su `work_space` con su proyecto, como el de `--root`.
 
@@ -970,16 +970,16 @@ ALTER TABLE projects ADD COLUMN last_opened_at TEXT;
 ### 0005 · Artefactos, evidencia con procedencia y retención (ADR-0012)
 
 Los bytes viven fuera de SQLite, direccionados por su sha256
-(`$XDG_STATE_HOME/keel/artifacts/sha256/<2>/<62>`); `artifacts` guarda lo que
-se sabe de cada uno: tamaño, tipo, sensibilidad y si su hash sigue
-coincidiendo. `evidence` se rehace porque cambia una restricción (`run_id` deja
-de ser obligatorio para que el humano adjunte la suya): gana `work_item_id`,
-`title`, `provenance_json`, `created_by` y `supersedes_id`, y exige al menos un
-vínculo. Es append-only: una corrección es otra fila que apunta a la anterior.
-`event_purges` deja constancia de cada purga explícita para que una
-suscripción con un cursor más viejo reciba `cursor_expired`. Los eventos siguen
-siendo append-only: el trigger sólo deja borrar mientras una purga explícita
-está marcada en `retention_in_progress`, dentro de su misma transacción.
+(`$XDG_STATE_HOME/keel/artifacts/sha256/<2>/<62>`); `artifacts` guarda lo que se
+sabe de cada uno: tamaño, tipo, sensibilidad y si su hash sigue coincidiendo.
+`evidence` se rehace porque cambia una restricción (`run_id` deja de ser
+obligatorio para que el humano adjunte la suya): gana `work_item_id`, `title`,
+`provenance_json`, `created_by` y `supersedes_id`, y exige al menos un vínculo.
+Es append-only: una corrección es otra fila que apunta a la anterior.
+`event_purges` deja constancia de cada purga explícita para que una suscripción
+con un cursor más viejo reciba `cursor_expired`. Los eventos siguen siendo
+append-only: el trigger sólo deja borrar mientras una purga explícita está
+marcada en `retention_in_progress`, dentro de su misma transacción.
 
 ```sql
 -- migración: 0005-artefactos-y-evidencia
@@ -1079,9 +1079,9 @@ CREATE INDEX idx_semantic_kind ON semantic_events(project_id, kind, seq);
 
 ### 0007 · Índice de contexto para agentes (ADR-0017)
 
-`context_fts` amplía la búsqueda léxica de las investigaciones a tareas, notas
-y metadatos de evidencia. Lo mantienen triggers. La evidencia cuyo artefacto
-es `restricted` no entra al índice (ADR-0011 §8). `ref` es la referencia que
+`context_fts` amplía la búsqueda léxica de las investigaciones a tareas, notas y
+metadatos de evidencia. Lo mantienen triggers. La evidencia cuyo artefacto es
+`restricted` no entra al índice (ADR-0011 §8). `ref` es la referencia que
 devuelve la búsqueda (`keel://task/<id>`, `keel://note/<id>`,
 `keel://evidence/<id>`).
 
@@ -1133,8 +1133,8 @@ END;
 `connections` gana su entorno (`dev`, `staging`, `prod`), qué garantiza el
 servidor y qué sólo Keel (`guarantees_json`), la referencia a la credencial de
 sólo lectura (`secret_ref_ro`) y su ciclo de vida. Keel guarda referencias,
-nunca valores. `permission_grants` gana `operation`: el permiso es por
-conexión, operación y entorno, y sin grant vigente se pregunta.
+nunca valores. `permission_grants` gana `operation`: el permiso es por conexión,
+operación y entorno, y sin grant vigente se pregunta.
 
 ```sql
 -- migración: 0008-intermediario-de-recursos
@@ -1154,9 +1154,9 @@ CREATE INDEX idx_grants_connection ON permission_grants(connection_id, operation
 
 ### 0009 · Plugins (ADR-0014)
 
-Un plugin se instala explícitamente, con su versión y el hash de su
-manifiesto y su punto de entrada. No se actualiza solo: si el hash cambia, no
-corre. Desinstalarlo no borra nada de lo que interpretó.
+Un plugin se instala explícitamente, con su versión y el hash de su manifiesto y
+su punto de entrada. No se actualiza solo: si el hash cambia, no corre.
+Desinstalarlo no borra nada de lo que interpretó.
 
 ```sql
 -- migración: 0009-plugins
@@ -1217,4 +1217,21 @@ CREATE TABLE research_reports (
 CREATE TRIGGER research_reports_no_update BEFORE UPDATE ON research_reports BEGIN
     SELECT RAISE(ABORT, 'a report version is immutable');
 END;
+```
+
+### 0011 · Ajustes del usuario (ADR-0008 §2)
+
+Decisiones explícitas del humano que valen para todo el daemon y sobreviven a
+reiniciarlo. Hoy sólo una: usar Codex con su sesión de ChatGPT
+(`codex.subscription_enabled`), que antes sólo se encendía con
+`--codex-subscription`. Cada cambio guarda quién lo hizo y cuándo.
+
+```sql
+-- migración: 0011-ajustes-del-usuario
+CREATE TABLE user_settings (
+    key TEXT PRIMARY KEY NOT NULL,
+    value_json TEXT NOT NULL CHECK (json_valid(value_json)),
+    updated_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
 ```

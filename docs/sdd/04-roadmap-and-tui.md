@@ -150,9 +150,11 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       errores por `codexErrorInfo` y cuota por ventana. `sdk`: sin pid ni
       aprobaciones (`--codex-transport sdk`). La suscripción sólo con
       `--codex-subscription`. Evidencia en `docs/reviews/2026-10-22-codex-*`.
-- [ ] Verificar qué modos de cuenta/suscripción admite cada integración; API
-      facturada explícita. Claude según ADR-0002. Los términos de OpenAI para el
-      login de ChatGPT los verifica el humano (ADR-0008 §2).
+- [x] Verificar qué modos de cuenta/suscripción admite cada integración; API
+      facturada explícita. Claude según ADR-0002. Codex con la sesión de
+      ChatGPT: el humano lo confirmó para uso local con su cuenta el 2026-10-23
+      (`docs/reviews/2026-10-23-codex-suscripcion-confirmada.md`); se enciende
+      en Ajustes de la GUI o con `--codex-subscription`.
 - [x] Ingesta saneada, eventos desconocidos, labels y métricas de duración con
       procedencia. Redacción best-effort con reglas versionadas en el borde
       (`redaction.ts`, `RunContext.ingest`). Los `kind` desconocidos se guardan
@@ -167,13 +169,13 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       el gate. `limits.ts`: 1 run a la vez, 2 USD por run y 10 USD por día
       estimados por defecto, que se suben con flags explícitos y se ven en
       `daemon.health`.
-- [ ] Aislamiento desacoplado de git (deuda de la Fase 0, decidida el
+- [x] Aislamiento desacoplado de git (deuda de la Fase 0, decidida el
       2026-10-22; ADR-0010 aceptado). Hecho: `WorkspaceDriver` con
       `GitWorktreeDriver` y `DirectFsDriver` (snapshot con `tar` y manifest de
       hashes, un escritor por carpeta, captura por hashes, restauración), el
       modo sin VCS confirmado por el humano (`projects.set_vcs`) y la
-      migración 0002. Falta: las tools de `@keel/git` para el agente, que van
-      por el puente MCP de ADR-0009.
+      migración 0002. Las tools de git para el agente van por el puente MCP con
+      plan aprobado (ADR-0015: `git_status`, `git_diff`, `git_propose`).
 - [x] Tools de Keel para agentes por MCP (ADR-0009, aceptado). Hecho: el puente
       `keel mcp` (servidor MCP stdio propio, sin dependencia nueva), el actor
       `agent` por conexión, el token de un solo uso entregado por archivo y

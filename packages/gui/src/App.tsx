@@ -496,6 +496,7 @@ export function App() {
             />
             {workspace.mode === "live" && (
               <div className="padded">
+                <LiveProviders call={workspace.call} />
                 <LivePlugins call={workspace.call} />
               </div>
             )}
@@ -583,6 +584,7 @@ export function App() {
               Title
               <input
                 required
+                data-autofocus
                 maxLength={240}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}

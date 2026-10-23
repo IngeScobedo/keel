@@ -163,7 +163,7 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
       return {
         ok: false,
         message:
-          "el modo suscripción de Codex necesita habilitarse explícitamente (--codex-subscription, ADR-0008 §2)",
+          "el modo suscripción de Codex necesita habilitarse explícitamente: en la GUI (Ajustes) o con --codex-subscription (ADR-0008 §2)",
       }
     if (
       profile.auth_mode === "api_key" &&
