@@ -1,6 +1,7 @@
 /**
  * Entrada del daemon:  bun packages/daemon/src/main.ts [--db ruta] [--socket ruta] [--root dir]
- * Defaults: ~/.keel/keel.sqlite y $XDG_RUNTIME_DIR/keel/keel.sock (fallback ~/.keel/keel.sock).
+ * Defaults: ~/.keel/keel.sqlite y el endpoint de ADR-0005 §1 (ipc/endpoint.ts): socket Unix
+ * en $XDG_RUNTIME_DIR/keel/keel.sock (fallback ~/.keel/keel.sock), Named Pipe en Windows.
  *
  * Mantenimiento del store (SDD 03 §7), seguro con el daemon en marcha:
  *   main.ts backup  [--db ruta] --out dir             → manifest con sha256
@@ -10,14 +11,14 @@ import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { Daemon } from "./daemon.js"
+import { defaultEndpoint } from "./ipc/endpoint.js"
 import { backupStore, restoreStore } from "./store/backup.js"
 import { openStore } from "./store/db.js"
 
 export function defaultPaths(): { dbPath: string; socketPath: string } {
   const home = join(homedir(), ".keel")
   mkdirSync(home, { recursive: true, mode: 0o700 })
-  const runtime = process.env.XDG_RUNTIME_DIR ? join(process.env.XDG_RUNTIME_DIR, "keel") : home
-  return { dbPath: join(home, "keel.sqlite"), socketPath: join(runtime, "keel.sock") }
+  return { dbPath: join(home, "keel.sqlite"), socketPath: defaultEndpoint() }
 }
 
 function arg(name: string): string | undefined {

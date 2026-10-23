@@ -27,6 +27,7 @@ import {
 import type { Socket } from "bun"
 import type { EventBus } from "../bus.js"
 import type { Repo } from "../store/repo.js"
+import { isNamedPipe } from "./endpoint.js"
 import { LineDecoder, LineWriter } from "./framing.js"
 
 export type Actor = { actor_id: string; kind: "human" | "system" }
@@ -80,8 +81,11 @@ export class IpcServer {
 
   start(): void {
     const path = this.opts.socketPath
-    mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
-    if (existsSync(path)) unlinkSync(path)
+    const pipe = isNamedPipe(path)
+    if (!pipe) {
+      mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+      if (existsSync(path)) unlinkSync(path)
+    }
     this.server = Bun.listen<ClientState>({
       unix: path,
       socket: {
@@ -109,7 +113,8 @@ export class IpcServer {
         error: (socket) => this.dropClient(socket.data),
       },
     })
-    chmodSync(path, 0o600)
+    // En POSIX la frontera es el modo del socket; un Named Pipe no es un archivo (endpoint.ts).
+    if (!pipe) chmodSync(path, 0o600)
   }
 
   stop(): void {
@@ -119,7 +124,8 @@ export class IpcServer {
     }
     this.server?.stop(true)
     this.server = null
-    if (existsSync(this.opts.socketPath)) unlinkSync(this.opts.socketPath)
+    if (!isNamedPipe(this.opts.socketPath) && existsSync(this.opts.socketPath))
+      unlinkSync(this.opts.socketPath)
   }
 
   private dropClient(state: ClientState): void {

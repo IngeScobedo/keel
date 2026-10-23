@@ -46,8 +46,26 @@ Lectura: la mutación no es submilisegundo; está en el orden de 2 a 3 ms por
 commit. Un worktree cuesta del orden de decenas de milisegundos porque son
 varios procesos `git`. Ninguna cifra se extrapola a otra máquina ni a Windows.
 
-### Windows nativo: pendiente
+### Windows nativo: transporte viable, daemon pendiente
 
-No se puede medir todavía. El daemon sólo implementa el socket Unix; el Named
-Pipe de ADR-0005 §1 no existe. Hasta entonces, «registrar latencia de Windows»
-del DoD de la Fase 0 queda abierto y así consta en SDD 04.
+`scripts/probe-windows-pipe.ts`, corrido el 2026-10-23 en Windows nativo desde
+WSL con `cmd.exe` y Bun 1.3.11 (win32):
+
+- `Bun.listen`/`Bun.connect` sobre `\\.\pipe\…` funcionan. Una «ñ» partida entre
+  dos escrituras llegó intacta.
+- Ida y vuelta de 300 frames en el mismo proceso: p50 0.011 ms, p95 0.020 ms,
+  máx 1.2 ms. No es comparable con la medición entre procesos de Linux.
+
+El daemon ya elige el Named Pipe en Windows
+(`packages/daemon/src/ipc/endpoint.ts`) y no hace `mkdir`, `chmod` ni `unlink`
+sobre él. Antes de medir el daemon completo en Windows falta:
+
+1. Bun ≥ 1.4 en Windows (ADR-0003). El equipo tiene 1.3.11.
+2. Verificar la ACL del pipe. ADR-0005 §1 pide la ACL del usuario, Bun no expone
+   el descriptor de seguridad, y el DACL por defecto no está medido. Hasta
+   verificarlo, el daemon en Windows no cumple §1.
+3. Las piezas que hoy sólo existen en POSIX: la reconciliación de procesos (lee
+   `/proc`; en Windows no encuentra ni termina procesos huérfanos, ADR-0003 §9),
+   la búsqueda del binario `claude` y el binario de `sqlite-vec` para win32.
+
+Por eso «registrar latencia de Windows» del DoD de la Fase 0 sigue abierto.

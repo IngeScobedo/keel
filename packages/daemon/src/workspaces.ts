@@ -4,7 +4,7 @@
  * Decisiones del humano (2026-10-22):
  * - Los worktrees viven **fuera del repo**, en
  *   `<worktreesDir>/<project>/<repo>/<KEEL-n>/<run>/root`; por defecto
- *   `$XDG_STATE_HOME/keel/worktrees`. Ni el IDE ni las herramientas del repo
+ *   `$XDG_STATE_HOME/keel/worktrees` (`%LOCALAPPDATA%\keel\worktrees` en Windows). Ni el IDE ni las herramientas del repo
  *   los recorren.
  * - Rama `keel/<KEEL-n>/<run>/root`, el esquema de SDD 02.
  * - **Liberación según el final del run.** `cancelled`, `failed`, `interrupted`
@@ -36,8 +36,13 @@ import {
 } from "@keel/git"
 import type { Repo, RunRow, RunWorktreeRow, WorkItemRow } from "./store/repo.js"
 
-export function defaultWorktreesDir(): string {
-  const state = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state")
+export function defaultWorktreesDir(
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (platform === "win32")
+    return join(env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "keel", "worktrees")
+  const state = env.XDG_STATE_HOME || join(homedir(), ".local", "state")
   return join(state, "keel", "worktrees")
 }
 
