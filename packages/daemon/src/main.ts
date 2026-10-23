@@ -62,7 +62,7 @@ if (import.meta.main && (process.argv[2] === "backup" || process.argv[2] === "re
   )
   if (rec.interrupted.length)
     console.log(
-      `reconciliación: ${rec.interrupted.length} runs marcados interrupted, ${rec.killed.length} procesos terminados`,
+      `reconciliación: ${rec.interrupted.length} runs marcados interrupted; ${rec.orphans.length} procesos registrados por comprobar`,
     )
   const bye = () => {
     // Apagado ordenado: los runs y liberaciones en curso terminan antes de cerrar la base.

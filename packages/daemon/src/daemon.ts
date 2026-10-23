@@ -2,7 +2,7 @@
  * Cableado del daemon: store + bus + servidor IPC + adaptadores. Reconcilia
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
-import { existsSync, readFileSync, readlinkSync } from "node:fs"
+import { existsSync } from "node:fs"
 import {
   allowedTransitions,
   checkTransition,
@@ -29,6 +29,12 @@ import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
 import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server.js"
 import { Outbox } from "./outbox.js"
+import {
+  defaultProcessTable,
+  type ProcessTable,
+  type RecordedProcess,
+  sameProcess,
+} from "./processes.js"
 import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
 import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
@@ -42,7 +48,11 @@ export type DaemonOptions = {
   adapterDeps?: ClaudeAdapterDeps
   /** Raíz de los worktrees de runs; por defecto `$XDG_STATE_HOME/keel/worktrees`. */
   worktreesDir?: string
+  /** Tabla de procesos para reconciliar; por defecto la de la plataforma (processes.ts). */
+  processes?: ProcessTable
 }
+
+export type OrphanCheck = { runId: string; recorded: RecordedProcess }
 
 export class Daemon {
   readonly store: Store
@@ -58,6 +68,8 @@ export class Daemon {
   readonly startedAt = Date.now()
   private readonly approvalWaiters = new Map<string, (d: "approved" | "denied") => void>()
   readonly outbox: Outbox
+  readonly processes: ProcessTable
+  private orphanSweep: Promise<void> = Promise.resolve()
   /** Runs que este proceso ya está despachando: una entrega repetida del outbox no los duplica. */
   private readonly dispatching = new Set<string>()
   /** Trabajo en segundo plano (runs, liberaciones); `idle()` espera a que termine. */
@@ -72,7 +84,8 @@ export class Daemon {
     this.repo = new Repo(this.store.db)
     this.project = this.repo.ensureDefaultProject(opts.rootPath)
     this.profile = { ...DEFAULT_PROFILE, cwd: opts.rootPath, ...opts.profile }
-    this.claude = new ClaudeAdapter(opts.adapterDeps ?? {})
+    this.processes = opts.processes ?? defaultProcessTable()
+    this.claude = new ClaudeAdapter({ processes: this.processes, ...opts.adapterDeps })
     this.outbox = new Outbox(this.repo)
     this.outbox.on(RUN_DISPATCH, (m) => this.onRunDispatch(m.payload as RunDispatch))
     this.outbox.on(WORKTREE_RELEASE, (m) =>
@@ -97,7 +110,7 @@ export class Daemon {
   }
 
   /** Reconcilia (una vez), abre el socket y devuelve lo reconciliado. */
-  start(): { interrupted: string[]; killed: number[] } {
+  start(): { interrupted: string[]; orphans: OrphanCheck[] } {
     const reconciled = this.reconcile()
     // Lo que quedó pendiente antes de una caída: despachos y liberaciones (DoD Fase 0).
     this.track(this.outbox.drain())
@@ -134,28 +147,17 @@ export class Daemon {
    * se encola para liberar. Un run `queued` con el despacho pendiente en el
    * outbox no se toca: nunca arrancó y se despachará al drenar.
    */
-  reconcile(): { interrupted: string[]; killed: number[] } {
+  reconcile(): { interrupted: string[]; orphans: OrphanCheck[] } {
     const interrupted: string[] = []
-    const killed: number[] = []
+    const orphans: OrphanCheck[] = []
     for (const run of this.repo.liveRuns()) {
       // Nunca arrancó: su despacho sigue en el outbox y se entrega al drenar.
       if (run.status === "queued" && this.repo.hasPendingOutbox(`${RUN_DISPATCH}:${run.id}`))
         continue
       const manifest = JSON.parse(run.context_manifest_json) as {
-        provider_process?: { pid: number; cwd: string } | null
+        provider_process?: RecordedProcess | null
       }
-      const p = manifest.provider_process
-      if (p && existsSync(`/proc/${p.pid}`)) {
-        try {
-          // Sólo si sigue siendo el mismo proceso: mismo cwd y binario claude en argv.
-          const cwd = readlinkSync(`/proc/${p.pid}/cwd`)
-          const cmd = readFileSync(`/proc/${p.pid}/cmdline`, "utf8")
-          if (cwd === p.cwd && cmd.includes("claude")) {
-            process.kill(p.pid, "SIGTERM")
-            killed.push(p.pid)
-          }
-        } catch {}
-      }
+      const recorded = manifest.provider_process ?? null
       const t = nowIso()
       this.repo.updateRun(run.id, { status: "interrupted", end_reason: "interrupted", ended_at: t })
       for (const a of this.repo.agentsOfRun(run.id))
@@ -171,21 +173,38 @@ export class Daemon {
           output_json: null,
           error_message: "daemon reiniciado",
         })
-      this.repo.appendEvent({
-        project_id: run.project_id,
-        run_id: run.id,
-        source: "daemon",
-        source_event_key: `reconcile:${run.id}:${t}`,
-        fidelity: "full",
-        adapter_version: "daemon/0",
-        kind: "run.reconciled",
-        occurred_at: null,
-        payload_json: JSON.stringify({ killed_pid: p?.pid ?? null }),
+      this.emitSystem("run.reconciled", run.id, {
+        provider_process: recorded,
+        process_table: this.processes.kind,
       })
       interrupted.push(run.id)
+      if (recorded) orphans.push({ runId: run.id, recorded })
       this.settleWorkItem(this.repo.getRun(run.id) as RunRow, "reconcile")
     }
-    return { interrupted, killed }
+    // La comprobación de procesos es asíncrona (CIM en Windows). Las liberaciones de
+    // origen `reconcile` la esperan: no se borra un worktree con un huérfano escribiendo.
+    this.orphanSweep = this.sweepOrphans(orphans)
+    this.track(this.orphanSweep)
+    return { interrupted, orphans }
+  }
+
+  /**
+   * Termina el proceso de proveedor de un run interrumpido sólo si sigue siendo
+   * el mismo (pid + arranque + ejecutable, processes.ts). Nunca por nombre.
+   */
+  private async sweepOrphans(orphans: OrphanCheck[]): Promise<void> {
+    for (const { runId, recorded } of orphans) {
+      const current = await this.processes.get(recorded.pid)
+      const same = current !== null && sameProcess(recorded, current)
+      const terminated = same && this.processes.terminate(recorded.pid)
+      this.emitSystem("run.orphan_checked", runId, {
+        pid: recorded.pid,
+        alive: current !== null,
+        same_process: same,
+        terminated,
+        process_table: this.processes.kind,
+      })
+    }
   }
 
   private waitApproval(id: string, ms: number): Promise<"approved" | "denied" | "expired"> {
@@ -473,6 +492,7 @@ export class Daemon {
 
   /** Handler del outbox: captura los cambios finales y libera, rescatando antes. Idempotente. */
   private async captureAndRelease(runId: string): Promise<void> {
+    await this.orphanSweep
     await this.captureChanges(runId)
     for (const { worktree, branch, result } of await this.workspaces.release(runId))
       this.emitSystem("worktree.released", runId, {

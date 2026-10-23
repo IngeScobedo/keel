@@ -9,10 +9,13 @@
  * - Implementa `ProviderAdapter` (ADR-0007 §7): cada mensaje y cada hook va
  *   íntegro a `RunContext.record` y se proyecta por `RunContext.store`.
  * - `canUseTool` delega en la política del daemon (`RunContext.decideTool`).
- * - Registra pid + cwd + session_id del proceso `claude` en el manifest del run
- *   para reconciliar al arrancar.
+ * - Lanza el proceso `claude` él mismo (`spawnClaudeCodeProcess`) y registra en
+ *   el manifest su pid, instante de arranque, ejecutable y session_id para
+ *   reconciliar al arrancar (processes.ts).
  */
-import { existsSync, readdirSync, readFileSync, readlinkSync } from "node:fs"
+import { type ChildProcess, spawn } from "node:child_process"
+import { existsSync } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import type {
   HookCallback,
@@ -22,10 +25,13 @@ import type {
   PermissionResult,
   Query,
   SDKMessage,
+  SpawnedProcess,
+  SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
 import { isLive } from "@keel/core"
 import { nowIso, ulid } from "../ids.js"
+import { defaultProcessTable, type ProcessTable } from "../processes.js"
 import { RunProjector } from "../projector.js"
 import type { RunRow } from "../store/repo.js"
 import type { Preflight, ProviderAdapter, ProviderCapabilities, RunContext } from "./provider.js"
@@ -79,6 +85,8 @@ export type QueryFn = (args: {
 }) => Query | AsyncIterable<SDKMessage>
 
 export type ClaudeAdapterDeps = {
+  /** Identidad de procesos para el registro; por defecto la de la plataforma. */
+  processes?: ProcessTable
   queryFn?: QueryFn
   /** Para tests: ruta al binario; por defecto se detecta el instalado. */
   binary?: string | null
@@ -86,17 +94,38 @@ export type ClaudeAdapterDeps = {
   env?: Record<string, string | undefined>
 }
 
-export function detectClaudeBinary(): string | null {
-  const candidates = [
-    process.env.KEEL_CLAUDE_PATH,
-    join(process.env.HOME ?? "", ".local/bin/claude"),
-    "/usr/local/bin/claude",
-    "/usr/bin/claude",
+export type BinaryLookup = {
+  platform?: NodeJS.Platform
+  env?: Record<string, string | undefined>
+  home?: string
+}
+
+/**
+ * Dónde buscar el `claude` que instaló el usuario (ADR-0002 regla 3: se detecta,
+ * no se bundlea), en orden: `KEEL_CLAUDE_PATH`, el instalador nativo
+ * (`~/.local/bin`, medido en Linux y en Windows) y el `PATH`. En Windows sólo
+ * cuenta `claude.exe`: un `claude.cmd` de npm no se puede lanzar como ejecutable.
+ */
+export function claudeCandidates(l: BinaryLookup = {}): string[] {
+  const platform = l.platform ?? process.platform
+  const env = l.env ?? process.env
+  const home = l.home ?? homedir()
+  const exe = platform === "win32" ? "claude.exe" : "claude"
+  const pathVar = env.PATH ?? env.Path ?? ""
+  const list = [
+    env.KEEL_CLAUDE_PATH,
+    join(home, ".local", "bin", exe),
+    ...(platform === "win32" ? [] : ["/usr/local/bin/claude", "/usr/bin/claude"]),
+    ...pathVar
+      .split(platform === "win32" ? ";" : ":")
+      .filter((d) => d.length > 0)
+      .map((d) => join(d, exe)),
   ]
-  return (
-    candidates.find((p): p is string => typeof p === "string" && p.length > 0 && existsSync(p)) ??
-    null
-  )
+  return [...new Set(list.filter((p): p is string => typeof p === "string" && p.length > 0))]
+}
+
+export function detectClaudeBinary(l: BinaryLookup = {}): string | null {
+  return claudeCandidates(l).find((p) => existsSync(p)) ?? null
 }
 
 export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
@@ -114,8 +143,10 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
   }
   private readonly running = new Map<string, AbortController>()
   private readonly deps: ClaudeAdapterDeps
+  private readonly processes: ProcessTable
   constructor(deps: ClaudeAdapterDeps = {}) {
     this.deps = deps
+    this.processes = deps.processes ?? defaultProcessTable()
   }
 
   get activeRuns(): number {
@@ -193,8 +224,24 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
         : { behavior: "deny", message: d.message }
     }
 
+    // Keel lanza el proceso para conocer su pid en el instante del spawn y registrar
+    // su identidad (pid + arranque + ejecutable) para reconciliar (ADR-0003 §9).
+    const launched = this.processRecorder(ctx)
+    const spawnClaudeCodeProcess = (o: SpawnOptions): SpawnedProcess => {
+      const child = spawn(o.command, o.args, {
+        cwd: o.cwd,
+        env: o.env as NodeJS.ProcessEnv,
+        signal: o.signal,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      })
+      launched.spawned(child, o)
+      return child as unknown as SpawnedProcess
+    }
+
     const options: Options = {
       ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
+      spawnClaudeCodeProcess,
       model: profile.model,
       cwd: profile.cwd,
       settingSources: [],
@@ -216,20 +263,14 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     ctx.notifyRun()
 
     const queryFn = this.deps.queryFn ?? ((a) => sdkQuery(a))
-    let processRecorded = false
     try {
       for await (const message of queryFn({ prompt, options })) {
         const m = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
         const key = m.uuid ? `msg:${m.uuid}` : `msg:${m.type}:${ulid()}`
         ctx.record(`sdk.${m.type}`, key, m, typeof m.timestamp === "string" ? m.timestamp : null)
         const changed = projector.onMessage(m)
-        if (!processRecorded && m.type === "system" && binary) {
-          processRecorded = true
-          const proc = findChildProcess(binary, profile.cwd)
-          store.mergeManifest(run.id, {
-            provider_process: proc ? { ...proc, session_id: projector.sessionId } : null,
-          })
-        }
+        if (m.type === "system" && projector.sessionId)
+          launched.update({ session_id: projector.sessionId })
         if (changed.run) ctx.notifyRun()
         notifyProjection(key, changed)
       }
@@ -254,6 +295,50 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       this.running.delete(run.id)
     }
     return store.getRun(run.id) as RunRow
+  }
+
+  /**
+   * Registra en el manifest el proceso lanzado: pid al instante, identidad
+   * (arranque y ejecutable) en cuanto la tabla de procesos la da, `session_id`
+   * cuando llega `init`. Si el proceso sale con error, guarda la cola de stderr.
+   */
+  private processRecorder(ctx: RunContext) {
+    const { run, store } = ctx
+    let current: Record<string, unknown> | null = null
+    const update = (patch: Record<string, unknown>) => {
+      if (!current) return
+      current = { ...current, ...patch }
+      store.mergeManifest(run.id, { provider_process: current })
+    }
+    return {
+      update,
+      spawned: (child: ChildProcess, o: SpawnOptions) => {
+        let stderrTail = ""
+        child.stderr?.on("data", (b: Buffer) => {
+          stderrTail = (stderrTail + b.toString("utf8")).slice(-8192)
+        })
+        child.once("exit", (code, signal) => {
+          if (code !== 0 && stderrTail)
+            ctx.record(
+              "provider.stderr",
+              `stderr:${run.id}:${ulid()}`,
+              { code, signal, tail: stderrTail },
+              null,
+            )
+        })
+        const pid = child.pid
+        if (pid === undefined) return
+        current = { pid, started_at: null, exe: null, cwd: o.cwd ?? null, command: o.command }
+        store.mergeManifest(run.id, { provider_process: current })
+        void this.processes
+          .get(pid)
+          .then((info) => {
+            if (info)
+              update({ started_at: info.startedAt, exe: info.exe, cwd: info.cwd ?? o.cwd ?? null })
+          })
+          .catch(() => undefined)
+      },
+    }
   }
 
   /** Modo de autenticación, entorno del hijo y binario, sin lanzar nada (ADR-0002: sin fallback silencioso). */
@@ -287,26 +372,4 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       }
     return { ok: true, env, binary }
   }
-}
-
-/** Busca el proceso `claude` hijo directo de este daemon con ese cwd (sólo nuestro subárbol; nunca por nombre global). */
-export function findChildProcess(
-  binary: string,
-  cwd: string,
-): { pid: number; cwd: string; argv0: string } | null {
-  if (!existsSync("/proc")) return null
-  for (const entry of readdirSync("/proc")) {
-    if (!/^\d+$/.test(entry)) continue
-    try {
-      const stat = readFileSync(`/proc/${entry}/stat`, "utf8")
-      const ppid = Number(stat.split(") ")[1]?.split(" ")[1])
-      if (ppid !== process.pid) continue
-      const cmd = readFileSync(`/proc/${entry}/cmdline`, "utf8").split("\0")
-      if (cmd[0] !== binary && cmd[1] !== binary) continue
-      const procCwd = readlinkSync(`/proc/${entry}/cwd`)
-      if (procCwd !== cwd) continue
-      return { pid: Number(entry), cwd: procCwd, argv0: cmd[0] ?? "" }
-    } catch {}
-  }
-  return null
 }
