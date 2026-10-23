@@ -62,4 +62,5 @@ test("rama, HEAD, upstream con adelanto y atraso, y archivos cambiados", async (
   const empty = join(base, "empty")
   sh(base, "init", "-q", "-b", "main", empty)
   expect(await repoStatus(empty)).toMatchObject({ branch: "main", head: null })
-})
+  // Tres repos, un clone y un fetch: en Windows pasa de los 5 s por defecto.
+}, 30_000)
