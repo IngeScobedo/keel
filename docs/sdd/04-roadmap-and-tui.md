@@ -136,29 +136,35 @@ Windows y POSIX sin presuponer resultados submilisegundo.
 
 ### Fase 1 · Sidecar, autenticación y telemetría — semanas 3–4
 
-- [ ] Supervisor de procesos de proveedor dentro del daemon (ADR-0003 §1: no hay
-      sidecar separado), cancelación y backpressure.
+- [x] Supervisor de procesos de proveedor dentro del daemon (ADR-0003 §1: no hay
+      sidecar separado), cancelación y backpressure. Keel lanza el proceso y
+      registra su identidad (`processes.ts`), aplica un tiempo máximo por run
+      (`max_wall_ms`) y clasifica cada final (`run-outcome.ts` de `@keel/core`).
+      El backpressure del IPC viene de la Fase 0 (ADR-0005 §4).
 - [ ] Adaptadores oficiales con matriz de capacidades y versiones; login
-      delegado al proveedor.
+      delegado al proveedor. Claude hecho, con capacidades medidas
+      (`ProviderCapabilities`). Codex espera a ADR-0008.
 - [ ] Verificar qué modos de cuenta/suscripción admite cada integración; API
-      facturada explícita.
-- [ ] Ingesta saneada, eventos desconocidos, labels y métricas de duración con
-      procedencia.
+      facturada explícita. Claude según ADR-0002. Los términos de OpenAI para el
+      login de ChatGPT los verifica el humano (ADR-0008 §1).
+- [x] Ingesta saneada, eventos desconocidos, labels y métricas de duración con
+      procedencia. Redacción best-effort con reglas versionadas en el borde
+      (`redaction.ts`, `RunContext.ingest`). Los `kind` desconocidos se guardan
+      íntegros. Labels de tool calls y duración del runtime (`duration_ms`)
+      separada del reloj del daemon (`wall_ms`).
 - [ ] Correlación con fixtures de Mirador: padres, workflows, utilitarios y
-      orphans visibles.
-- [ ] Permisos mínimos, límites de tiempo/tokens/concurrencia y presupuesto
-      antes de spawn.
+      orphans visibles. El oráculo de `@keel/core` pasa contra los fixtures de
+      Mirador; falta que el daemon proyecte con él las fuentes sin identidad
+      nativa (CLI y Codex).
+- [x] Permisos mínimos, límites de tiempo/tokens/concurrencia y presupuesto
+      antes de spawn. Herramientas de sólo lectura auto-aprobadas, el resto por
+      el gate. `limits.ts`: 1 run a la vez, 2 USD por run y 10 USD por día
+      estimados por defecto, que se suben con flags explícitos y se ven en
+      `daemon.health`.
 - [ ] Aislamiento desacoplado de git (deuda de la Fase 0, decidida el
-      2026-10-22). Una abstracción tipo `WorkspaceDriver` con dos drivers:
-      `GitWorktreeDriver`, el de hoy, y `DirectFsDriver` para carpetas sin VCS
-      (dotfiles, scratchpads, tareas sobre el SO). El rescate de este último no
-      depende de refs: usa un snapshot previo a la mutación. La UI indica cuando
-      el workspace opera sin control de versiones. `@keel/git` expone además
-      tools para el agente, como servidor MCP (ADR-0007 §6): inspeccionar el
-      entorno, inicializar un repo externo (p. ej. `~/dotfiles`), gestionar
-      symlinks y vincular el repo al proyecto en runtime. Desde ese momento los
-      runs siguientes pasan a `GitWorktreeDriver`. Requiere ADR antes de
-      implementarse.
+      2026-10-22). Propuesto en ADR-0010: `WorkspaceDriver` con
+      `GitWorktreeDriver` y `DirectFsDriver`, y las tools de `@keel/git` para el
+      agente por el puente MCP de ADR-0009.
 
 **DoD:** un agente autorizado consulta archivos reales de un worktree y emite
 eventos correlacionados. Fixtures redactados producen el oráculo esperado. Auth

@@ -8,15 +8,18 @@ Keel arranca su propia serie. Los ADRs de Mirador están en
 `../inherited/mirador/adr/` tal cual se escribieron y **no se editan aquí**:
 ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 
-| #                                                           | Título                                                                                          | Estado                            | Criticidad |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | --------------------------------- | ---------- |
-| [0001](./0001-keel-producto-nuevo-y-herencia-de-mirador.md) | Keel es producto nuevo; qué hereda de Mirador y qué no                                          | Propuesto                         | **Máxima** |
-| [0002](./0002-proveedores-autenticacion-y-costo.md)         | Proveedores vía SDK oficial, cero manejo de credenciales, costo etiquetado                      | Propuesto                         | **Máxima** |
-| [0003](./0003-runtime-del-daemon-typescript-primero.md)     | Runtime del daemon: TypeScript sobre Bun primero, Rust diferido tras el spike                   | Propuesto (condicionado al spike) | Alta       |
-| [0004](./0004-store-sqlite-wal.md)                          | Store: SQLite WAL local, envelope de Mirador conservado                                         | Propuesto                         | Alta       |
-| [0005](./0005-ipc-json-rpc-ndjson-sobre-socket-local.md)    | IPC: JSON-RPC 2.0 en NDJSON sobre socket Unix / Named Pipe; los clientes nunca escriben la base | Propuesto                         | Alta       |
-| [0006](./0006-vocabulario-de-estados.md)                    | Vocabulario de estados: tres niveles (tarea, run, nodo de ejecución) y proyección a tablero     | Propuesto (decisiones tomadas)    | **Máxima** |
-| [0007](./0007-keel-como-kit-librerias-reutilizables.md)     | Keel como kit: librerías reutilizables y el daemon como composición                             | Propuesto                         | Alta       |
+| #                                                           | Título                                                                                            | Estado                            | Criticidad |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------- | ---------- |
+| [0001](./0001-keel-producto-nuevo-y-herencia-de-mirador.md) | Keel es producto nuevo; qué hereda de Mirador y qué no                                            | Propuesto                         | **Máxima** |
+| [0002](./0002-proveedores-autenticacion-y-costo.md)         | Proveedores vía SDK oficial, cero manejo de credenciales, costo etiquetado                        | Propuesto                         | **Máxima** |
+| [0003](./0003-runtime-del-daemon-typescript-primero.md)     | Runtime del daemon: TypeScript sobre Bun primero, Rust diferido tras el spike                     | Propuesto (condicionado al spike) | Alta       |
+| [0004](./0004-store-sqlite-wal.md)                          | Store: SQLite WAL local, envelope de Mirador conservado                                           | Propuesto                         | Alta       |
+| [0005](./0005-ipc-json-rpc-ndjson-sobre-socket-local.md)    | IPC: JSON-RPC 2.0 en NDJSON sobre socket Unix / Named Pipe; los clientes nunca escriben la base   | Propuesto                         | Alta       |
+| [0006](./0006-vocabulario-de-estados.md)                    | Vocabulario de estados: tres niveles (tarea, run, nodo de ejecución) y proyección a tablero       | Propuesto (decisiones tomadas)    | **Máxima** |
+| [0007](./0007-keel-como-kit-librerias-reutilizables.md)     | Keel como kit: librerías reutilizables y el daemon como composición                               | Propuesto                         | Alta       |
+| [0008](./0008-adaptador-codex.md)                           | Adaptador de Codex: sólo api_key hasta verificar términos, seguridad por sandbox, costo en tokens | Propuesto                         | Alta       |
+| [0009](./0009-tools-mcp-y-actor-agente.md)                  | Tools de Keel para agentes por MCP y el actor `agent:<run_id>`                                    | Propuesto                         | **Máxima** |
+| [0010](./0010-workspace-driver-y-modo-sin-vcs.md)           | `WorkspaceDriver` y modo sin VCS                                                                  | Propuesto                         | Alta       |
 
 ## Estado «Propuesto»
 
@@ -30,15 +33,16 @@ escribe como si fuera a aceptarse, y se reescribe si no.
 
 ## Orden de lectura
 
-0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007. Los dos primeros son el porqué;
-0006 es lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son
-consecuencias; 0007 reparte el código en librerías reutilizables y producto.
+0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0008 → 0010. Los dos
+primeros son el porqué; 0006 es lo que bloquea el primer componente de UI; 0004,
+0005 y 0003 son consecuencias; 0007 reparte el código en librerías reutilizables
+y producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 
 - **Codex y suscripción de ChatGPT.** Mismo análisis que ADR-0002 para OpenAI;
   pendiente de verificar sus términos. Hasta entonces Codex entra sólo en modo
-  API key.
+  API key (ADR-0008 §1).
 - **Qué pasa con `collector`, `web` y `hook-bridge` de Mirador.** Quedan en su
   repo como archivo. Si Keel necesita un adaptador de hooks del CLI, se
   reescribe contra ADR-0005.
