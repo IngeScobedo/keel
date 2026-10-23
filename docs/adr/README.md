@@ -18,8 +18,8 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0006](./0006-vocabulario-de-estados.md)                    | Vocabulario de estados: tres niveles (tarea, run, nodo de ejecución) y proyección a tablero                          | Propuesto (decisiones tomadas)    | **Máxima** |
 | [0007](./0007-keel-como-kit-librerias-reutilizables.md)     | Keel como kit: librerías reutilizables y el daemon como composición                                                  | Propuesto                         | Alta       |
 | [0008](./0008-adaptador-codex.md)                           | Adaptador de Codex: transportes SDK y App Server, suscripción local con opción explícita, aprobaciones por capacidad | Propuesto                         | Alta       |
-| [0009](./0009-tools-mcp-y-actor-agente.md)                  | Tools de Keel para agentes por MCP y el actor `agent:<run_id>`                                                       | Propuesto                         | **Máxima** |
-| [0010](./0010-workspace-driver-y-modo-sin-vcs.md)           | `WorkspaceDriver` y modo sin VCS                                                                                     | Propuesto                         | Alta       |
+| [0009](./0009-tools-mcp-y-actor-agente.md)                  | Acceso de agentes a Keel por MCP e identidad de ejecución                                                            | Propuesto                         | **Máxima** |
+| [0010](./0010-workspace-driver-y-modo-sin-vcs.md)           | `WorkspaceDriver` y modo sin VCS                                                                                     | Aceptado (2026-10-22)             | Alta       |
 
 ## Estado «Propuesto»
 

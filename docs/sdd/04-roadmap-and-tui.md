@@ -162,7 +162,7 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       estimados por defecto, que se suben con flags explícitos y se ven en
       `daemon.health`.
 - [ ] Aislamiento desacoplado de git (deuda de la Fase 0, decidida el
-      2026-10-22). Propuesto en ADR-0010: `WorkspaceDriver` con
+      2026-10-22). Decidido en ADR-0010 (aceptado): `WorkspaceDriver` con
       `GitWorktreeDriver` y `DirectFsDriver`, y las tools de `@keel/git` para el
       agente por el puente MCP de ADR-0009.
 

@@ -1,6 +1,6 @@
 # ADR-0010: `WorkspaceDriver` y modo sin VCS
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (por el humano, 2026-10-22)
 - **Fecha:** 2026-10-23
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0007 §5 (`@keel/git`), ADR-0009 (tools por MCP), SDD 02

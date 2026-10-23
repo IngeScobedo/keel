@@ -1,7 +1,9 @@
 # ADR-0008: Adaptador de Codex
 
 - **Estado:** Propuesto (revisado con la investigación del humano; el transporte
-  App Server espera su spike)
+  App Server espera su spike). El humano confirmó el 2026-10-22 el límite del
+  login (§2), el uso local con su suscripción (§2) y el spike con su cuenta de
+  ChatGPT.
 - **Fecha:** 2026-10-23
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0002 (autenticación y costo), ADR-0003 §8 (la paridad de
@@ -86,15 +88,15 @@ acceso.
      `codex login --device-auth` si no hay navegador».
    - Keel no conduce el login: no usa `account/login/start` del App Server ni
      teclea en una terminal. Como mucho abre una terminal con el comando, y el
-     usuario la maneja (ADR-0002 §1).
+     usuario la maneja (ADR-0002 §1). Confirmado por el humano.
    - Un preflight correcto no garantiza la inferencia. Un `unauthorized` a mitad
      del run se clasifica como fallo de autenticación (`provider_login`), y no
      hay fallback a `api_key` ni al revés.
    - Habilitación: `subscription_session` va detrás de una opción explícita del
-     usuario, para uso local con su propia cuenta. Distribuir o comercializar
-     Keel con este modo exige que el humano anote aquí la verificación de
-     términos. Nunca una cuenta para varios usuarios, ni un Keel central que
-     ejecute con la sesión de otro.
+     usuario, para uso local con su propia cuenta (confirmado por el humano).
+     Distribuir o comercializar Keel con este modo exige que el humano anote
+     aquí la verificación de términos. Nunca una cuenta para varios usuarios, ni
+     un Keel central que ejecute con la sesión de otro.
 3. **Aprobaciones por capacidad.** `ProviderCapabilities.tool_approval` pasa a
    `approval.kinds` (`command`, `file_change`, `permissions`, `mcp_tool`),
    declarado por transporte.
@@ -159,8 +161,8 @@ acceso.
 ## Spike del App Server
 
 Decide si `app_server` entra y con qué capacidades. Cada prueba que corre un
-turno consume la cuenta del humano y se hace con su permiso. Lo que no requiere
-aprobaciones se repite con el transporte `sdk`.
+turno consume la cuenta del humano; dio permiso para correrlo con su cuenta de
+ChatGPT. Lo que no requiere aprobaciones se repite con el transporte `sdk`.
 
 | Prueba                | Criterio                                                                         |
 | --------------------- | -------------------------------------------------------------------------------- |
