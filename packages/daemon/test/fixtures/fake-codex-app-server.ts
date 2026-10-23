@@ -171,7 +171,9 @@ process.stdin.on("end", () => {
 function startTurn(msg: Json) {
   send({ id: msg.id, result: { turn: { id: TURN, status: "inProgress" } } })
   notify("turn/started", { threadId: THREAD, turn: { id: TURN, status: "inProgress" } })
-  const text = ((msg.params as Json).input as { text: string }[])[0]?.text ?? ""
+  const raw = ((msg.params as Json).input as { text: string }[])[0]?.text ?? ""
+  // El escenario es lo que pidió el humano, después del encabezado de Keel (ADR-0017 §1).
+  const text = raw.startsWith("[Keel]") ? raw.slice(raw.indexOf("\n\n") + 2) : raw
   return scenario(text)
 }
 

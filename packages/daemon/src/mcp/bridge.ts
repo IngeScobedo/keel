@@ -17,7 +17,7 @@ import { LifecycleSchema, RunPurposeSchema } from "@keel/core"
 import { z } from "zod"
 import { IpcClient } from "../ipc/client.js"
 import { agentDoorPath, defaultEndpoint } from "../ipc/endpoint.js"
-import { type McpTool, serveMcp } from "./stdio-server.js"
+import { type McpResources, type McpTool, serveMcp } from "./stdio-server.js"
 
 export const BRIDGE_VERSION = "0.2.0"
 
@@ -169,6 +169,16 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       (a) => client.call("git.plan_status", a),
     ),
     tool(
+      "context_search",
+      "Busca en el proyecto de Keel (tareas, notas, evidencia, investigaciones). Devuelve fragmentos y referencias keel:// que puedes leer como recurso; dice si la búsqueda es léxica.",
+      z.object({
+        query: z.string().min(1),
+        scopes: z.array(z.enum(["tasks", "notes", "evidence", "research"])).optional(),
+        limit: z.number().int().positive().max(50).optional(),
+      }),
+      (a) => client.call("context.search", a),
+    ),
+    tool(
       "run_request",
       "Pide que Keel arranque un run sobre una tarea (plan, execute o triage_eval). No lo arranca: un humano lo aprueba.",
       z.object({
@@ -180,6 +190,109 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       (a) => client.call("runs.request", { ...mutation(), ...a }),
     ),
   ]
+}
+
+type TaskDetail = {
+  item: { id: string; display_id: string; title: string; lifecycle: string }
+  spec_markdown: string
+  notes: { author: string; content_markdown: string; created_at: string }[]
+}
+
+/**
+ * Recursos MCP de ADR-0017: el contexto se pide. `keel://task/current` sale
+ * del vínculo (del run o del emparejamiento), nunca de suponer una tarea activa.
+ */
+export function keelResources(client: IpcClient, binding: () => Promise<Binding>): McpResources {
+  const task = async (id: string): Promise<string> => {
+    const d = await client.call<TaskDetail>("work_items.get", { work_item_id: id })
+    const ev = await client
+      .call<{
+        evidence: { kind: string; title: string | null; sha256: string; created_by: string }[]
+      }>("evidence.list", { work_item_id: id })
+      .catch(() => ({ evidence: [] }))
+    return [
+      `# ${d.item.display_id} · ${d.item.title}`,
+      `Estado: ${d.item.lifecycle} · id ${d.item.id}`,
+      "",
+      "## Especificación",
+      d.spec_markdown || "(sin especificación)",
+      "",
+      "## Notas",
+      ...(d.notes.length
+        ? d.notes.map((n) => `- ${n.author} (${n.created_at}): ${n.content_markdown}`)
+        : ["(sin notas)"]),
+      "",
+      "## Evidencia",
+      ...(ev.evidence.length
+        ? ev.evidence.map(
+            (e) =>
+              `- ${e.kind} · ${e.title ?? "sin título"} · sha256 ${e.sha256.slice(0, 16)} · ${e.created_by}`,
+          )
+        : ["(sin evidencia)"]),
+    ].join("\n")
+  }
+  return {
+    async list() {
+      const b = await binding()
+      return [
+        ...(b.work_item_id
+          ? [
+              {
+                uri: "keel://task/current",
+                name: "Tarea vinculada",
+                description: "La tarea de esta sesión: especificación, notas, evidencia y estado.",
+                mimeType: "text/markdown",
+              },
+            ]
+          : []),
+        {
+          uri: "keel://project/context",
+          name: "Contexto del proyecto",
+          description: "Documentos de always_read y la lista de ADRs del proyecto.",
+          mimeType: "text/markdown",
+        },
+      ]
+    },
+    templates: [
+      {
+        uriTemplate: "keel://task/{id}",
+        name: "Tarea",
+        description: "Una tarea del proyecto vinculado.",
+        mimeType: "text/markdown",
+      },
+    ],
+    async read(uri: string) {
+      const b = await binding()
+      if (uri === "keel://task/current") {
+        if (!b.work_item_id) throw new Error("esta sesión no tiene una tarea vinculada")
+        return { mimeType: "text/markdown", text: await task(b.work_item_id) }
+      }
+      const m = /^keel:\/\/task\/([0-9A-Z]{26})$/.exec(uri)
+      if (m) return { mimeType: "text/markdown", text: await task(m[1] as string) }
+      if (uri === "keel://project/context") {
+        const c = await client.call<{
+          root: string
+          always_read: { path: string; text: string; truncated: boolean }[]
+          adrs: { path: string; title: string }[]
+        }>("context.project", {})
+        return {
+          mimeType: "text/markdown",
+          text: [
+            `# Contexto del proyecto (${c.root})`,
+            "",
+            "## ADRs",
+            ...(c.adrs.length ? c.adrs.map((a) => `- ${a.path}: ${a.title}`) : ["(sin ADRs)"]),
+            ...c.always_read.flatMap((d) => [
+              "",
+              `## ${d.path}${d.truncated ? " (recortado)" : ""}`,
+              d.text,
+            ]),
+          ].join("\n"),
+        }
+      }
+      throw new Error(`recurso desconocido: ${uri}`)
+    },
+  }
 }
 
 /** Entrada de `keel mcp`. Devuelve cuando el agente cierra stdin. */
@@ -206,6 +319,7 @@ export async function runBridge(
       name: "keel",
       version: BRIDGE_VERSION,
       tools: keelTools(client, () => bound),
+      resources: keelResources(client, () => bound),
       ready: bound,
     })
   } else {
@@ -233,7 +347,12 @@ export async function runBridge(
         `El humano ${p.state === "rejected" ? "rechazó" : "cerró"} esta sesión en Keel.`,
       )
     }
-    await serveMcp({ name: "keel", version: BRIDGE_VERSION, tools: keelTools(client, current) })
+    await serveMcp({
+      name: "keel",
+      version: BRIDGE_VERSION,
+      tools: keelTools(client, current),
+      resources: keelResources(client, current),
+    })
   }
   client.close()
 }

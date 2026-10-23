@@ -56,6 +56,7 @@ import { ApprovalGate } from "./approvals.js"
 import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
+import { projectContext, searchContext } from "./context.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
 import {
   buildPlan,
@@ -1130,6 +1131,15 @@ export class Daemon {
           throw rpcError(ErrorCode.notFound, "el plan no existe")
         return { plan_id: a.id, ...this.gitPlanState(a.id, a.state, a.expires_at) }
       },
+      "context.search": (params, ctx) => {
+        const p = params as Params<"context.search">
+        return searchContext(this.store.db, this.scopeOf(ctx), p)
+      },
+      "context.project": (_params, ctx) => {
+        const pid = this.scopeOf(ctx)
+        const root = repo.projectRoot(pid) ?? this.rootPath
+        return { root, ...projectContext(root) }
+      },
       "permissions.rules_list": (params, ctx) => {
         requireHuman(ctx, "revisar las reglas de permiso")
         const p = params as Params<"permissions.rules_list">
@@ -1268,6 +1278,8 @@ export class Daemon {
             JSON.parse(current.context_manifest_json) as { budget_micro_usd?: number }
           ).budget_micro_usd
           const mcp_servers = this.keelMcpServer(current)
+          // ADR-0017 §1: el prompt lleva sólo un encabezado; el resto lo pide el agente.
+          if (Object.keys(mcp_servers).length > 0) prompt = `${promptHeader(item)}\n\n${prompt}`
           // ADR-0008 §7: el presupuesto en USD no aplica a Codex (sólo reporta tokens).
           this.runCwd.set(run.id, ws.cwd)
           const sandbox = useCodex ? null : await this.sandboxFor(run, ws.cwd)
@@ -2044,6 +2056,15 @@ function projectView(p: ReturnType<Repo["listProjects"]>[number]) {
   // Los proyectos de antes de ADR-0019 se llaman «default»: se muestra su carpeta.
   const name = p.name === "default" ? basename(p.root_path) || p.root_path : p.name
   return { id: p.id, name, root_path: p.root_path, vcs: p.vcs, last_opened_at: p.last_opened_at }
+}
+
+/** Encabezado corto del prompt (ADR-0017 §1): tarea, id y cómo pedir el contexto. */
+export function promptHeader(item: WorkItemRow): string {
+  return [
+    `[Keel] Tarea ${item.display_id} «${item.title}» (id ${item.id}).`,
+    "Su especificación, notas y evidencia están en el recurso keel://task/current;",
+    "el contexto del proyecto, en keel://project/context; busca lo demás con la tool context_search.",
+  ].join(" ")
 }
 
 function ruleView(r: PermissionRuleRow) {

@@ -122,6 +122,7 @@ describe("ADR-0009: puente keel mcp", () => {
       "git_diff",
       "git_propose",
       "git_plan_status",
+      "context_search",
       "run_request",
     ])
 
@@ -211,6 +212,43 @@ describe("ADR-0009: puente keel mcp", () => {
     )
       await Bun.sleep(10)
     expect(daemon.repo.getPairing(pairing?.id as string)?.state).toBe("closed")
+    human.close()
+  })
+
+  test("ADR-0017: el agente pide su contexto como recurso; sin vínculo no obtiene tarea", async () => {
+    const { daemon, item } = boot()
+    // Una sesión externa: hasta que el humano aprueba, no hay recurso de tarea.
+    const b = bridge({ KEEL_SOCKET: daemon.server.path, KEEL_CLIENT_NAME: "externa" })
+    const init = (await b.initialize()) as { result: { capabilities: { resources?: unknown } } }
+    expect(init.result.capabilities.resources).toBeDefined()
+    const before = await b.rpc("resources/read", { uri: "keel://task/current" })
+    expect(before.error?.message).toContain("no está aprobada")
+    const [pairing] = daemon.repo.listPairings("pending")
+    const human = await IpcClient.connect(daemon.server.path)
+    await human.call("notes.add", {
+      ...meta(),
+      work_item_id: item.id,
+      content_markdown: "ojo con el cuadre",
+    })
+    await human.call("session.pair_resolve", {
+      ...meta(),
+      pairing_id: pairing?.id,
+      decision: "approve",
+      work_item_id: item.id,
+    })
+    const list = (await b.rpc("resources/list")) as { result: { resources: { uri: string }[] } }
+    expect(list.result.resources.map((r) => r.uri)).toEqual([
+      "keel://task/current",
+      "keel://project/context",
+    ])
+    const read = (await b.rpc("resources/read", { uri: "keel://task/current" })) as {
+      result: { contents: { text: string; mimeType: string }[] }
+    }
+    const text = read.result.contents[0]?.text ?? ""
+    expect(text).toContain("tarea del run")
+    expect(text).toContain("ojo con el cuadre")
+    const found = await b.call("context_search", { query: "cuadre" })
+    expect(found.structuredContent).toMatchObject({ mode: "lexical" })
     human.close()
   })
 

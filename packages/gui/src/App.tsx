@@ -178,6 +178,24 @@ export function App() {
       setBusy(false)
     }
   }
+  // ADR-0017: con el daemon, la paleta busca también en notas y evidencia (FTS, léxico).
+  const [found, setFound] = useState<
+    { ref: string; kind: string; title: string; snippet: string }[]
+  >([])
+  const live = workspace.mode === "live"
+  const call = workspace.call
+  useEffect(() => {
+    if (!palette || !live || paletteQuery.trim().length < 2) {
+      setFound([])
+      return
+    }
+    const t = setTimeout(() => {
+      call("context.search", { query: paletteQuery, limit: 12 })
+        .then((r) => setFound(r.results.filter((x) => x.kind !== "task")))
+        .catch(() => setFound([]))
+    }, 200)
+    return () => clearTimeout(t)
+  }, [palette, live, call, paletteQuery])
   const commandTasks = workspace.work_items.filter((item) =>
     `${item.display_id} ${item.title}`.toLowerCase().includes(paletteQuery.toLowerCase()),
   )
@@ -515,7 +533,21 @@ export function App() {
                 {item.title}
               </button>
             ))}
-            {commandPages.length === 0 && commandTasks.length === 0 && <Hint>No results.</Hint>}
+            {found.length > 0 && <h3>NOTAS Y EVIDENCIA</h3>}
+            {found.map((r) => (
+              <button
+                type="button"
+                key={r.ref}
+                data-testid="palette-context"
+                onClick={() => setPalette(false)}
+              >
+                <span className="mono muted">{r.kind}</span>
+                <span className="palette-snippet">{r.snippet}</span>
+              </button>
+            ))}
+            {commandPages.length === 0 && commandTasks.length === 0 && found.length === 0 && (
+              <Hint>No results.</Hint>
+            )}
           </div>
         </Modal>
       )}

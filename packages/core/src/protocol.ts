@@ -643,6 +643,41 @@ export const Methods = {
       steps: z.array(z.object({ op: z.string(), state: z.string(), detail: z.unknown() })),
     }),
   },
+  /**
+   * ADR-0017 §2: búsqueda en el proyecto (tareas, notas, evidencia,
+   * investigaciones). Responde fragmentos y referencias, y dice su modo: sin
+   * embedder evaluado es `lexical`.
+   */
+  "context.search": {
+    params: z.object({
+      query: z.string().min(1).max(500),
+      scopes: z.array(z.enum(["tasks", "notes", "evidence", "research"])).optional(),
+      limit: z.number().int().positive().max(50).optional(),
+    }),
+    result: z.object({
+      mode: z.enum(["lexical", "hybrid"]),
+      results: z.array(
+        z.object({
+          ref: z.string(),
+          kind: z.string(),
+          title: z.string(),
+          snippet: z.string(),
+          rank: z.number(),
+        }),
+      ),
+    }),
+  },
+  /** ADR-0017 §1: `keel://project/context`, documentos de `always_read` y la lista de ADRs. */
+  "context.project": {
+    params: z.object({}),
+    result: z.object({
+      root: z.string(),
+      always_read: z.array(
+        z.object({ path: z.string(), text: z.string(), truncated: z.boolean() }),
+      ),
+      adrs: z.array(z.object({ path: z.string(), title: z.string() })),
+    }),
+  },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),
     result: z.object({ rules: z.array(PermissionRuleViewSchema) }),
@@ -744,6 +779,9 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "evidence.attach",
   "git.status",
   "git.diff",
+  "context.search",
+  "context.project",
+  "evidence.list",
   "git.propose",
   "git.plan_status",
 ]
@@ -757,6 +795,9 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "notes.add": "notes:write",
   "runs.request": "runs:request",
   "evidence.attach": "notes:write",
+  "context.search": "tasks:read",
+  "context.project": "tasks:read",
+  "evidence.list": "tasks:read",
 }
 
 /**

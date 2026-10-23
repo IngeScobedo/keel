@@ -250,7 +250,11 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         }
         break
       case "hook.UserPromptSubmit":
-        if (typeof p.prompt === "string" && !said.has(p.prompt))
+        // El proveedor ve el texto con el encabezado de Keel delante (ADR-0017 §1).
+        if (
+          typeof p.prompt === "string" &&
+          ![...said].some((t) => (p.prompt as string).endsWith(t))
+        )
           items.push({ kind: "prompt", key, text: p.prompt })
         break
       case "run.resume_skipped":

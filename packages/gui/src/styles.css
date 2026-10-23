@@ -2149,3 +2149,9 @@ progress::-moz-progress-bar {
   margin: 4px 0;
   padding-left: 16px;
 }
+.palette-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

@@ -1,7 +1,8 @@
 /**
  * Servidor MCP mínimo por stdio: JSON-RPC 2.0, un mensaje por línea. Cubre lo
  * que usa `keel mcp` (ADR-0009): `initialize`, `ping`, `tools/list` y
- * `tools/call`. Se escribe a mano para no sumar una dependencia sin ADR; esas
+ * `tools/call`, y los recursos de ADR-0017 (`resources/list`,
+ * `resources/templates/list`, `resources/read`). Se escribe a mano para no sumar una dependencia sin ADR; esas
  * primitivas son estables entre versiones de la especificación, así que se
  * acepta la versión que pida el cliente.
  */
@@ -14,10 +15,24 @@ export type McpTool = {
   call(args: Record<string, unknown>): Promise<unknown>
 }
 
+export type McpResource = { uri: string; name: string; description: string; mimeType: string }
+export type McpResourceTemplate = {
+  uriTemplate: string
+  name: string
+  description: string
+  mimeType: string
+}
+export type McpResources = {
+  list(): Promise<McpResource[]>
+  templates: McpResourceTemplate[]
+  read(uri: string): Promise<{ mimeType: string; text: string }>
+}
+
 export type McpServerOptions = {
   name: string
   version: string
   tools: McpTool[]
+  resources?: McpResources
   /** Se espera antes de responder `initialize`; si falla, el servidor responde error y sale. */
   ready?: Promise<unknown>
   input?: ReadableStream<Uint8Array>
@@ -53,7 +68,10 @@ export async function serveMcp(opts: McpServerOptions): Promise<void> {
         const asked = (m.params as { protocolVersion?: unknown } | undefined)?.protocolVersion
         reply({
           protocolVersion: typeof asked === "string" ? asked : FALLBACK_PROTOCOL,
-          capabilities: { tools: { listChanged: false } },
+          capabilities: {
+            tools: { listChanged: false },
+            ...(opts.resources ? { resources: { listChanged: false, subscribe: false } } : {}),
+          },
           serverInfo: { name: opts.name, version: opts.version },
         })
         return
@@ -70,6 +88,30 @@ export async function serveMcp(opts: McpServerOptions): Promise<void> {
           })),
         })
         return
+      case "resources/list":
+        if (!opts.resources) return fail(-32601, "sin recursos")
+        try {
+          reply({ resources: await opts.resources.list() })
+        } catch (e) {
+          fail(-32603, e instanceof Error ? e.message : String(e))
+        }
+        return
+      case "resources/templates/list":
+        if (!opts.resources) return fail(-32601, "sin recursos")
+        reply({ resourceTemplates: opts.resources.templates })
+        return
+      case "resources/read": {
+        if (!opts.resources) return fail(-32601, "sin recursos")
+        const uri = String((m.params as { uri?: unknown } | undefined)?.uri ?? "")
+        try {
+          const r = await opts.resources.read(uri)
+          reply({ contents: [{ uri, mimeType: r.mimeType, text: r.text }] })
+        } catch (e) {
+          // Recurso inexistente o sin permiso: error del protocolo (-32002 en MCP).
+          fail(-32002, e instanceof Error ? e.message : String(e))
+        }
+        return
+      }
       case "tools/call": {
         const p = (m.params ?? {}) as { name?: string; arguments?: Record<string, unknown> }
         const tool = p.name ? tools.get(p.name) : undefined

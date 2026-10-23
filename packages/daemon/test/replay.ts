@@ -100,7 +100,10 @@ export function hangingQuery(): QueryFn {
 
 /** El prompt inicial, venga como texto o como la entrada en streaming del adaptador. */
 export function firstPrompt(prompt: unknown): string {
-  return typeof prompt === "string" ? prompt : String((prompt as { first?: string }).first ?? "")
+  const raw =
+    typeof prompt === "string" ? prompt : String((prompt as { first?: string }).first ?? "")
+  // Sin el encabezado de Keel (ADR-0017 §1): lo que pidió el humano.
+  return raw.startsWith("[Keel]") ? raw.slice(raw.indexOf("\n\n") + 2) : raw
 }
 
 /** Un run que pide permiso por `canUseTool` y termina según la decisión. */
