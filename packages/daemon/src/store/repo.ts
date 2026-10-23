@@ -107,6 +107,38 @@ export type RunWorktreeRow = {
   access_mode: "read" | "write"
 }
 
+export type PairingRow = {
+  id: string
+  code: string
+  client_name: string
+  cwd: string | null
+  state: "pending" | "approved" | "rejected" | "closed"
+  project_id: string | null
+  work_item_id: string | null
+  scopes_json: string
+  created_at: string
+}
+
+export type RunRequestRow = {
+  id: string
+  project_id: string
+  work_item_id: string
+  purpose: RunPurpose
+  prompt: string | null
+  profile: string | null
+  reason: string
+  requested_by: string
+  requested_by_run: string | null
+  state: "pending" | "started" | "rejected"
+  run_id: string | null
+  created_at: string
+}
+
+const PAIRING_COLS =
+  "id, code, client_name, cwd, state, project_id, work_item_id, scopes_json, created_at"
+const RUN_REQUEST_COLS =
+  "id, project_id, work_item_id, purpose, prompt, profile, reason, requested_by, requested_by_run, state, run_id, created_at"
+
 export type NoteRow = {
   id: string
   work_item_id: string
@@ -238,6 +270,111 @@ export class Repo {
       )
       .all(workItemId, workItemId)
       .map((r) => r.id)
+  }
+
+  // --- emparejamiento de sesiones externas (ADR-0009 §4, migración 0003) -------------
+  createPairing(p: { code: string; client_name: string; cwd: string | null }): PairingRow {
+    const id = ulid()
+    this.db
+      .query("INSERT INTO session_pairings(id, code, client_name, cwd) VALUES (?,?,?,?)")
+      .run(id, p.code, p.client_name, p.cwd)
+    return this.getPairing(id) as PairingRow
+  }
+  getPairing(id: string): PairingRow | null {
+    return this.db
+      .query<PairingRow, [string]>(`SELECT ${PAIRING_COLS} FROM session_pairings WHERE id = ?`)
+      .get(id)
+  }
+  listPairings(state?: PairingRow["state"]): PairingRow[] {
+    return state
+      ? this.db
+          .query<PairingRow, [string]>(
+            `SELECT ${PAIRING_COLS} FROM session_pairings WHERE state = ? ORDER BY created_at, id`,
+          )
+          .all(state)
+      : this.db
+          .query<PairingRow, []>(
+            `SELECT ${PAIRING_COLS} FROM session_pairings ORDER BY created_at, id`,
+          )
+          .all()
+  }
+  /** Resuelve sólo una pendiente (compare-and-set); devuelve null si ya no lo estaba. */
+  resolvePairing(
+    id: string,
+    p: {
+      state: "approved" | "rejected"
+      project_id: string | null
+      work_item_id: string | null
+      scopes: readonly string[]
+      decided_by: string
+    },
+  ): PairingRow | null {
+    const changed = this.db
+      .query(
+        "UPDATE session_pairings SET state = ?, project_id = ?, work_item_id = ?, scopes_json = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND state = 'pending'",
+      )
+      .run(p.state, p.project_id, p.work_item_id, JSON.stringify(p.scopes), p.decided_by, id)
+    return changed.changes === 1 ? this.getPairing(id) : null
+  }
+  closePairing(id: string): void {
+    this.db
+      .query(
+        "UPDATE session_pairings SET state = 'closed', closed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND state IN ('pending', 'approved')",
+      )
+      .run(id)
+  }
+
+  // --- peticiones de run de agentes (ADR-0009 §5, migración 0003) --------------------
+  createRunRequest(
+    r: Omit<RunRequestRow, "id" | "state" | "run_id" | "created_at">,
+  ): RunRequestRow {
+    const id = ulid()
+    this.db
+      .query(
+        "INSERT INTO run_requests(id, project_id, work_item_id, purpose, prompt, profile, reason, requested_by, requested_by_run) VALUES (?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        r.project_id,
+        r.work_item_id,
+        r.purpose,
+        r.prompt,
+        r.profile,
+        r.reason,
+        r.requested_by,
+        r.requested_by_run,
+      )
+    return this.getRunRequest(id) as RunRequestRow
+  }
+  getRunRequest(id: string): RunRequestRow | null {
+    return this.db
+      .query<RunRequestRow, [string]>(`SELECT ${RUN_REQUEST_COLS} FROM run_requests WHERE id = ?`)
+      .get(id)
+  }
+  listRunRequests(projectId: string, state?: RunRequestRow["state"]): RunRequestRow[] {
+    return state
+      ? this.db
+          .query<RunRequestRow, [string, string]>(
+            `SELECT ${RUN_REQUEST_COLS} FROM run_requests WHERE project_id = ? AND state = ? ORDER BY created_at, id`,
+          )
+          .all(projectId, state)
+      : this.db
+          .query<RunRequestRow, [string]>(
+            `SELECT ${RUN_REQUEST_COLS} FROM run_requests WHERE project_id = ? ORDER BY created_at, id`,
+          )
+          .all(projectId)
+  }
+  /** Compare-and-set desde `pending`; null si ya estaba resuelta. */
+  resolveRunRequest(
+    id: string,
+    p: { state: "started" | "rejected"; run_id: string | null; decided_by: string },
+  ): RunRequestRow | null {
+    const changed = this.db
+      .query(
+        "UPDATE run_requests SET state = ?, run_id = ?, decided_by = ?, decided_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND state = 'pending'",
+      )
+      .run(p.state, p.run_id, p.decided_by, id)
+    return changed.changes === 1 ? this.getRunRequest(id) : null
   }
 
   // --- modo sin VCS (ADR-0010, migración 0002) --------------------------------------

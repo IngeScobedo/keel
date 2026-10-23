@@ -2,9 +2,12 @@
  * Cableado del daemon: store + bus + servidor IPC + adaptadores. Reconcilia
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
+import { randomBytes } from "node:crypto"
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import {
+  AGENT_SCOPES,
+  type AgentScope,
   allowedTransitions,
   checkTransition,
   ErrorCode,
@@ -37,6 +40,7 @@ import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
 import {
+  type ClientState,
   type Handler,
   type HandlerContext,
   type Handlers,
@@ -53,7 +57,14 @@ import {
 } from "./processes.js"
 import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
-import { type NoteRow, Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
+import {
+  type NoteRow,
+  type PairingRow,
+  Repo,
+  type RunRequestRow,
+  type RunRow,
+  type WorkItemRow,
+} from "./store/repo.js"
 import type { WorkspaceDriver } from "./workspace-driver.js"
 import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
 
@@ -159,6 +170,14 @@ export class Daemon {
       repo: this.repo,
       bus: this.bus,
       handlers: this.handlers(),
+      // El vínculo de una sesión externa dura lo que dura su conexión (ADR-0009 §4).
+      onClose: (client) => {
+        const actor = client.actor
+        if (actor && "pairing_id" in actor && actor.pairing_id) {
+          this.repo.closePairing(actor.pairing_id)
+          this.emitSystem("session.pairing_closed", null, { pairing_id: actor.pairing_id })
+        }
+      },
     })
   }
 
@@ -399,7 +418,13 @@ export class Daemon {
         const run = repo.getRun(binding.run_id)
         if (!run || !ACTIVE_RUN_STATUSES.includes(run.status))
           throw rpcError(ErrorCode.unauthorized, "el run del token ya terminó")
-        const actor = { actor_id: `agent:${binding.run_id}`, kind: "agent" as const, ...binding }
+        const actor = {
+          actor_id: `agent:${binding.run_id}`,
+          kind: "agent" as const,
+          ...binding,
+          scopes: AGENT_SCOPES,
+          pairing_id: null,
+        }
         ctx.client.actor = actor
         this.emitSystem("session.agent_bound", binding.run_id, {
           actor_id: actor.actor_id,
@@ -430,7 +455,10 @@ export class Daemon {
         const w = this.workItemIn(ctx, p.work_item_id)
         // Un agente sólo escribe en la tarea de su run (ADR-0009 §5).
         if (ctx.actor.kind === "agent" && w.id !== ctx.actor.work_item_id)
-          throw rpcError(ErrorCode.unauthorized, "un agente sólo añade notas a la tarea de su run")
+          throw rpcError(
+            ErrorCode.unauthorized,
+            "un agente sólo añade notas a la tarea que tiene vinculada",
+          )
         const note = noteView(
           repo.addNote({
             work_item_id: w.id,
@@ -451,13 +479,15 @@ export class Daemon {
               "handoffs.request es para agentes; un humano crea la tarea directamente",
             )
           this.scopeOf(ctx)
+          if (!actor.work_item_id)
+            throw rpcError(ErrorCode.unauthorized, "un handoff necesita una tarea vinculada")
           const origin = this.workItemIn(ctx, actor.work_item_id)
           const created = repo.createWorkItem({
             project_id: actor.project_id,
             title: p.title,
             kind: p.kind ?? "chore",
             source: "agent",
-            spec_markdown: `${p.summary_markdown}\n\n---\nHandoff desde ${origin.display_id} (run ${actor.run_id}).`,
+            spec_markdown: `${p.summary_markdown}\n\n---\nHandoff desde ${origin.display_id} (${actor.run_id ? `run ${actor.run_id}` : actor.actor_id}).`,
           })
           const workItem = repo.workItemView(created)
           const note = noteView(
@@ -493,62 +523,9 @@ export class Daemon {
           return repo.workItemView(updated)
         },
       ),
-      "runs.start": this.mutation<Params<"runs.start">>("runs.start", (p, uow) => {
-        const w = this.requireWorkItem(p.work_item_id)
-        if (p.expected_revision !== undefined && p.expected_revision !== w.revision)
-          throw rpcError(ErrorCode.conflict, "la tarea cambió desde la revisión esperada", {
-            expected_revision: p.expected_revision,
-            current_revision: w.revision,
-          })
-        if (repo.liveRunFor(w.id))
-          throw rpcError(ErrorCode.conflict, "la tarea ya tiene un run vivo")
-        // K-02: elegibilidad antes de crear o despachar nada.
-        const rule = RUN_START_RULES[p.purpose]
-        if (w.lifecycle !== rule.from)
-          throw rpcError(
-            ErrorCode.invalidTransition,
-            `un run ${p.purpose} arranca desde ${rule.from}; la tarea está ${w.lifecycle}`,
-            { lifecycle: w.lifecycle, purpose: p.purpose, required: rule.from },
-          )
-        const blocks = repo.openBlocks(w.id)
-        if (blocks.length > 0)
-          throw rpcError(ErrorCode.invalidTransition, "la tarea tiene bloqueos abiertos", {
-            blocks,
-          })
-        // ADR-0002 regla 3: concurrencia y presupuesto antes de crear nada.
-        const lim = checkRunStart(repo, this.limits, w)
-        if (!lim.ok)
-          throw rpcError(
-            ErrorCode.limitExceeded,
-            lim.message,
-            { limit: lim.limit, ...lim.details },
-            lim.retryable,
-          )
-        const provider = p.profile ?? "claude"
-        if (provider !== "claude" && provider !== "codex")
-          throw rpcError(
-            ErrorCode.invalidParams,
-            `perfil desconocido: ${provider} (claude | codex)`,
-          )
-        const run = repo.createRun({
-          project_id: project.project_id,
-          work_item_id: w.id,
-          purpose: p.purpose,
-          // Va en el manifest para que el despacho, aunque llegue tras una caída, use el
-          // mismo tope y el mismo proveedor.
-          manifest: { budget_micro_usd: lim.runBudgetMicroUsd, provider },
-        })
-        if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
-        const view = repo.runView(run)
-        uow.emit("run.created", run.id, view)
-        const prompt = p.prompt !== undefined && p.prompt.length > 0 ? p.prompt : w.title
-        // Despacho durable: si el daemon cae tras el commit, se entrega al arrancar.
-        uow.enqueue(RUN_DISPATCH, run.id, `${RUN_DISPATCH}:${run.id}`, {
-          run_id: run.id,
-          prompt,
-        } satisfies RunDispatch)
-        return view
-      }),
+      "runs.start": this.mutation<Params<"runs.start">>("runs.start", (p, uow) =>
+        this.startRunIn(uow, p),
+      ),
       "runs.cancel": this.mutation<Params<"runs.cancel">>("runs.cancel", (p, uow) => {
         const run = repo.getRun(p.run_id)
         if (!run) throw rpcError(ErrorCode.notFound, "run no existe")
@@ -574,6 +551,149 @@ export class Daemon {
         )
         return repo.runView(run)
       }),
+      "runs.request": this.mutation<Params<"runs.request">>("runs.request", (p, uow, ctx) => {
+        // Un agente pide; arrancar es del humano (ADR-0009 §5). Un humano usa runs.start.
+        const actor = ctx.actor
+        if (actor.kind !== "agent")
+          throw rpcError(
+            ErrorCode.unauthorized,
+            "runs.request es para agentes; un humano usa runs.start",
+          )
+        const w = this.workItemIn(ctx, p.work_item_id)
+        const request = repo.createRunRequest({
+          project_id: w.project_id,
+          work_item_id: w.id,
+          purpose: p.purpose,
+          prompt: p.prompt ?? null,
+          profile: p.profile ?? null,
+          reason: p.reason,
+          requested_by: actor.actor_id,
+          requested_by_run: actor.run_id,
+        })
+        const view = runRequestView(request)
+        uow.emit("run.requested", actor.run_id, { ...view, actor: actorOf(ctx) })
+        return view
+      }),
+      "runs.requests_list": (params, ctx) => {
+        requireHuman(ctx, "revisar las peticiones de run")
+        const p = params as Params<"runs.requests_list">
+        return {
+          requests: repo.listRunRequests(project.project_id, p.state).map(runRequestView),
+        }
+      },
+      "runs.request_resolve": this.mutation<Params<"runs.request_resolve">>(
+        "runs.request_resolve",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "resolver una petición de run")
+          const request = repo.getRunRequest(p.run_request_id)
+          if (!request || request.project_id !== project.project_id)
+            throw rpcError(ErrorCode.notFound, "la petición de run no existe")
+          if (request.state !== "pending")
+            throw rpcError(ErrorCode.conflict, `la petición ya está ${request.state}`)
+          if (p.decision === "reject") {
+            const done = repo.resolveRunRequest(request.id, {
+              state: "rejected",
+              run_id: null,
+              decided_by: uow.actorId,
+            }) as NonNullable<ReturnType<Repo["getRunRequest"]>>
+            const view = runRequestView(done)
+            uow.emit("run.request_resolved", request.requested_by_run, view)
+            return { request: view, run: null }
+          }
+          // Mismas reglas que runs.start; si no se cumplen, la petición sigue pendiente.
+          const run = this.startRunIn(uow, {
+            work_item_id: request.work_item_id,
+            purpose: request.purpose,
+            prompt: request.prompt ?? undefined,
+            profile: request.profile ?? undefined,
+          })
+          const done = repo.resolveRunRequest(request.id, {
+            state: "started",
+            run_id: run.id,
+            decided_by: uow.actorId,
+          }) as NonNullable<ReturnType<Repo["getRunRequest"]>>
+          const view = runRequestView(done)
+          uow.emit("run.request_resolved", request.requested_by_run, view)
+          return { request: view, run }
+        },
+      ),
+      "session.pair": (params, ctx) => {
+        // Un `keel mcp` sin token pide entrar (ADR-0009 §4). Desde aquí la conexión no es
+        // humana: sólo espera la decisión.
+        const p = params as Params<"session.pair">
+        if (ctx.client.actor)
+          throw rpcError(ErrorCode.conflict, "la conexión ya está vinculada o emparejándose")
+        const pairing = repo.createPairing({
+          code: pairingCode(),
+          client_name: p.client_name,
+          cwd: p.cwd ?? null,
+        })
+        ctx.client.actor = {
+          actor_id: `pairing:${pairing.id}`,
+          kind: "pending",
+          pairing_id: pairing.id,
+        }
+        const view = pairingView(pairing)
+        this.emitSystem("session.pairing_requested", null, view)
+        return view
+      },
+      "session.pair_status": (_params, ctx) => {
+        const actor = ctx.actor
+        const id = actor.kind === "pending" || actor.kind === "agent" ? actor.pairing_id : null
+        const pairing = id ? repo.getPairing(id) : null
+        if (!pairing) throw rpcError(ErrorCode.notFound, "esta conexión no tiene emparejamiento")
+        return pairingView(pairing)
+      },
+      "session.pairings_list": (params, ctx) => {
+        requireHuman(ctx, "revisar los emparejamientos")
+        const p = params as Params<"session.pairings_list">
+        return { pairings: repo.listPairings(p.state).map(pairingView) }
+      },
+      "session.pair_resolve": this.mutation<Params<"session.pair_resolve">>(
+        "session.pair_resolve",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "aprobar una sesión externa")
+          const pairing = repo.getPairing(p.pairing_id)
+          if (!pairing) throw rpcError(ErrorCode.notFound, "el emparejamiento no existe")
+          if (pairing.state !== "pending")
+            throw rpcError(ErrorCode.conflict, `el emparejamiento ya está ${pairing.state}`)
+          const client = this.pairingClient(pairing.id)
+          if (p.decision === "approve" && !client) {
+            repo.closePairing(pairing.id)
+            throw rpcError(ErrorCode.conflict, "la sesión se desconectó antes de aprobarla")
+          }
+          if (p.work_item_id !== undefined) {
+            const w = repo.getWorkItem(p.work_item_id)
+            if (!w || w.project_id !== project.project_id)
+              throw rpcError(ErrorCode.notFound, "work item no existe")
+          }
+          const scopes = p.scopes ?? [...AGENT_SCOPES]
+          const done = repo.resolvePairing(pairing.id, {
+            state: p.decision === "approve" ? "approved" : "rejected",
+            project_id: p.decision === "approve" ? project.project_id : null,
+            work_item_id: p.decision === "approve" ? (p.work_item_id ?? null) : null,
+            scopes: p.decision === "approve" ? scopes : [],
+            decided_by: uow.actorId,
+          }) as NonNullable<ReturnType<Repo["getPairing"]>>
+          const view = pairingView(done)
+          uow.emit("session.pairing_resolved", null, view)
+          if (client) {
+            if (p.decision === "approve")
+              client.actor = {
+                actor_id: `agent:ext:${pairing.id}`,
+                kind: "agent",
+                run_id: null,
+                project_id: project.project_id,
+                work_item_id: done.work_item_id,
+                scopes,
+                pairing_id: pairing.id,
+              }
+            // Rechazada: la conexión sigue `pending` y sólo puede leer su estado.
+            uow.afterCommit(() => this.server.notifyClient(client, "session.paired", view))
+          }
+          return view
+        },
+      ),
       "projects.set_vcs": this.mutation<Params<"projects.set_vcs">>(
         "projects.set_vcs",
         (p, uow, ctx) => {
@@ -741,11 +861,17 @@ export class Daemon {
   private scopeOf(ctx: HandlerContext, projectId?: string): string {
     const actor = ctx.actor
     if (actor.kind !== "agent") return projectId ?? this.project.project_id
-    const run = this.repo.getRun(actor.run_id)
-    if (!run || !ACTIVE_RUN_STATUSES.includes(run.status))
-      throw rpcError(ErrorCode.unauthorized, "el run del agente terminó; su capacidad caducó")
+    if (actor.run_id !== null) {
+      const run = this.repo.getRun(actor.run_id)
+      if (!run || !ACTIVE_RUN_STATUSES.includes(run.status))
+        throw rpcError(ErrorCode.unauthorized, "el run del agente terminó; su capacidad caducó")
+    } else if (this.repo.getPairing(actor.pairing_id ?? "")?.state !== "approved")
+      throw rpcError(ErrorCode.unauthorized, "el emparejamiento de la sesión ya no está vigente")
     if (projectId !== undefined && projectId !== actor.project_id)
-      throw rpcError(ErrorCode.unauthorized, "el agente sólo opera en el proyecto de su run")
+      throw rpcError(
+        ErrorCode.unauthorized,
+        "el agente sólo opera en el proyecto que tiene vinculado",
+      )
     return actor.project_id
   }
 
@@ -755,6 +881,83 @@ export class Daemon {
     const w = this.repo.getWorkItem(id)
     if (!w || w.project_id !== projectId) throw rpcError(ErrorCode.notFound, "work item no existe")
     return w
+  }
+
+  /**
+   * Arranca un run con las reglas de `runs.start`: elegibilidad, bloqueos y
+   * límites antes de crear nada (K-02, ADR-0002 regla 3). Lo usan `runs.start`
+   * y la aprobación de una petición de run (ADR-0009 §5).
+   */
+  private startRunIn(
+    uow: UnitOfWork,
+    p: {
+      work_item_id: string
+      purpose: Params<"runs.start">["purpose"]
+      prompt?: string | undefined
+      profile?: string | undefined
+      expected_revision?: number | undefined
+    },
+  ): ReturnType<Repo["runView"]> {
+    const repo = this.repo
+    const project = this.project
+    const w = this.requireWorkItem(p.work_item_id)
+    if (p.expected_revision !== undefined && p.expected_revision !== w.revision)
+      throw rpcError(ErrorCode.conflict, "la tarea cambió desde la revisión esperada", {
+        expected_revision: p.expected_revision,
+        current_revision: w.revision,
+      })
+    if (repo.liveRunFor(w.id)) throw rpcError(ErrorCode.conflict, "la tarea ya tiene un run vivo")
+    // K-02: elegibilidad antes de crear o despachar nada.
+    const rule = RUN_START_RULES[p.purpose]
+    if (w.lifecycle !== rule.from)
+      throw rpcError(
+        ErrorCode.invalidTransition,
+        `un run ${p.purpose} arranca desde ${rule.from}; la tarea está ${w.lifecycle}`,
+        { lifecycle: w.lifecycle, purpose: p.purpose, required: rule.from },
+      )
+    const blocks = repo.openBlocks(w.id)
+    if (blocks.length > 0)
+      throw rpcError(ErrorCode.invalidTransition, "la tarea tiene bloqueos abiertos", {
+        blocks,
+      })
+    // ADR-0002 regla 3: concurrencia y presupuesto antes de crear nada.
+    const lim = checkRunStart(repo, this.limits, w)
+    if (!lim.ok)
+      throw rpcError(
+        ErrorCode.limitExceeded,
+        lim.message,
+        { limit: lim.limit, ...lim.details },
+        lim.retryable,
+      )
+    const provider = p.profile ?? "claude"
+    if (provider !== "claude" && provider !== "codex")
+      throw rpcError(ErrorCode.invalidParams, `perfil desconocido: ${provider} (claude | codex)`)
+    const run = repo.createRun({
+      project_id: project.project_id,
+      work_item_id: w.id,
+      purpose: p.purpose,
+      // Va en el manifest para que el despacho, aunque llegue tras una caída, use el
+      // mismo tope y el mismo proveedor.
+      manifest: { budget_micro_usd: lim.runBudgetMicroUsd, provider },
+    })
+    if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
+    const view = repo.runView(run)
+    uow.emit("run.created", run.id, view)
+    const prompt = p.prompt !== undefined && p.prompt.length > 0 ? p.prompt : w.title
+    // Despacho durable: si el daemon cae tras el commit, se entrega al arrancar.
+    uow.enqueue(RUN_DISPATCH, run.id, `${RUN_DISPATCH}:${run.id}`, {
+      run_id: run.id,
+      prompt,
+    } satisfies RunDispatch)
+    return view
+  }
+
+  /** La conexión viva que pidió este emparejamiento, si sigue abierta. */
+  private pairingClient(pairingId: string): ClientState | null {
+    for (const c of this.server.clients)
+      if (c.actor && "pairing_id" in c.actor && c.actor.pairing_id === pairingId && !c.closed)
+        return c
+    return null
   }
 
   /** El driver de un run `execute` sale del proyecto; cada driver valida lo suyo. */
@@ -805,7 +1008,7 @@ export class Daemon {
     })
   }
 
-  private emitSystem(kind: string, runId: string, payload: unknown): void {
+  private emitSystem(kind: string, runId: string | null, payload: unknown): void {
     runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => uow.emit(kind, runId, payload))
   }
 
@@ -880,6 +1083,41 @@ function actorOf(ctx: HandlerContext): { id: string; kind: string } {
 /** El run del agente, para correlacionar el evento; null para humanos. */
 function agentRun(ctx: HandlerContext): string | null {
   return ctx.actor.kind === "agent" ? ctx.actor.run_id : null
+}
+
+/** Código corto que el humano compara entre la sesión del agente y la bandeja de Keel. */
+function pairingCode(): string {
+  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+  return [...randomBytes(6)].map((b) => alphabet[b % alphabet.length]).join("")
+}
+
+function pairingView(p: PairingRow) {
+  return {
+    id: p.id,
+    code: p.code,
+    client_name: p.client_name,
+    cwd: p.cwd,
+    state: p.state,
+    project_id: p.project_id,
+    work_item_id: p.work_item_id,
+    scopes: JSON.parse(p.scopes_json) as AgentScope[],
+    created_at: p.created_at,
+  }
+}
+
+function runRequestView(r: RunRequestRow) {
+  return {
+    id: r.id,
+    work_item_id: r.work_item_id,
+    purpose: r.purpose,
+    prompt: r.prompt,
+    profile: r.profile,
+    reason: r.reason,
+    requested_by: r.requested_by,
+    state: r.state,
+    run_id: r.run_id,
+    created_at: r.created_at,
+  }
 }
 
 function noteView(n: NoteRow) {

@@ -5,6 +5,11 @@
  *   bun packages/daemon/src/cli.ts run "prompt" [--purpose execute] [--profile claude|codex]
  *   bun packages/daemon/src/cli.ts tail                # eventos en vivo con visual_state
  *   bun packages/daemon/src/cli.ts approve <id> <hash> # o deny
+ *   bun packages/daemon/src/cli.ts pairings            # sesiones externas pendientes (ADR-0009 §4)
+ *   bun packages/daemon/src/cli.ts pair-approve <id> [--task <work_item_id>] [--scopes a,b]
+ *   bun packages/daemon/src/cli.ts pair-reject <id>
+ *   bun packages/daemon/src/cli.ts requests            # peticiones de run de agentes (ADR-0009 §5)
+ *   bun packages/daemon/src/cli.ts request-approve <id> # o request-reject
  */
 import { IpcClient } from "./ipc/client.js"
 import { defaultPaths } from "./main.js"
@@ -117,9 +122,66 @@ if (import.meta.main) {
       ),
     )
     client.close()
+  } else if (cmd === "pairings") {
+    const { pairings } = (await client.call("session.pairings_list", { state: "pending" })) as {
+      pairings: { id: string; code: string; client_name: string; cwd: string | null }[]
+    }
+    for (const p of pairings)
+      console.log(`${p.id}  código ${p.code}  ${p.client_name}  ${p.cwd ?? ""}`)
+    if (pairings.length === 0) console.log("no hay sesiones externas pendientes")
+    client.close()
+  } else if (cmd === "pair-approve" || cmd === "pair-reject") {
+    const flag = (name: string) => (rest.includes(name) ? rest[rest.indexOf(name) + 1] : undefined)
+    const task = flag("--task")
+    const scopes = flag("--scopes")
+    console.log(
+      JSON.stringify(
+        await client.call("session.pair_resolve", {
+          request_id: key(),
+          idempotency_key: key(),
+          pairing_id: rest[0],
+          decision: cmd === "pair-approve" ? "approve" : "reject",
+          ...(task ? { work_item_id: task } : {}),
+          ...(scopes ? { scopes: scopes.split(",") } : {}),
+        }),
+        null,
+        2,
+      ),
+    )
+    client.close()
+  } else if (cmd === "requests") {
+    const { requests } = (await client.call("runs.requests_list", { state: "pending" })) as {
+      requests: {
+        id: string
+        work_item_id: string
+        purpose: string
+        requested_by: string
+        reason: string
+      }[]
+    }
+    for (const r of requests)
+      console.log(
+        `${r.id}  ${r.purpose} sobre ${r.work_item_id}  por ${r.requested_by}: ${r.reason}`,
+      )
+    if (requests.length === 0) console.log("no hay peticiones de run pendientes")
+    client.close()
+  } else if (cmd === "request-approve" || cmd === "request-reject") {
+    console.log(
+      JSON.stringify(
+        await client.call("runs.request_resolve", {
+          request_id: key(),
+          idempotency_key: key(),
+          run_request_id: rest[0],
+          decision: cmd === "request-approve" ? "approve" : "reject",
+        }),
+        null,
+        2,
+      ),
+    )
+    client.close()
   } else {
     console.log(
-      "uso: health | tail | run <prompt> [--purpose plan|execute] [--profile claude|codex] | approve <id> <hash> | deny <id> <hash>",
+      "uso: health | tail | run <prompt> [--purpose plan|execute] [--profile claude|codex] | approve <id> <hash> | deny <id> <hash> | pairings | pair-approve <id> [--task id] [--scopes a,b] | pair-reject <id> | requests | request-approve <id> | request-reject <id>",
     )
     client.close()
   }

@@ -174,36 +174,17 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       modo sin VCS confirmado por el humano (`projects.set_vcs`) y la
       migración 0002. Falta: las tools de `@keel/git` para el agente, que van
       por el puente MCP de ADR-0009.
-- [ ] Tools de Keel para agentes por MCP (ADR-0009, aceptado). Hecho: el puente
+- [x] Tools de Keel para agentes por MCP (ADR-0009, aceptado). Hecho: el puente
       `keel mcp` (servidor MCP stdio propio, sin dependencia nueva), el actor
       `agent` por conexión, el token de un solo uso entregado por archivo y
       revocado al terminar el run, `AGENT_METHODS` con autoridad antes de la
       validación, y las tools `task_current`, `tasks_list`, `task_get`,
       `task_create`, `note_add` y `handoff_request`. El adaptador de Claude
       inyecta el puente con `strictMcpConfig` y `alwaysLoad` (sin `alwaysLoad`
-      el SDK arranca los servidores MCP sin bloquear). Falta: `runs.request`, el
-      emparejamiento de sesiones externas y una corrida real que confirme el
-      orden de arranque.
-
-**DoD:** un agente autorizado consulta archivos reales de un worktree y emite
-eventos correlacionados. Fixtures redactados producen el oráculo esperado. Auth
-expirada, proveedor sin capacidad, sidecar muerto y stream incompleto tienen
-salidas explícitas; no hay fallback de facturación silencioso ni tokens de login
-en los artefactos de prueba.
-
-**Estado del DoD (2026-10-23).**
-
-- Una corrida real de Claude leyó archivos de su worktree y emitió eventos
-  correlacionados ([evidencia](../reviews/2026-10-23-fase1-corrida-real.md)).
-- Auth expirada, proveedor sin capacidad, proceso muerto y stream incompleto
-  tienen salidas explícitas (`outcomes.test.ts`).
-- La redacción impide credenciales en los eventos (`redaction.test.ts` y el grep
-  de CI).
-- Falta el adaptador de Codex (ADR-0008) para la parte de «proveedor sin
-  capacidad» en un segundo proveedor.
-
-### Fase 2 · Reasoner, complexity gate y lanes — semanas 5–6
-
+      el SDK arranca los servidores MCP sin bloquear). Hecho también:
+      `runs.request` (el humano aprueba con las reglas de `runs.start`), el
+      emparejamiento de sesiones externas con código, tarea opcional y scopes, y
+      corridas reales con Claude (vínculo antes del primer turno) y Codex.
 - [ ] DAG validado y versionado, estimaciones, C1–C5, roles y scopes por repo.
 - [ ] C1–C2 con un worker; paralelismo superior justificado y acotado por
       presupuesto.

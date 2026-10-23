@@ -128,6 +128,33 @@ export const WorkItemViewSchema = z.object({
   board_status: z.string(),
   ...projected,
 })
+/** Lo que un agente externo puede hacer, por grupos de métodos (ADR-0009 §4). */
+export const AgentScopeSchema = z.enum(["tasks:read", "tasks:write", "notes:write", "runs:request"])
+export type AgentScope = z.infer<typeof AgentScopeSchema>
+export const AGENT_SCOPES: readonly AgentScope[] = AgentScopeSchema.options
+export const PairingViewSchema = z.object({
+  id: z.string(),
+  code: z.string(),
+  client_name: z.string(),
+  cwd: z.string().nullable(),
+  state: z.enum(["pending", "approved", "rejected", "closed"]),
+  project_id: z.string().nullable(),
+  work_item_id: z.string().nullable(),
+  scopes: z.array(AgentScopeSchema),
+  created_at: z.string(),
+})
+export const RunRequestViewSchema = z.object({
+  id: z.string(),
+  work_item_id: z.string(),
+  purpose: RunPurposeSchema,
+  prompt: z.string().nullable(),
+  profile: z.string().nullable(),
+  reason: z.string(),
+  requested_by: z.string(),
+  state: z.enum(["pending", "started", "rejected"]),
+  run_id: z.string().nullable(),
+  created_at: z.string(),
+})
 export const NoteViewSchema = z.object({
   id: z.string(),
   work_item_id: z.string(),
@@ -210,6 +237,48 @@ export const Methods = {
       kind: z.string().optional(),
     }),
     result: z.object({ note: NoteViewSchema, work_item: WorkItemViewSchema }),
+  },
+  "runs.request": {
+    params: MutationMeta.extend({
+      work_item_id: z.string(),
+      purpose: RunPurposeSchema,
+      prompt: z.string().optional(),
+      profile: z.string().optional(),
+      reason: z.string().min(1),
+    }),
+    result: RunRequestViewSchema,
+  },
+  "runs.requests_list": {
+    params: z.object({ state: z.enum(["pending", "started", "rejected"]).optional() }),
+    result: z.object({ requests: z.array(RunRequestViewSchema) }),
+  },
+  "runs.request_resolve": {
+    params: MutationMeta.extend({
+      run_request_id: z.string(),
+      decision: z.enum(["approve", "reject"]),
+    }),
+    result: z.object({ request: RunRequestViewSchema, run: RunViewSchema.nullable() }),
+  },
+  "session.pair": {
+    params: z.object({ client_name: z.string().min(1).max(120), cwd: z.string().optional() }),
+    result: PairingViewSchema,
+  },
+  "session.pair_status": {
+    params: z.object({}),
+    result: PairingViewSchema,
+  },
+  "session.pairings_list": {
+    params: z.object({ state: z.enum(["pending", "approved", "rejected", "closed"]).optional() }),
+    result: z.object({ pairings: z.array(PairingViewSchema) }),
+  },
+  "session.pair_resolve": {
+    params: MutationMeta.extend({
+      pairing_id: z.string(),
+      decision: z.enum(["approve", "reject"]),
+      work_item_id: z.string().optional(),
+      scopes: z.array(AgentScopeSchema).optional(),
+    }),
+    result: PairingViewSchema,
   },
   "projects.set_vcs": {
     params: MutationMeta.extend({
@@ -334,7 +403,25 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "work_items.create",
   "notes.add",
   "handoffs.request",
+  "runs.request",
+  "session.pair_status",
 ]
+
+/** El scope que exige cada método de agente; los demás no necesitan scope. */
+export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
+  "work_items.list": "tasks:read",
+  "work_items.get": "tasks:read",
+  "work_items.create": "tasks:write",
+  "handoffs.request": "tasks:write",
+  "notes.add": "notes:write",
+  "runs.request": "runs:request",
+}
+
+/**
+ * Una conexión que pidió `session.pair` y aún no tiene respuesta sólo puede
+ * esto (ADR-0009 §2): ni actúa como humano ni como agente.
+ */
+export const PENDING_METHODS: readonly MethodName[] = ["daemon.health", "session.pair_status"]
 export const ActorKindSchema = z.enum(["human", "agent", "system"])
 export type ActorKind = z.infer<typeof ActorKindSchema>
 export const METHOD_NAMES = Object.keys(Methods) as MethodName[]

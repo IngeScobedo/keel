@@ -12,6 +12,7 @@ import { userInfo } from "node:os"
 import { dirname } from "node:path"
 import {
   AGENT_METHODS,
+  type AgentScope,
   decodeFrame,
   ErrorCode,
   type EventNotification,
@@ -19,8 +20,10 @@ import {
   type Frame,
   failure,
   type JsonRpcId,
+  METHOD_SCOPE,
   type MethodName,
   notification,
+  PENDING_METHODS,
   type RpcError,
   success,
   validateParams,
@@ -37,7 +40,19 @@ import { LineDecoder, LineWriter } from "./framing.js"
  */
 export type Actor =
   | { actor_id: string; kind: "human" | "system" }
-  | { actor_id: string; kind: "agent"; run_id: string; project_id: string; work_item_id: string }
+  | {
+      actor_id: string
+      kind: "agent"
+      /** null para una sesión externa emparejada (ADR-0009 §4). */
+      run_id: string | null
+      project_id: string
+      /** La tarea vinculada; una sesión externa puede no tener. */
+      work_item_id: string | null
+      scopes: readonly AgentScope[]
+      pairing_id: string | null
+    }
+  /** Pidió `session.pair` y espera al humano: sólo `PENDING_METHODS`. */
+  | { actor_id: string; kind: "pending"; pairing_id: string }
 export type HandlerContext = { actor: Actor; client: ClientState }
 export type Handler = (params: unknown, ctx: HandlerContext) => Promise<unknown> | unknown
 export type Handlers = Partial<Record<MethodName, Handler>>
@@ -70,6 +85,8 @@ export type IpcServerOptions = {
   bus: EventBus
   handlers: Handlers
   actorId?: string
+  /** Al cerrarse una conexión (p. ej., para cerrar su emparejamiento). */
+  onClose?: (state: ClientState) => void
 }
 
 export class IpcServer {
@@ -143,6 +160,11 @@ export class IpcServer {
     for (const s of state.subscriptions.values()) s.unsubscribe()
     state.subscriptions.clear()
     this.clients.delete(state)
+    try {
+      this.opts.onClose?.(state)
+    } catch (e) {
+      console.error("keel: onClose de una conexión falló", e)
+    }
   }
 
   /** Escritura con cola: si el socket no drena, acumula hasta el tope y luego corta (backpressure, ADR-0005 §4). */
@@ -235,14 +257,29 @@ export class IpcServer {
     return h(params, ctx)
   }
 
-  /** Un actor `agent` sólo usa `AGENT_METHODS` (ADR-0009 §5); el resto se comprueba en cada handler. */
+  /**
+   * Un actor `agent` sólo usa `AGENT_METHODS` y lo que sus scopes permiten
+   * (ADR-0009 §5); uno `pending`, sólo `PENDING_METHODS`. El resto se
+   * comprueba en cada handler, recurso por recurso.
+   */
   private authorize(method: string, state: ClientState): void {
-    if (state.actor?.kind === "agent" && !(AGENT_METHODS as readonly string[]).includes(method))
-      throw new RpcFailure({
-        code: ErrorCode.unauthorized,
-        message: `un agente no puede usar ${method} (ADR-0009 §5)`,
-        retryable: false,
-      })
+    const actor = state.actor
+    const deny = (message: string) => {
+      throw new RpcFailure({ code: ErrorCode.unauthorized, message, retryable: false })
+    }
+    if (actor?.kind === "pending" && !(PENDING_METHODS as readonly string[]).includes(method))
+      deny(`la sesión espera la aprobación del humano; no puede usar ${method} (ADR-0009 §4)`)
+    if (actor?.kind !== "agent") return
+    if (!(AGENT_METHODS as readonly string[]).includes(method))
+      deny(`un agente no puede usar ${method} (ADR-0009 §5)`)
+    const scope = METHOD_SCOPE[method as MethodName]
+    if (scope && !actor.scopes.includes(scope))
+      deny(`la sesión no tiene el scope ${scope} para ${method}`)
+  }
+
+  /** Notificación a una sola conexión (p. ej., `session.paired`). */
+  notifyClient(state: ClientState, method: string, params: unknown): void {
+    if (!state.closed) this.send(state, notification(method, params))
   }
 
   /** Snapshot + replay desde el cursor + stream en vivo (ADR-0005 §4). */

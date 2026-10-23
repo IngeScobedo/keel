@@ -61,6 +61,8 @@ protocolo; diagnósticos saneados van por stderr.
 | `session.bind_agent`                                            | Vincula la conexión a un run con su token de un solo uso (ADR-0009).   |
 | `work_items.list`, `work_items.get`, `notes.add`                | Lectura y notas; para un agente, sólo en el proyecto y tarea del run.  |
 | `handoffs.request`                                              | Un agente deja nota en su tarea y crea otra en `triage` (ADR-0009).    |
+| `runs.request`, `runs.requests_list`, `runs.request_resolve`    | El agente pide un run; el humano lo aprueba con las reglas de inicio.  |
+| `session.pair`, `session.pair_status`, `session.pair_resolve`   | Sesión externa: pide entrar, espera y el humano aprueba con scopes.    |
 | `projects.set_vcs`, `snapshots.restore`                         | Modo sin VCS confirmado y restauración, sólo humanos (ADR-0010).       |
 
 Los comandos de mutación llevan `request_id`, `idempotency_key` y revisión
@@ -71,8 +73,10 @@ no duplica sus efectos.
 
 Una conexión vinculada con `session.bind_agent` es del actor `agent` y sólo usa
 `AGENT_METHODS` de `@keel/core`; la autoridad se comprueba antes de validar los
-parámetros y otra vez por recurso en cada handler (ADR-0009 §5). Los esquemas
-Zod de los métodos viven en `packages/core/src/protocol.ts`.
+parámetros y otra vez por recurso en cada handler (ADR-0009 §5). Una sesión
+externa emparejada es `agent:ext:<id>` con los scopes que aprobó el humano
+(`METHOD_SCOPE`); mientras espera es `pending` y sólo usa `PENDING_METHODS`. Los
+esquemas Zod de los métodos viven en `packages/core/src/protocol.ts`.
 
 La transacción guarda cambio, Activity y mensaje en `outbox`. La entrega es al
 menos una vez; receptores deduplican por clave estable. Snapshot + cursor

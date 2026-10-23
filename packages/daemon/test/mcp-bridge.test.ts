@@ -117,6 +117,7 @@ describe("ADR-0009: puente keel mcp", () => {
       "task_create",
       "note_add",
       "handoff_request",
+      "run_request",
     ])
 
     const current = (await b.call("task_current")).structuredContent as {
@@ -169,13 +170,43 @@ describe("ADR-0009: puente keel mcp", () => {
     expect(await second.proc.exited).toBe(1)
   })
 
-  test("sin token, el puente falla cerrado", async () => {
-    const { daemon } = boot()
-    const b = bridge({ KEEL_SOCKET: daemon.server.path })
-    expect(await b.proc.exited).toBe(2)
-    expect(await new Response(b.proc.stderr as ReadableStream).text()).toContain(
-      "KEEL_RUN_TOKEN_FILE",
+  test("sin token, el puente pide emparejamiento y no sirve nada hasta que el humano aprueba", async () => {
+    const { daemon, item } = boot()
+    const b = bridge({ KEEL_SOCKET: daemon.server.path, KEEL_CLIENT_NAME: "claude-code a mano" })
+    // responde initialize en el acto: el agente debe poder decirle al humano qué aprobar
+    await b.initialize()
+    const pending = await b.call("task_current")
+    expect(pending.isError).toBe(true)
+    const [pairing] = daemon.repo.listPairings("pending")
+    expect(pairing?.client_name).toBe("claude-code a mano")
+    expect(pending.content[0]?.text).toContain(pairing?.code as string)
+
+    const human = await IpcClient.connect(daemon.server.path)
+    await human.call("session.pair_resolve", {
+      ...meta(),
+      pairing_id: pairing?.id,
+      decision: "approve",
+      work_item_id: item.id,
+    })
+    const current = (await b.call("task_current")).structuredContent as { item: { id: string } }
+    expect(current.item.id).toBe(item.id)
+    const note = (await b.call("note_add", { content_markdown: "desde fuera" }))
+      .structuredContent as {
+      author: string
+    }
+    expect(note.author).toBe(`agent:ext:${pairing?.id}`)
+
+    // el vínculo dura lo que dura la conexión
+    b.proc.stdin.end()
+    await b.proc.exited
+    for (
+      let i = 0;
+      i < 50 && daemon.repo.getPairing(pairing?.id as string)?.state !== "closed";
+      i++
     )
+      await Bun.sleep(10)
+    expect(daemon.repo.getPairing(pairing?.id as string)?.state).toBe("closed")
+    human.close()
   })
 
   test("el actor agent sólo pide lo suyo y su capacidad caduca con el run", async () => {
@@ -195,7 +226,7 @@ describe("ADR-0009: puente keel mcp", () => {
 
     await expect(
       client.call("notes.add", { ...meta(), work_item_id: other.id, content_markdown: "x" }),
-    ).rejects.toThrow("sólo añade notas a la tarea de su run")
+    ).rejects.toThrow("sólo añade notas a la tarea que tiene vinculada")
     await expect(client.call("work_items.list", { project_id: "otro-proyecto" })).rejects.toThrow(
       "sólo opera en el proyecto",
     )
