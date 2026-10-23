@@ -4,6 +4,7 @@ import {
   createCorrelator,
   encodeUlid,
   type HookLine,
+  toolCallLabel,
   ulidTime,
 } from "../src/index.ts"
 
@@ -659,6 +660,29 @@ describe("F1/F2/F3: reglas de la revision externa", () => {
     cases.forEach(([, , expected], i) => {
       expect(byId.get(`t${i}`)).toBe(expected)
     })
+  })
+})
+
+describe("etiquetas de rutas (corrida real de la Fase 1, 2026-10-23)", () => {
+  const wt =
+    "/tmp/claude-1000/scratchpad/real-run/state/keel/worktrees/01M5K6/repo/KEEL-1/01M5K6WVY8/root"
+  test("con el cwd del run, la ruta se muestra relativa al worktree", () => {
+    expect(toolCallLabel("Read", { file_path: `${wt}/src/calc.ts` }, wt)).toBe("src/calc.ts")
+    expect(toolCallLabel("Edit", { file_path: `${wt}/README.md` }, `${wt}/`)).toBe("README.md")
+    expect(toolCallLabel("Read", { file_path: "C:\\w\\root\\src\\a.ts" }, "C:\\w\\root")).toBe(
+      "src\\a.ts",
+    )
+  })
+  test("una ruta larga fuera del cwd conserva el final, no el principio", () => {
+    const label = toolCallLabel("Read", {
+      file_path: `${wt}/src/muy/profundo/archivo-con-nombre-largo.ts`,
+    })
+    expect(label?.length).toBe(120)
+    expect(label?.startsWith("…")).toBe(true)
+    expect(label?.endsWith("archivo-con-nombre-largo.ts")).toBe(true)
+  })
+  test("un prefijo que no es un directorio no se recorta", () => {
+    expect(toolCallLabel("Read", { file_path: `${wt}-otro/x.ts` }, wt)).toBe(`${wt}-otro/x.ts`)
   })
 })
 

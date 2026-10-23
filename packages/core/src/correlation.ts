@@ -284,15 +284,23 @@ type TaskInternal = {
 
 type WfInfo = { taskId: string | null; parentAgentId: string | null }
 
-/** Etiqueta legible de un tool call a partir de tool_input (hallazgo A de la revision). */
+const LABEL_MAX = 120
+
+/**
+ * Etiqueta legible de un tool call a partir de tool_input (hallazgo A de la revision).
+ * Con `cwd`, las rutas dentro de él se muestran relativas; una ruta larga se recorta
+ * por el principio para no perder el archivo (corrida real de la Fase 1, 2026-10-23).
+ */
 export function toolCallLabel(
   toolName: string | null,
   input: Record<string, unknown> | null,
+  cwd: string | null = null,
 ): string | null {
   if (input === null) return null
   const str = (k: string): string | null =>
     typeof input[k] === "string" ? (input[k] as string) : null
   let label: string | null
+  let isPath = false
   switch (toolName) {
     case "Bash":
       label = str("description") ?? str("command")
@@ -301,9 +309,11 @@ export function toolCallLabel(
     case "Edit":
     case "Write":
       label = str("file_path")
+      isPath = true
       break
     case "NotebookEdit":
       label = str("notebook_path")
+      isPath = true
       break
     case "Grep":
     case "Glob":
@@ -321,7 +331,21 @@ export function toolCallLabel(
     default:
       label = str("description") ?? str("file_path") ?? str("pattern") ?? str("query")
   }
-  return label === null ? null : label.slice(0, 120)
+  if (label === null) return null
+  if (isPath) {
+    const rel = relativeTo(label, cwd)
+    return rel.length <= LABEL_MAX ? rel : `…${rel.slice(-(LABEL_MAX - 1))}`
+  }
+  return label.slice(0, LABEL_MAX)
+}
+
+/** Ruta relativa a `cwd` si está dentro; si no, la ruta tal cual. Sin I/O: sólo texto. */
+function relativeTo(path: string, cwd: string | null): string {
+  if (!cwd) return path
+  const base = cwd.replace(/[\\/]+$/, "")
+  if (path.length > base.length && path.startsWith(base) && /[\\/]/.test(path[base.length] ?? ""))
+    return path.slice(base.length + 1)
+  return path
 }
 
 function agentKey(runId: string, agentId: string): string {

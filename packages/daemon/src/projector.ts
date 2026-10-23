@@ -27,6 +27,8 @@ export type ProjectorContext = {
   provider: "claude"
   /** id del agente raíz en `agent_instances` */
   rootAgentId: string
+  /** Directorio de trabajo del run: las etiquetas de rutas se muestran relativas a él. */
+  cwd?: string | null
 }
 
 /** Estado en memoria por run: qué tool_use pertenece a qué agente, y session_id. */
@@ -188,7 +190,9 @@ export class RunProjector {
       this.toolUseOwner.set(toolUse, agentId)
       const toolName = String(input.tool_name ?? "?")
       const inputJson = input.tool_input === undefined ? null : JSON.stringify(input.tool_input)
-      const label = toolCallLabel(toolName, (input.tool_input as Json) ?? null) ?? toolName
+      const label =
+        toolCallLabel(toolName, (input.tool_input as Json) ?? null, this.ctx.cwd ?? null) ??
+        toolName
       const row = this.ctx.store.openToolCall({
         run_id: this.ctx.run.id,
         agent_id: agentId,

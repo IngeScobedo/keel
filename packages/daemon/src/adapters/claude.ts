@@ -189,6 +189,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       run,
       provider: "claude",
       rootAgentId: `${run.id}:root`,
+      cwd: profile.cwd,
     })
     const abort = new AbortController()
     this.running.set(run.id, abort)
