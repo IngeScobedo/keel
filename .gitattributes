@@ -1,0 +1,4 @@
+# Finales de línea LF en todas las plataformas. Las migraciones se identifican
+# por checksum del archivo y el DDL se compara con el SDD byte a byte: un
+# checkout con CRLF (core.autocrlf en Windows) los cambiaría (medido 2026-10-23).
+* text=auto eol=lf
