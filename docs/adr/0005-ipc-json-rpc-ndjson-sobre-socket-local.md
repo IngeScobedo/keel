@@ -18,10 +18,11 @@ en otra máquina por SSH.
 ## Decisión
 
 1. **Transporte:** socket Unix en `$XDG_RUNTIME_DIR/keel/keel.sock` (fallback
-   por plataforma), directorio `0700`, socket `0600`; en Windows, Named Pipe
-   `\\.\pipe\keel-daemon-<usuario>` con ACL del usuario. Bind local siempre
-   (hereda ADR-0004 de Mirador §5). Acceso remoto = túnel SSH al socket, nunca
-   un puerto TCP expuesto.
+   por plataforma), directorio `0700`, socket `0600`. En Windows, socket AF_UNIX
+   en `%LOCALAPPDATA%\keel\keel.sock`, con la ACL del usuario heredada del
+   perfil; no se usa Named Pipe (revisión del 2026-10-23, abajo). Bind local
+   siempre (hereda ADR-0004 de Mirador §5). Acceso remoto = túnel SSH al socket,
+   nunca un puerto TCP expuesto.
 2. **Framing:** una línea JSON UTF-8 por mensaje (NDJSON). Límite de frame 8
    MiB; lo que no cabe va como artefacto con hash, tamaño y preview (coherente
    con ADR-0004 §3).
@@ -45,7 +46,7 @@ en otra máquina por SSH.
    no de un campo del mensaje. Un agente nunca puede fabricar un actor humano
    (SDD 01 §3, «cierre humano»).
 
-## Revisión propuesta del punto 1 en Windows (2026-10-23, pendiente de decisión)
+## Revisión del punto 1 en Windows (2026-10-23, decidida por el humano)
 
 Medido en Windows 11 (10.0.26200) con Bun 1.4.4 y el daemon real:
 
@@ -62,13 +63,14 @@ Medido en Windows 11 (10.0.26200) con Bun 1.4.4 y el daemon real:
   mutación p50 1.02 frente a 1.01 ms
   ([docs/benchmarks](../benchmarks/README.md)).
 
-Propuesta: en Windows, socket AF_UNIX en `%LOCALAPPDATA%\keel\` en lugar del
-Named Pipe. El resto del punto 1 no cambia. Consecuencia: el shell de Tauri
-necesita un cliente AF_UNIX para Windows, porque `tokio::net::UnixStream` sólo
-existe en Unix; hoy usa el cliente de Named Pipe. La alternativa que conserva el
-pipe exige crearlo con `SECURITY_ATTRIBUTES` propios fuera de Bun (FFI o un
-binario nativo) y que el daemon lo integre en su bucle. Hasta que el humano
-decida, el daemon sigue usando el Named Pipe en Windows y no cumple este punto.
+Decisión del humano (2026-10-23): en Windows, socket AF_UNIX en
+`%LOCALAPPDATA%\keel\` en lugar del Named Pipe. El resto del punto 1 no cambia.
+Consecuencia: el shell de Tauri necesita un cliente AF_UNIX para Windows, porque
+`tokio::net::UnixStream` sólo existe en Unix; hoy usa el cliente de Named Pipe.
+La alternativa que conserva el pipe exige crearlo con `SECURITY_ATTRIBUTES`
+propios fuera de Bun (FFI o un binario nativo) y que el daemon lo integre en su
+bucle. El estado del ADR sigue en Propuesto: la aceptación del conjunto es del
+humano.
 
 ## Consecuencias
 

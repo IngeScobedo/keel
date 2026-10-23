@@ -16,11 +16,14 @@ describe("ADR-0005 §1: endpoint por plataforma", () => {
     )
   })
 
-  test("Windows: Named Pipe por usuario, con el nombre saneado", () => {
-    const pipe = defaultEndpoint({ platform: "win32", env: {}, user: "Ana María" })
-    expect(pipe).toBe("\\\\.\\pipe\\keel-daemon-Ana_Mar_a")
-    expect(isNamedPipe(pipe)).toBe(true)
-    expect(isNamedPipe("/run/user/1000/keel/keel.sock")).toBe(false)
+  test("Windows: AF_UNIX bajo LOCALAPPDATA, no Named Pipe (ADR-0005 §1, revisión 2026-10-23)", () => {
+    const sock = defaultEndpoint({
+      platform: "win32",
+      env: { LOCALAPPDATA: "C:/Users/a/AppData/Local" },
+    })
+    expect(sock).toBe(join("C:/Users/a/AppData/Local", "keel", "keel.sock"))
+    expect(isNamedPipe(sock)).toBe(false)
+    expect(isNamedPipe("\\\\.\\pipe\\keel-x")).toBe(true)
   })
 
   test("worktrees: XDG_STATE_HOME en POSIX y LOCALAPPDATA en Windows", () => {
