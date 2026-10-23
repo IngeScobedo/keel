@@ -1,6 +1,6 @@
 # ADR-0004: Store — SQLite WAL local; el envelope de Mirador se conserva
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-08
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0001 (adopta 0002 de Mirador salvo su sección «El

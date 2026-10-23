@@ -1,6 +1,6 @@
 # ADR-0001: Keel es producto nuevo; qué hereda de Mirador y qué no
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-08
 - **Criticidad:** Máxima — define el alcance de todo lo demás
 - **Relacionados:** ADRs de Mirador en `../inherited/mirador/adr/`; SDD 01–04 en

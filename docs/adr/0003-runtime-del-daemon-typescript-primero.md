@@ -1,7 +1,8 @@
 # ADR-0003: Runtime del daemon — TypeScript sobre Bun; Rust sólo por disparador medido
 
-- **Estado:** Propuesto. La dirección está decidida por el humano (2026-10-09);
-  el estado lo cambia él. Condiciones resueltas y pendientes en «Evidencia».
+- **Estado:** Aceptado (2026-10-23). Las condiciones que siguen pendientes en
+  «Evidencia» (macOS, PTY en Windows, 50,000 eventos) se miden cuando lleguen;
+  un disparador cumplido abre un ADR que supersede a este.
 - **Fecha:** 2026-10-08 (propuesto), 2026-10-09 (revisado con el spike)
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0001, ADR-0002 (modo de autenticación), ADR-0004,

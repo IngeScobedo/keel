@@ -1,6 +1,6 @@
 # ADR-0002: Proveedores vía SDK oficial, cero manejo de credenciales y costo etiquetado
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-08
 - **Criticidad:** Máxima — es lo que mantiene a Keel y a sus usuarios dentro de
   los términos

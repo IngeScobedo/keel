@@ -1,6 +1,6 @@
 # ADR-0005: IPC — JSON-RPC 2.0 en NDJSON sobre socket Unix / Named Pipe; los clientes nunca escriben la base
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-08
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0003 (esta frontera es lo que lo hace reversible),

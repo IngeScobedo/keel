@@ -1,9 +1,7 @@
 # ADR-0006: Vocabulario de estados — tres niveles y una proyección a tablero
 
-- **Estado:** Propuesto. Las tres decisiones de la sección «Decisiones del
-  humano» están tomadas (2026-10-09) y aplicadas al SDD 03 y al canvas; el
-  cambio a Aceptado lo hace el humano cuando dé por resueltos los pendientes de
-  «Condiciones».
+- **Estado:** Aceptado (2026-10-23). Las decisiones de la sección «Decisiones
+  del humano» son del 2026-10-09 y están aplicadas al SDD 03 y al canvas.
 - **Fecha:** 2026-10-08 (propuesto), 2026-10-09 (decisiones aplicadas)
 - **Criticidad:** Máxima — bloquea `StateBadge`, `StatusDot`, el tablero y la
   máquina de estados

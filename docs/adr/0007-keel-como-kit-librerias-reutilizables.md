@@ -1,6 +1,7 @@
 # ADR-0007: Keel como kit — librerías reutilizables y el daemon como composición
 
-- **Estado:** Propuesto (revisado 2026-10-22 con los comentarios del humano)
+- **Estado:** Aceptado (2026-10-23); revisado el 2026-10-22 con los comentarios
+  del humano
 - **Fecha:** 2026-10-22
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0001 (`@keel/core` sin I/O), ADR-0003 (lenguajes y
