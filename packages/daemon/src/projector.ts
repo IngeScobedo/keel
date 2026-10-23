@@ -7,8 +7,13 @@
  * es de un subagente; su `parent_tool_use_id` es el bloque `tool_use` `Agent`
  * del mensaje padre, y el `agent_id` de ese mensaje (o null = root) es el padre.
  */
-import type { NodeState, RunStatus } from "@keel/core"
-import { toolCallLabel } from "@keel/core"
+import {
+  classifyRunOutcome,
+  type NodeState,
+  type RunOutcome,
+  type RunSignals,
+  toolCallLabel,
+} from "@keel/core"
 import type { ProjectionStore } from "./adapters/provider.js"
 import { nowIso } from "./ids.js"
 import { inlineOrPreview } from "./payload.js"
@@ -30,6 +35,8 @@ export class RunProjector {
   sessionId: string | null = null
   model: string | null = null
   private rootCreated = false
+  /** Señales para clasificar el final (run-outcome de @keel/core). */
+  private readonly signals: RunSignals = {}
 
   readonly ctx: ProjectorContext
   constructor(ctx: ProjectorContext) {
@@ -76,6 +83,8 @@ export class RunProjector {
       return { run: { status: "running" }, agent: this.ctx.rootAgentId }
     }
     if (type === "assistant") {
+      // `error` lo pone el SDK cuando el turno falló contra la API (authentication_failed, rate_limit…).
+      if (typeof m.error === "string") this.signals.providerError = m.error
       const sdkAgent = typeof m.agent_id === "string" ? m.agent_id : null
       const parentToolUse = typeof m.parent_tool_use_id === "string" ? m.parent_tool_use_id : null
       const agentId = this.agentRowId(sdkAgent)
@@ -111,24 +120,19 @@ export class RunProjector {
       return { agent: agentId }
     }
     if (type === "result") {
+      // Uso y costo; el estado del run lo decide `finish` con todas las señales.
+      this.signals.result = {
+        subtype: String(m.subtype ?? ""),
+        is_error: m.is_error === true || (typeof m.subtype === "string" && m.subtype !== "success"),
+        errors: Array.isArray(m.errors) ? (m.errors as unknown[]).map(String) : [],
+        startup_failure_reason:
+          typeof m.startup_failure_reason === "string" ? m.startup_failure_reason : null,
+        terminal_reason: typeof m.terminal_reason === "string" ? m.terminal_reason : null,
+      }
       const usage = (m.usage as Json | undefined) ?? {}
       const cost =
         typeof m.total_cost_usd === "number" ? Math.round(m.total_cost_usd * 1_000_000) : null
-      const isError =
-        m.is_error === true || (typeof m.subtype === "string" && m.subtype !== "success")
-      const status: RunStatus = isError
-        ? m.subtype === "error_max_budget_usd"
-          ? "budget_exceeded"
-          : "failed"
-        : "completed"
       const patch: Partial<RunRow> = {
-        status,
-        end_reason: isError
-          ? m.subtype === "error_max_budget_usd"
-            ? "budget_exceeded"
-            : "fatal_error"
-          : "completed",
-        ended_at: t,
         input_tokens:
           num(usage.input_tokens) +
           num(usage.cache_read_input_tokens) +
@@ -139,9 +143,7 @@ export class RunProjector {
         cost_kind: cost === null ? "unknown" : "estimated",
       }
       this.ctx.store.updateRun(this.ctx.run.id, patch)
-      this.ctx.store.setAgentState(this.ctx.rootAgentId, isError ? "failed" : "succeeded", t)
-      const orphans = this.closeOpenToolCalls("orphan", t)
-      return { run: patch, agent: this.ctx.rootAgentId, toolCalls: orphans }
+      return { run: patch }
     }
     return {}
   }
@@ -226,6 +228,7 @@ export class RunProjector {
       return { agent: agentId, toolCalls: row ? [row.id] : [] }
     }
     if (name === "StopFailure") {
+      if (typeof input.error === "string") this.signals.stopFailure = input.error
       this.ctx.store.setAgentState(
         agentId,
         "interrupted",
@@ -238,23 +241,47 @@ export class RunProjector {
     return {}
   }
 
-  /** Cancelación (FINDINGS §1: el SDK no manda `result` tras abort): el daemon sintetiza. */
-  onCancelled(
-    reason: "cancelled" | "interrupted",
-    message: string | null,
-  ): { run: Partial<RunRow>; toolCalls: string[] } {
+  /**
+   * Cierra el run con todas las señales: las que vio el proyector (result,
+   * errores del proveedor, StopFailure) más las del adaptador (abortado, proceso,
+   * excepción). Un único punto decide `status` y `end_reason` (run-outcome.ts).
+   * Si el SDK no manda `result` tras abortar (FINDINGS §1), el daemon sintetiza.
+   */
+  finish(
+    extra: RunSignals,
+    message: string | null = null,
+  ): {
+    run: Partial<RunRow>
+    outcome: RunOutcome
+    signals: RunSignals
+    agent: string
+    toolCalls: string[]
+  } {
     const t = nowIso()
+    const signals = { ...this.signals, ...extra }
+    const outcome = classifyRunOutcome(signals)
     const patch: Partial<RunRow> = {
-      status: reason,
-      end_reason: reason === "cancelled" ? "cancelled" : "interrupted",
+      status: outcome.status,
+      end_reason: outcome.end_reason,
       ended_at: t,
     }
     this.ctx.store.updateRun(this.ctx.run.id, patch)
-    for (const a of this.ctx.store.agentsOfRun(this.ctx.run.id))
-      if (["running", "waiting_human", "pending"].includes(a.state))
-        this.ctx.store.setAgentState(a.id, reason, t, message)
-    const closed = this.closeOpenToolCalls(reason, t)
-    return { run: patch, toolCalls: closed }
+    const stopped: "cancelled" | "interrupted" | null =
+      outcome.status === "cancelled" || outcome.status === "interrupted" ? outcome.status : null
+    if (stopped) {
+      for (const a of this.ctx.store.agentsOfRun(this.ctx.run.id))
+        if (["running", "waiting_human", "pending"].includes(a.state))
+          this.ctx.store.setAgentState(a.id, stopped, t, message)
+    } else {
+      this.ctx.store.setAgentState(
+        this.ctx.rootAgentId,
+        outcome.status === "completed" ? "succeeded" : "failed",
+        t,
+        outcome.status === "completed" ? null : (outcome.provider_error ?? message),
+      )
+    }
+    const toolCalls = this.closeOpenToolCalls(stopped ?? "orphan", t)
+    return { run: patch, outcome, signals, agent: this.ctx.rootAgentId, toolCalls }
   }
 
   private closeOpenToolCalls(state: NodeState, t: string): string[] {

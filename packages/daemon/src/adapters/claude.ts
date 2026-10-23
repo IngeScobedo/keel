@@ -29,7 +29,6 @@ import type {
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
-import { isLive } from "@keel/core"
 import { nowIso, ulid } from "../ids.js"
 import { defaultProcessTable, type ProcessTable } from "../processes.js"
 import { RunProjector } from "../projector.js"
@@ -48,6 +47,8 @@ export type ClaudeProfile = {
   max_turns: number
   /** ms que el daemon espera una decisión humana antes de denegar (SDD 02 §9). */
   approval_timeout_ms: number
+  /** Tiempo máximo de reloj de un run; al vencer, Keel lo aborta (`end_reason: timeout`). */
+  max_wall_ms: number
   cwd: string
 }
 
@@ -57,6 +58,8 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   allowed_tools: ["Read", "Glob", "Grep"],
   max_turns: 12,
   approval_timeout_ms: 60_000,
+  // Default bajo (ADR-0002 regla 3): subirlo es una decisión explícita del perfil.
+  max_wall_ms: 30 * 60_000,
   cwd: process.cwd(),
 }
 
@@ -142,6 +145,8 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     cancel_emits_result: false,
   }
   private readonly running = new Map<string, AbortController>()
+  /** Por qué abortó Keel un run: lo canceló el humano o venció su tiempo máximo. */
+  private readonly abortCause = new Map<string, "cancelled" | "timeout">()
   private readonly deps: ClaudeAdapterDeps
   private readonly processes: ProcessTable
   constructor(deps: ClaudeAdapterDeps = {}) {
@@ -156,6 +161,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
   cancel(runId: string, reason: string | null): boolean {
     const abort = this.running.get(runId)
     if (!abort) return false
+    this.abortCause.set(runId, "cancelled")
     abort.abort(reason ?? "cancelled")
     return true
   }
@@ -263,6 +269,12 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     ctx.notifyRun()
 
     const queryFn = this.deps.queryFn ?? ((a) => sdkQuery(a))
+    // Supervisor: tiempo máximo de reloj. Abortar pasa por el mismo camino que cancelar.
+    const deadline = setTimeout(() => {
+      this.abortCause.set(run.id, "timeout")
+      abort.abort("timeout")
+    }, profile.max_wall_ms)
+    let thrown: string | null = null
     try {
       for await (const message of queryFn({ prompt, options })) {
         const m = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
@@ -274,26 +286,44 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
         if (changed.run) ctx.notifyRun()
         notifyProjection(key, changed)
       }
-      const final = store.getRun(run.id)
-      if (final && isLive(final.status)) {
-        // El stream terminó sin `result`: no inventar éxito.
-        projector.onCancelled("interrupted", "el stream del SDK terminó sin mensaje result")
-        ctx.notifyRun()
-      }
     } catch (e) {
-      const aborted = abort.signal.aborted
-      const msg = e instanceof Error ? e.message : String(e)
-      const changed = projector.onCancelled(aborted ? "cancelled" : "interrupted", msg)
+      thrown = e instanceof Error ? e.message : String(e)
+    } finally {
+      clearTimeout(deadline)
+    }
+    // Un único punto decide cómo terminó (run-outcome de @keel/core). La salida del
+    // proceso puede llegar justo después del fin del stream: se espera un momento.
+    const exit = await launched.exited(2_000)
+    const cause = abort.signal.aborted ? (this.abortCause.get(run.id) ?? "cancelled") : null
+    const end = projector.finish(
+      { aborted: cause, thrown, exit, authMode: profile.auth_mode },
+      thrown,
+    )
+    this.running.delete(run.id)
+    this.abortCause.delete(run.id)
+    store.mergeManifest(run.id, { outcome: end.outcome })
+    if (end.outcome.status !== "completed" && end.outcome.status !== "cancelled")
       ctx.record(
-        aborted ? "run.cancelled" : "run.interrupted",
-        `end:${run.id}`,
-        { message: msg, tool_calls: changed.toolCalls },
+        "run.failure",
+        `failure:${run.id}`,
+        {
+          ...end.outcome,
+          message: thrown,
+          provider_errors: end.signals.result?.errors ?? [],
+          terminal_reason: end.signals.result?.terminal_reason ?? null,
+          exit,
+        },
         null,
       )
-      ctx.notifyRun()
-    } finally {
-      this.running.delete(run.id)
-    }
+    if (cause === "cancelled")
+      ctx.record(
+        "run.cancelled",
+        `end:${run.id}`,
+        { message: thrown, tool_calls: end.toolCalls },
+        null,
+      )
+    ctx.notifyRun()
+    notifyProjection(`end:${run.id}`, { agent: end.agent, toolCalls: end.toolCalls })
     return store.getRun(run.id) as RunRow
   }
 
@@ -305,6 +335,8 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
   private processRecorder(ctx: RunContext) {
     const { run, store } = ctx
     let current: Record<string, unknown> | null = null
+    let child: ChildProcess | null = null
+    let exitInfo: { code: number | null; signal: string | null } | null = null
     const update = (patch: Record<string, unknown>) => {
       if (!current) return
       current = { ...current, ...patch }
@@ -312,12 +344,26 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     }
     return {
       update,
-      spawned: (child: ChildProcess, o: SpawnOptions) => {
+      /** Salida del proceso, esperando hasta `ms` si aún no salió; null si nunca se lanzó. */
+      exited: (ms: number): Promise<{ code: number | null; signal: string | null } | null> => {
+        const c = child
+        if (exitInfo || !c) return Promise.resolve(exitInfo)
+        return new Promise((ok) => {
+          const t = setTimeout(() => ok(exitInfo), ms)
+          c.once("exit", () => {
+            clearTimeout(t)
+            ok(exitInfo)
+          })
+        })
+      },
+      spawned: (spawnedChild: ChildProcess, o: SpawnOptions) => {
+        child = spawnedChild
         let stderrTail = ""
-        child.stderr?.on("data", (b: Buffer) => {
+        spawnedChild.stderr?.on("data", (b: Buffer) => {
           stderrTail = (stderrTail + b.toString("utf8")).slice(-8192)
         })
-        child.once("exit", (code, signal) => {
+        spawnedChild.once("exit", (code, signal) => {
+          exitInfo = { code, signal }
           if (code !== 0 && stderrTail)
             ctx.record(
               "provider.stderr",
@@ -326,7 +372,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
               null,
             )
         })
-        const pid = child.pid
+        const pid = spawnedChild.pid
         if (pid === undefined) return
         current = { pid, started_at: null, exe: null, cwd: o.cwd ?? null, command: o.command }
         store.mergeManifest(run.id, { provider_process: current })
