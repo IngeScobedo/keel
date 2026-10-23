@@ -94,5 +94,7 @@ plataformas:
   `C:\Users\<usuario>\.local\bin\claude.exe` (Claude Code 2.1.302, comprobado
   con `--version`).
 
-Pendiente: el cliente AF_UNIX del shell de Tauri para Windows está escrito
-(`uds_windows`), pero no compilado, porque no hay toolchain de Rust.
+El cliente AF_UNIX del shell de Tauri (`uds_windows`) está compilado y probado
+en Windows: `cargo test` habla con el daemon real y comprueba UTF-8 partido. En
+Linux el shell no compila todavía en este WSL, porque faltan las librerías de
+GTK y WebKit.

@@ -131,8 +131,8 @@ Windows y POSIX sin presuponer resultados submilisegundo.
   `processes.test.ts`.
 - Los 162 tests pasan en Linux (WSL2) y en Windows 11.
 - Las latencias de ambos están en [docs/benchmarks](../benchmarks/README.md).
-- Queda compilar el cliente AF_UNIX del shell de Tauri en Windows, que no es
-  parte de este DoD.
+- El shell de Tauri compila y su transporte pasa `cargo test` contra el daemon
+  real en Windows. En Linux falta instalar GTK y WebKit en el entorno.
 
 ### Fase 1 · Sidecar, autenticación y telemetría — semanas 3–4
 
