@@ -118,15 +118,17 @@ export type QueryFn = (args: {
 /**
  * Entrada del run en modo streaming (ADR-0019 §3): el primer turno es el prompt
  * y el humano puede añadir mensajes mientras el agente trabaja. Se cierra en
- * cuanto cada mensaje enviado tiene su `result` y no queda nada en cola; así
- * el run termina como antes cuando nadie escribe.
+ * cuanto llega un `result` y no queda nada sin entregar; así el run termina
+ * como antes cuando nadie escribe.
+ *
+ * No se cuenta un `result` por mensaje: Claude Code mete en el turno en curso
+ * lo que llega mientras trabaja y responde con un solo `result` (corrida real
+ * del 2026-10-23). Lo ya entregado lo procesa aunque la entrada se cierre.
  */
 export class TurnInput implements AsyncIterable<SDKUserMessage> {
   private readonly pending: string[] = []
   private waiter: ((r: IteratorResult<SDKUserMessage>) => void) | null = null
   private closed = false
-  private sent = 0
-  private results = 0
   /** El prompt con el que arranca el run. */
   readonly first: string
   constructor(first: string) {
@@ -142,15 +144,13 @@ export class TurnInput implements AsyncIterable<SDKUserMessage> {
     if (this.waiter) {
       const w = this.waiter
       this.waiter = null
-      this.sent++
       w({ done: false, value: userMessage(text) })
     } else this.pending.push(text)
     return true
   }
-  /** Un turno terminó; si no queda nada por contestar, la entrada se cierra. */
+  /** Un turno terminó; si no queda nada por entregar, la entrada se cierra. */
   onResult(): void {
-    this.results++
-    if (this.results >= this.sent && this.pending.length === 0) this.close()
+    if (this.pending.length === 0) this.close()
   }
   close(): void {
     this.closed = true
@@ -162,10 +162,7 @@ export class TurnInput implements AsyncIterable<SDKUserMessage> {
     return {
       next: () => {
         const text = this.pending.shift()
-        if (text !== undefined) {
-          this.sent++
-          return Promise.resolve({ done: false, value: userMessage(text) })
-        }
+        if (text !== undefined) return Promise.resolve({ done: false, value: userMessage(text) })
         if (this.closed) return Promise.resolve({ done: true, value: undefined })
         return new Promise((resolve) => {
           this.waiter = resolve

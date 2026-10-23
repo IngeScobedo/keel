@@ -37,7 +37,7 @@ type Seen = { options: Options[]; inputs: (string | null)[] }
  * qué le llegó. Si `waitForMore`, tras el primer turno espera otro mensaje antes
  * de cerrar el primer resultado, como cuando el humano escribe mientras trabaja.
  */
-function talking(seen: Seen, waitForMore: boolean): QueryFn {
+function talking(seen: Seen, waitForMore: boolean | "merged"): QueryFn {
   let turn = 0
   return ({ prompt, options }) =>
     (async function* () {
@@ -67,7 +67,14 @@ function talking(seen: Seen, waitForMore: boolean): QueryFn {
       const first = textOf(await it.next())
       seen.inputs.push(first)
       for (const m of reply(first, 1)) yield m as never
-      if (waitForMore) {
+      if (waitForMore === "merged") {
+        // Como Claude Code real: lo que llega durante el turno entra en él y hay un
+        // solo `result` para los dos mensajes.
+        const second = textOf(await it.next())
+        seen.inputs.push(second)
+        for (const m of reply(second, 2)) yield m as never
+        yield result(1)
+      } else if (waitForMore) {
         const second = textOf(await it.next())
         seen.inputs.push(second)
         yield result(1)
@@ -156,6 +163,23 @@ describe("ADR-0019 §3: conversación con Claude", () => {
     await expect(
       human.call("runs.message", { ...meta(), run_id: run.id, text: "otra" }),
     ).rejects.toThrow("runs.continue")
+  })
+
+  test("si el mensaje entra en el turno en curso, un solo result cierra el run (Claude Code real)", async () => {
+    const seen: Seen = { options: [], inputs: [] }
+    const { daemon, human, task, kinds, until } = await boot(talking(seen, "merged"))
+    const w = await task(false)
+    const run = (await human.call("runs.start", {
+      ...meta(),
+      work_item_id: w.id,
+      purpose: "plan",
+      prompt: "lee",
+    })) as { id: string }
+    await until(() => kinds(run.id).includes("sdk.assistant"))
+    await human.call("runs.message", { ...meta(), run_id: run.id, text: "y cuenta líneas" })
+    await daemon.idle()
+    expect(seen.inputs).toEqual(["lee", "y cuenta líneas", null])
+    expect(daemon.repo.getRun(run.id)?.status).toBe("completed")
   })
 
   test("continuar un plan crea un run hijo que retoma la sesión con las mismas opciones", async () => {
