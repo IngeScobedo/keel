@@ -107,6 +107,28 @@ export type RunWorktreeRow = {
   access_mode: "read" | "write"
 }
 
+export type RunSnapshotRow = {
+  id: string
+  project_id: string
+  run_id: string
+  root_path: string
+  snapshot_dir: string
+  manifest_sha256: string
+  file_count: number
+  total_bytes: number
+  released_at: string | null
+  restored_at: string | null
+}
+
+export type ProjectVcs = {
+  vcs: "git" | "none"
+  vcs_none_confirmed_at: string | null
+  vcs_none_confirmed_by: string | null
+}
+
+const SNAPSHOT_COLS =
+  "id, project_id, run_id, root_path, snapshot_dir, manifest_sha256, file_count, total_bytes, released_at, restored_at"
+
 export class Repo {
   readonly db: Database
   constructor(db: Database) {
@@ -197,14 +219,91 @@ export class Repo {
   setWorktreeHead(id: string, headSha: string): void {
     this.db.query("UPDATE run_worktrees SET head_sha = ? WHERE id = ?").run(headSha, id)
   }
-  /** Runs de la tarea que tienen worktrees registrados, del más reciente al más antiguo. */
-  runsWithWorktrees(workItemId: string): string[] {
+  /** Runs de la tarea con worktree o snapshot registrado, del más reciente al más antiguo. */
+  runsWithWorkspaces(workItemId: string): string[] {
     return this.db
-      .query<{ id: string }, [string]>(
-        "SELECT DISTINCT r.id FROM runs r JOIN run_worktrees w ON w.run_id = r.id WHERE r.work_item_id = ? ORDER BY r.created_at DESC",
+      .query<{ id: string }, [string, string]>(
+        `SELECT id FROM runs WHERE id IN (
+           SELECT r.id FROM runs r JOIN run_worktrees w ON w.run_id = r.id WHERE r.work_item_id = ?
+           UNION SELECT r.id FROM runs r JOIN run_snapshots s ON s.run_id = r.id WHERE r.work_item_id = ?
+         ) ORDER BY created_at DESC`,
       )
-      .all(workItemId)
+      .all(workItemId, workItemId)
       .map((r) => r.id)
+  }
+
+  // --- modo sin VCS (ADR-0010, migración 0002) --------------------------------------
+  getProjectVcs(projectId: string): ProjectVcs {
+    const row = this.db
+      .query<ProjectVcs, [string]>(
+        "SELECT vcs, vcs_none_confirmed_at, vcs_none_confirmed_by FROM projects WHERE id = ?",
+      )
+      .get(projectId)
+    if (!row) throw new Error(`el proyecto ${projectId} no existe`)
+    return row
+  }
+  /** `none` queda confirmado por quien lo pide (el daemon sólo deja hacerlo a un humano). */
+  setProjectVcs(projectId: string, vcs: "git" | "none", actorId: string): ProjectVcs {
+    if (vcs === "none")
+      this.db
+        .query(
+          "UPDATE projects SET vcs = 'none', vcs_none_confirmed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), vcs_none_confirmed_by = ? WHERE id = ?",
+        )
+        .run(actorId, projectId)
+    else
+      this.db
+        .query(
+          "UPDATE projects SET vcs = 'git', vcs_none_confirmed_at = NULL, vcs_none_confirmed_by = NULL WHERE id = ?",
+        )
+        .run(projectId)
+    return this.getProjectVcs(projectId)
+  }
+  addRunSnapshot(s: Omit<RunSnapshotRow, "id" | "released_at" | "restored_at">): RunSnapshotRow {
+    const id = ulid()
+    this.db
+      .query(
+        "INSERT INTO run_snapshots(id, project_id, run_id, root_path, snapshot_dir, manifest_sha256, file_count, total_bytes) VALUES (?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        s.project_id,
+        s.run_id,
+        s.root_path,
+        s.snapshot_dir,
+        s.manifest_sha256,
+        s.file_count,
+        s.total_bytes,
+      )
+    return { ...s, id, released_at: null, restored_at: null }
+  }
+  runSnapshot(runId: string): RunSnapshotRow | null {
+    return this.db
+      .query<RunSnapshotRow, [string]>(
+        `SELECT ${SNAPSHOT_COLS} FROM run_snapshots WHERE run_id = ?`,
+      )
+      .get(runId)
+  }
+  /** El snapshot sin liberar de la carpeta: su candado de un escritor. */
+  activeSnapshotForRoot(rootPath: string): RunSnapshotRow | null {
+    return this.db
+      .query<RunSnapshotRow, [string]>(
+        `SELECT ${SNAPSHOT_COLS} FROM run_snapshots WHERE root_path = ? AND released_at IS NULL`,
+      )
+      .get(rootPath)
+  }
+  releaseSnapshot(id: string): void {
+    this.db
+      .query(
+        "UPDATE run_snapshots SET released_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND released_at IS NULL",
+      )
+      .run(id)
+  }
+  markSnapshotRestored(id: string): void {
+    this.db
+      .query(
+        "UPDATE run_snapshots SET restored_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+      )
+      .run(id)
   }
 
   // --- gasto estimado (limits.ts) -----------------------------------------------------

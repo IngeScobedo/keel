@@ -24,6 +24,15 @@ const files: [string, string][] = [
     header("bloque vec0, requiere sqlite-vec") + blocks[1],
   ],
 ]
+// Bloques posteriores: cada uno nombra su migración en la primera línea.
+for (const block of blocks.slice(2)) {
+  const name = /^-- migración: (\d{4}-[a-z0-9-]+)\n/.exec(block)?.[1]
+  if (!name) {
+    console.error("un bloque sql posterior a la 0001 no empieza con `-- migración: NNNN-nombre`")
+    process.exit(1)
+  }
+  files.push([`packages/daemon/migrations/${name}.sql`, header(`migración ${name}`) + block])
+}
 let drift = false
 for (const [rel, content] of files) {
   const path = join(root, rel)

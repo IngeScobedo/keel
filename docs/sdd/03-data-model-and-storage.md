@@ -843,3 +843,44 @@ El 2026-10-09, por ADR-0006, cambiaron `runs` (`purpose`, `status` con
 corre 62 comprobaciones sobre `bun:sqlite` (SQLite 3.53.2) con FTS5 y
 `sqlite-vec` 0.1.9, incluido el bloque vectorial; corre en CI junto con
 `docs:lint`. Última ejecución: 2026-10-09, 62 en verde.
+
+## 8. Migraciones posteriores a la 0001
+
+Cada bloque empieza con `-- migración: NNNN-nombre`; `scripts/extract-ddl.ts` lo
+escribe en `packages/daemon/migrations/NNNN-nombre.sql`. La 0001 no se toca: sus
+checksums ya están aplicados en bases existentes.
+
+### 0002 · `WorkspaceDriver` y modo sin VCS (ADR-0010)
+
+`projects.vcs` dice qué driver usa un run `execute`. El modo `none` sólo rige
+después de que el humano lo confirma (`vcs_none_confirmed_at` y
+`vcs_none_confirmed_by`); sin confirmación, el run falla explícito como en la
+Fase 0. `run_snapshots` registra el rescate del modo sin VCS aparte de
+`run_worktrees` para no mezclar garantías. Un snapshot sin `released_at` es el
+candado de su carpeta: un escritor por ruta canónica.
+
+```sql
+-- migración: 0002-workspace-driver
+ALTER TABLE projects ADD COLUMN vcs TEXT NOT NULL DEFAULT 'git'
+    CHECK (vcs IN ('git', 'none'));
+ALTER TABLE projects ADD COLUMN vcs_none_confirmed_at TEXT;
+ALTER TABLE projects ADD COLUMN vcs_none_confirmed_by TEXT;
+
+CREATE TABLE run_snapshots (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    snapshot_dir TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    file_count INTEGER NOT NULL CHECK (file_count >= 0),
+    total_bytes INTEGER NOT NULL CHECK (total_bytes >= 0),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    released_at TEXT,
+    restored_at TEXT,
+    UNIQUE(run_id),
+    FOREIGN KEY(run_id, project_id) REFERENCES runs(id, project_id)
+);
+CREATE UNIQUE INDEX idx_one_writer_per_root ON run_snapshots(root_path)
+    WHERE released_at IS NULL;
+```

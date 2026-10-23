@@ -13,12 +13,13 @@ describe("ADR-0004: store SQLite WAL con migraciones", () => {
     expect(r.exitCode).toBe(0)
   })
 
-  test("abre, aplica 0001 relacional y vec0, y deja los PRAGMA de conexión", () => {
+  test("abre, aplica 0001 relacional y vec0 y las posteriores, y deja los PRAGMA de conexión", () => {
     const dir = tmp()
     const store = openStore(join(dir, "keel.sqlite"))
     expect(store.migrations.map((m) => `${m.id}:${m.status}`)).toEqual([
       "0001-initial:applied",
       "0001-initial.vec:applied",
+      "0002-workspace-driver:applied",
     ])
     expect(store.vector.available).toBe(true)
     const pragma = (n: string) => store.db.query(`PRAGMA ${n}`).get() as Record<string, unknown>
@@ -80,6 +81,6 @@ describe("ADR-0004: store SQLite WAL con migraciones", () => {
     const out = r.stdout.toString()
     expect(r.exitCode).toBe(0)
     expect(out).toContain("0 fallidas")
-    expect(loadMigrations(MIGRATIONS_DIR)).toHaveLength(2)
+    expect(loadMigrations(MIGRATIONS_DIR)).toHaveLength(3)
   })
 })

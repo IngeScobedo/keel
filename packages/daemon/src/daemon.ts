@@ -26,8 +26,15 @@ import type { ProviderAdapter } from "./adapters/provider.js"
 import { ApprovalGate } from "./approvals.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
+import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
-import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server.js"
+import {
+  type Handler,
+  type HandlerContext,
+  type Handlers,
+  IpcServer,
+  RpcFailure,
+} from "./ipc/server.js"
 import { checkRunStart, DEFAULT_LIMITS, type Limits, startOfLocalDay } from "./limits.js"
 import { Outbox } from "./outbox.js"
 import {
@@ -39,7 +46,8 @@ import {
 import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
 import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
-import { defaultWorktreesDir, RunWorkspaces, releasesOnFinish } from "./workspaces.js"
+import type { WorkspaceDriver } from "./workspace-driver.js"
+import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
 
 export type DaemonOptions = {
   dbPath: string
@@ -49,6 +57,8 @@ export type DaemonOptions = {
   adapterDeps?: ClaudeAdapterDeps
   /** Raíz de los worktrees de runs; por defecto `$XDG_STATE_HOME/keel/worktrees`. */
   worktreesDir?: string
+  /** Snapshots del modo sin VCS (ADR-0010); por defecto `$XDG_STATE_HOME/keel/snapshots`. */
+  snapshotsDir?: string
   /** Tabla de procesos para reconciliar; por defecto la de la plataforma (processes.ts). */
   processes?: ProcessTable
   /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
@@ -65,7 +75,10 @@ export class Daemon {
   /** Hoy el único proveedor; el daemon sólo lo usa por la interfaz `ProviderAdapter`. */
   readonly claude: ClaudeAdapter
   readonly toolGate: ApprovalGate
-  readonly workspaces: RunWorkspaces
+  /** Driver de proyectos con git (worktree por run). */
+  readonly workspaces: GitWorktreeDriver
+  /** Driver del modo sin VCS, confirmado por el humano (ADR-0010). */
+  readonly directFs: DirectFsDriver
   readonly project: { workspace_id: string; project_id: string }
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
@@ -96,10 +109,16 @@ export class Daemon {
     this.outbox.on(WORKTREE_RELEASE, (m) =>
       this.captureAndRelease((m.payload as { run_id: string }).run_id),
     )
-    this.workspaces = new RunWorkspaces({
+    this.outbox.on(SNAPSHOT_RESTORE, (m) => this.onSnapshotRestore(m.payload as SnapshotRestore))
+    this.workspaces = new GitWorktreeDriver({
       repo: this.repo,
       rootPath: opts.rootPath,
       worktreesDir: opts.worktreesDir ?? defaultWorktreesDir(),
+    })
+    this.directFs = new DirectFsDriver({
+      repo: this.repo,
+      rootPath: opts.rootPath,
+      snapshotsDir: opts.snapshotsDir ?? defaultSnapshotsDir(),
     })
     this.toolGate = new ApprovalGate({
       repo: this.repo,
@@ -240,7 +259,7 @@ export class Daemon {
   /** Comando idempotente del protocolo: dominio, eventos y recibo en una transacción (K-04). */
   private mutation<P extends MutationMeta>(
     method: MethodName,
-    fn: (params: P, uow: UnitOfWork) => unknown,
+    fn: (params: P, uow: UnitOfWork, ctx: HandlerContext) => unknown,
   ): Handler {
     return async (params, ctx) => {
       const p = params as P
@@ -255,7 +274,7 @@ export class Daemon {
           idempotencyKey: p.idempotency_key,
           requestHash,
         },
-        (uow) => fn(p, uow),
+        (uow) => fn(p, uow, ctx),
       )
     }
   }
@@ -305,7 +324,7 @@ export class Daemon {
     })
     // El worktree de un run completed se conserva para la revisión; salir de ella lo libera.
     if (w.lifecycle === "needs_review")
-      for (const runId of this.repo.runsWithWorktrees(w.id))
+      for (const runId of this.repo.runsWithWorkspaces(w.id))
         this.enqueueRelease(uow, runId, "review_exit")
     return updated
   }
@@ -425,6 +444,42 @@ export class Daemon {
         uow.afterCommit(() => this.claude.cancel(run.id, p.reason ?? null))
         return repo.runView(run)
       }),
+      "projects.set_vcs": this.mutation<Params<"projects.set_vcs">>(
+        "projects.set_vcs",
+        (p, uow, ctx) => {
+          // Pasar a sin VCS pierde el aislamiento: lo confirma un humano (ADR-0010 §2).
+          requireHuman(ctx, "cambiar el control de versiones del proyecto")
+          const projectId = p.project_id ?? project.project_id
+          const vcs = repo.setProjectVcs(projectId, p.vcs, uow.actorId)
+          const view = { project_id: projectId, ...vcs }
+          uow.emit("project.vcs_changed", null, view)
+          return view
+        },
+      ),
+      "snapshots.restore": this.mutation<Params<"snapshots.restore">>(
+        "snapshots.restore",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "restaurar un snapshot")
+          const snap = repo.runSnapshot(p.run_id)
+          if (!snap) throw rpcError(ErrorCode.notFound, "el run no tiene snapshot del modo sin VCS")
+          if (!snap.released_at)
+            throw rpcError(
+              ErrorCode.conflict,
+              "el run sigue usando la carpeta; se restaura cuando termine",
+            )
+          const holder = repo.activeSnapshotForRoot(snap.root_path)
+          if (holder)
+            throw rpcError(ErrorCode.conflict, `la carpeta la está usando el run ${holder.run_id}`)
+          const payload: SnapshotRestore = { run_id: p.run_id, delete_new: p.delete_new ?? false }
+          uow.enqueue(
+            SNAPSHOT_RESTORE,
+            p.run_id,
+            `${SNAPSHOT_RESTORE}:${p.idempotency_key}`,
+            payload,
+          )
+          return { run_id: p.run_id, queued: true }
+        },
+      ),
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
         "approvals.resolve",
         (p, uow) => {
@@ -476,11 +531,18 @@ export class Daemon {
     })
     let final: RunRow
     try {
-      const ws = await this.workspaces.provision(run, item)
+      const driver = this.driverFor(run.project_id)
+      const ws = await driver.provision(run, item)
       const current = this.repo.getRun(run.id) ?? run
       if (!ws.ok) final = ctx.fail(ws.message, "run.start_failed")
       else {
-        if (ws.worktree) this.emitSystem("worktree.created", run.id, ws.worktree)
+        for (const e of ws.events) this.emitSystem(e.kind, run.id, e.payload)
+        if (run.purpose === "execute")
+          this.emitSystem("workspace.prepared", run.id, {
+            kind: driver.kind,
+            guarantees: driver.guarantees,
+            cwd: ws.cwd,
+          })
         // Cancelado mientras se preparaba: no se lanza el proveedor. Sin await entre esta
         // lectura y execute; el adaptador pasa a `initializing` en su parte síncrona.
         if (current.status !== "queued") final = current
@@ -504,30 +566,39 @@ export class Daemon {
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
   }
 
+  /** El driver de un run `execute` sale del proyecto; cada driver valida lo suyo. */
+  private driverFor(projectId: string): WorkspaceDriver {
+    return this.repo.getProjectVcs(projectId).vcs === "none" ? this.directFs : this.workspaces
+  }
+
+  /** Todos los drivers: cada uno sólo actúa sobre lo que registró para el run. */
+  private get drivers(): WorkspaceDriver[] {
+    return [this.workspaces, this.directFs]
+  }
+
   private async captureChanges(runId: string): Promise<void> {
-    for (const { worktree, changes } of await this.workspaces.capture(runId))
-      this.emitSystem("worktree.changes", runId, {
-        worktree_id: worktree.id,
-        branch: worktree.branch_name,
-        base_sha: worktree.base_sha,
-        head_sha: changes.headSha,
-        commits_ahead: changes.commitsAhead,
-        dirty: changes.dirty,
-        files: changes.files,
-      })
+    for (const driver of this.drivers)
+      for (const e of await driver.capture(runId)) this.emitSystem(e.kind, runId, e.payload)
   }
 
   /** Handler del outbox: captura los cambios finales y libera, rescatando antes. Idempotente. */
   private async captureAndRelease(runId: string): Promise<void> {
     await this.orphanSweep
     await this.captureChanges(runId)
-    for (const { worktree, branch, result } of await this.workspaces.release(runId))
-      this.emitSystem("worktree.released", runId, {
-        worktree_id: worktree?.id ?? null,
-        branch,
-        rescue_ref: result.rescueRef,
-        branch_kept: result.branchKept,
+    for (const driver of this.drivers)
+      for (const e of await driver.release(runId)) this.emitSystem(e.kind, runId, e.payload)
+  }
+
+  /** Handler del outbox: restaura el snapshot del modo sin VCS. Restaurar es idempotente. */
+  private async onSnapshotRestore(p: SnapshotRestore): Promise<void> {
+    try {
+      const result = await this.directFs.restore(p.run_id, { deleteNew: p.delete_new })
+      this.emitSystem("workspace.restored", p.run_id, result)
+    } catch (e) {
+      this.emitSystem("workspace.restore_failed", p.run_id, {
+        message: e instanceof Error ? e.message : String(e),
       })
+    }
   }
 
   /**
@@ -576,6 +647,8 @@ export class Daemon {
 /** Tipos de mensaje del outbox que consume el daemon. */
 export const RUN_DISPATCH = "run_dispatch"
 export const WORKTREE_RELEASE = "worktree_release"
+export const SNAPSHOT_RESTORE = "snapshot_restore"
+type SnapshotRestore = { run_id: string; delete_new: boolean }
 type RunDispatch = { run_id: string; prompt: string }
 type ReleaseOrigin = "dispatch" | "cancel" | "reconcile" | "review_exit"
 
@@ -588,4 +661,13 @@ function rpcError(code: number, message: string, details?: unknown, retryable = 
     retryable,
     ...(details === undefined ? {} : { details }),
   })
+}
+
+function requireHuman(ctx: HandlerContext, what: string): void {
+  if (ctx.actor.kind !== "human")
+    throw new RpcFailure({
+      code: ErrorCode.unauthorized,
+      message: `${what} lo decide un humano`,
+      retryable: false,
+    })
 }

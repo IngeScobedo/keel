@@ -167,6 +167,22 @@ export const Methods = {
     }),
     result: WorkItemViewSchema,
   },
+  "projects.set_vcs": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      vcs: z.enum(["git", "none"]),
+    }),
+    result: z.object({
+      project_id: z.string(),
+      vcs: z.enum(["git", "none"]),
+      vcs_none_confirmed_at: z.string().nullable(),
+      vcs_none_confirmed_by: z.string().nullable(),
+    }),
+  },
+  "snapshots.restore": {
+    params: MutationMeta.extend({ run_id: z.string(), delete_new: z.boolean().optional() }),
+    result: z.object({ run_id: z.string(), queued: z.literal(true) }),
+  },
   "runs.start": {
     params: MutationMeta.extend({
       work_item_id: z.string(),

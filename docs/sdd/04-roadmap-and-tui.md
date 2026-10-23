@@ -162,9 +162,12 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       estimados por defecto, que se suben con flags explícitos y se ven en
       `daemon.health`.
 - [ ] Aislamiento desacoplado de git (deuda de la Fase 0, decidida el
-      2026-10-22). Decidido en ADR-0010 (aceptado): `WorkspaceDriver` con
-      `GitWorktreeDriver` y `DirectFsDriver`, y las tools de `@keel/git` para el
-      agente por el puente MCP de ADR-0009.
+      2026-10-22; ADR-0010 aceptado). Hecho: `WorkspaceDriver` con
+      `GitWorktreeDriver` y `DirectFsDriver` (snapshot con `tar` y manifest de
+      hashes, un escritor por carpeta, captura por hashes, restauración), el
+      modo sin VCS confirmado por el humano (`projects.set_vcs`) y la
+      migración 0002. Falta: las tools de `@keel/git` para el agente, que van
+      por el puente MCP de ADR-0009.
 
 **DoD:** un agente autorizado consulta archivos reales de un worktree y emite
 eventos correlacionados. Fixtures redactados producen el oráculo esperado. Auth

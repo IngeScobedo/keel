@@ -12,8 +12,8 @@
  *   mientras la tarea está en `needs_review` y se libera cuando sale de ahí.
  *   Liberar siempre rescata antes los cambios sin commit (`@keel/git`).
  * - **Sin repo git, un run `execute` falla explícito.** Los runs `plan` y
- *   `triage_eval` son de sólo lectura y corren en la raíz. Desacoplar el
- *   aislamiento (WorkspaceDriver, modo sin VCS) es deuda de la Fase 1 (SDD 04).
+ *   `triage_eval` son de sólo lectura y corren en la raíz. Un proyecto sin git
+ *   usa `DirectFsDriver` sólo si el humano lo confirmó (ADR-0010).
  *
  * El estado vive en git (ADR-0007 §5); `run_worktrees` es el índice del
  * daemon. Este módulo no publica eventos: devuelve lo que pasó y el daemon lo
@@ -35,6 +35,12 @@ import {
   removeWorktree,
 } from "@keel/git"
 import type { Repo, RunRow, RunWorktreeRow, WorkItemRow } from "./store/repo.js"
+import type {
+  Provisioned,
+  WorkspaceDriver,
+  WorkspaceEvent,
+  WorkspaceGuarantees,
+} from "./workspace-driver.js"
 
 export function defaultWorktreesDir(
   platform: NodeJS.Platform = process.platform,
@@ -58,10 +64,6 @@ export type Released = {
   result: RemoveResult
 }
 
-export type Provisioned =
-  | { ok: true; cwd: string; worktree: RunWorktreeRow | null }
-  | { ok: false; message: string }
-
 export type WorkspacesDeps = {
   repo: Repo
   rootPath: string
@@ -69,7 +71,13 @@ export type WorkspacesDeps = {
   owner?: string
 }
 
-export class RunWorkspaces {
+export class GitWorktreeDriver implements WorkspaceDriver {
+  readonly kind = "git_worktree"
+  readonly guarantees: WorkspaceGuarantees = {
+    isolation: "worktree",
+    rescue: "git_ref",
+    parallel: true,
+  }
   private readonly deps: WorkspacesDeps
   private readonly repos = new Map<string, GitRepo>()
   constructor(deps: WorkspacesDeps) {
@@ -79,7 +87,7 @@ export class RunWorkspaces {
   /** Prepara dónde corre el run. Nunca rechaza por un repo ausente: devuelve `ok: false`. */
   async provision(run: RunRow, item: WorkItemRow): Promise<Provisioned> {
     const { repo, rootPath, worktreesDir } = this.deps
-    if (run.purpose !== "execute") return { ok: true, cwd: rootPath, worktree: null }
+    if (run.purpose !== "execute") return { ok: true, cwd: rootPath, events: [] }
     let gitRepo: GitRepo
     try {
       gitRepo = await this.gitRepo(rootPath)
@@ -87,7 +95,7 @@ export class RunWorkspaces {
       if (e instanceof GitError && e.kind === "not_a_repository")
         return {
           ok: false,
-          message: `un run execute necesita un repositorio git en ${rootPath}; no lo hay (el modo sin VCS llega en la Fase 1)`,
+          message: `un run execute necesita un repositorio git en ${rootPath}; no lo hay. Si el proyecto no usa git, confírmalo con projects.set_vcs (ADR-0010)`,
         }
       throw e
     }
@@ -116,11 +124,42 @@ export class RunWorkspaces {
       branch_name: wt.branch,
       access_mode: "write",
     })
-    return { ok: true, cwd: row.worktree_path, worktree: row }
+    return {
+      ok: true,
+      cwd: row.worktree_path,
+      events: [{ kind: "worktree.created", payload: row }],
+    }
+  }
+
+  async capture(runId: string): Promise<WorkspaceEvent[]> {
+    return (await this.captureWorktrees(runId)).map(({ worktree, changes }) => ({
+      kind: "worktree.changes",
+      payload: {
+        worktree_id: worktree.id,
+        branch: worktree.branch_name,
+        base_sha: worktree.base_sha,
+        head_sha: changes.headSha,
+        commits_ahead: changes.commitsAhead,
+        dirty: changes.dirty,
+        files: changes.files,
+      },
+    }))
+  }
+
+  async release(runId: string): Promise<WorkspaceEvent[]> {
+    return (await this.releaseWorktrees(runId)).map(({ worktree, branch, result }) => ({
+      kind: "worktree.released",
+      payload: {
+        worktree_id: worktree?.id ?? null,
+        branch,
+        rescue_ref: result.rescueRef,
+        branch_kept: result.branchKept,
+      },
+    }))
   }
 
   /** Cambios de cada worktree del run respecto a su base; guarda el `head_sha`. */
-  async capture(runId: string): Promise<{ worktree: RunWorktreeRow; changes: Changes }[]> {
+  async captureWorktrees(runId: string): Promise<{ worktree: RunWorktreeRow; changes: Changes }[]> {
     const out: { worktree: RunWorktreeRow; changes: Changes }[] = []
     for (const w of this.deps.repo.runWorktrees(runId)) {
       try {
@@ -140,7 +179,7 @@ export class RunWorkspaces {
    * registrados en `run_worktrees`, busca en git los de este run que no llegaron
    * a registrarse (caída entre crearlo y guardarlo): la verdad está en git.
    */
-  async release(runId: string): Promise<Released[]> {
+  async releaseWorktrees(runId: string): Promise<Released[]> {
     const out: Released[] = []
     const seen = new Set<string>()
     for (const w of this.deps.repo.runWorktrees(runId)) {
