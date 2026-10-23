@@ -27,8 +27,8 @@ un repo de 500 archivos en un directorio temporal, que borra al terminar.
 
 ### POSIX: Linux en WSL2, 2026-10-23
 
-[Datos completos](2026-10-23-linux-wsl-unix.json). Equipo: AMD Ryzen 7 7730U con 16
-hilos y 15 GiB, kernel 6.6.87.2-microsoft-standard-WSL2, Bun 1.4.2, SQLite
+[Datos completos](2026-10-23-linux-wsl-unix.json). Equipo: AMD Ryzen 7 7730U con
+16 hilos y 15 GiB, kernel 6.6.87.2-microsoft-standard-WSL2, Bun 1.4.2, SQLite
 3.53.2, git 2.43.0, `/tmp` en ext4, commit `8ebadf5`. Hubo tres corridas
 seguidas con resultados del mismo orden; la tabla y el JSON son la tercera.
 
@@ -46,26 +46,43 @@ Lectura: la mutación no es submilisegundo; está en el orden de 2 a 3 ms por
 commit. Un worktree cuesta del orden de decenas de milisegundos porque son
 varios procesos `git`. Ninguna cifra se extrapola a otra máquina ni a Windows.
 
-### Windows nativo: transporte viable, daemon pendiente
+### Windows nativo, 2026-10-23
 
-`scripts/probe-windows-pipe.ts`, corrido el 2026-10-23 en Windows nativo desde
-WSL con `cmd.exe` y Bun 1.3.11 (win32):
+Mismo equipo que arriba, Windows 11 10.0.26200, Bun 1.4.4, SQLite 3.53.4, git
+2.51.2.windows.1 y NTFS, commit `4821f36`. Las versiones de Bun, SQLite y git no
+son las de WSL. Datos completos: [Named Pipe](2026-10-23-win32-pipe.json) y
+[AF_UNIX](2026-10-23-win32-unix.json). Los 156 tests del workspace pasan en
+Windows nativo.
 
-- `Bun.listen`/`Bun.connect` sobre `\\.\pipe\…` funcionan. Una «ñ» partida entre
-  dos escrituras llegó intacta.
-- Ida y vuelta de 300 frames en el mismo proceso: p50 0.011 ms, p95 0.020 ms,
-  máx 1.2 ms. No es comparable con la medición entre procesos de Linux.
+| Medida                        | Pipe p50 | Pipe p95 | AF_UNIX p50 | AF_UNIX p95 |
+| ----------------------------- | -------- | -------- | ----------- | ----------- |
+| IPC ida y vuelta (`health`)   | 0.17     | 0.27     | 0.18        | 0.28        |
+| Mutación `work_items.create`  | 1.02     | 1.53     | 1.01        | 1.47        |
+| Entrega del evento tras crear | 0.98     | 1.36     | 0.97        | 1.41        |
+| Replay de 20 300 eventos      | 125      | —        | 109         | —           |
+| Backup de 10 MiB              | 68       | —        | 67          | —           |
+| Crear worktree (500 archivos) | 459      | 491      | 463         | 511         |
+| Liberar worktree limpio       | 539      | 689      | 543         | 604         |
 
-El daemon ya elige el Named Pipe en Windows
-(`packages/daemon/src/ipc/endpoint.ts`) y no hace `mkdir`, `chmod` ni `unlink`
-sobre él. Antes de medir el daemon completo en Windows falta:
+Lectura: el transporte no cambia la latencia. Git en Windows cuesta del orden de
+6 a 9 veces más que en Linux por worktree; un run `execute` paga alrededor de 1
+s de git entre crear y liberar.
 
-1. Bun ≥ 1.4 en Windows (ADR-0003). El equipo tiene 1.3.11.
-2. Verificar la ACL del pipe. ADR-0005 §1 pide la ACL del usuario, Bun no expone
-   el descriptor de seguridad, y el DACL por defecto no está medido. Hasta
-   verificarlo, el daemon en Windows no cumple §1.
-3. Las piezas que hoy sólo existen en POSIX: la reconciliación de procesos (lee
-   `/proc`; en Windows no encuentra ni termina procesos huérfanos, ADR-0003 §9),
-   la búsqueda del binario `claude` y el binario de `sqlite-vec` para win32.
+**ACL del endpoint.** El Named Pipe por defecto de Bun da lectura a Todos y a
+ANONYMOUS LOGON; un socket AF_UNIX en `%LOCALAPPDATA%` sólo a SYSTEM,
+Administradores y el usuario. El detalle y la propuesta de cambio están en
+[ADR-0005](../adr/0005-ipc-json-rpc-ndjson-sobre-socket-local.md), pendientes de
+decisión.
 
-Por eso «registrar latencia de Windows» del DoD de la Fase 0 sigue abierto.
+Defectos que esta prueba encontró y ya están corregidos:
+
+- `migrate()` dejaba sentencias sin finalizar, y en Windows la base seguía
+  bloqueada tras `close()`.
+- `openStore` no cerraba la conexión al rechazar una migración.
+- `reconcile()` no normalizaba las rutas `C:/…` de git.
+- Faltaba `.gitattributes`: con `core.autocrlf`, el checksum de las migraciones
+  dependía de la plataforma.
+
+Sigue pendiente en Windows: la reconciliación de procesos lee `/proc`, así que
+no encuentra ni termina procesos huérfanos (ADR-0003 §9), y la detección del
+binario `claude` sólo busca rutas POSIX.

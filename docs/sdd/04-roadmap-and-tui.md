@@ -122,11 +122,16 @@ el mismo resultado; reiniciar entre commit y entrega de outbox conserva el
 evento. `foreign_key_check` y restore pasan. Registrar latencia y entorno de
 Windows y POSIX sin presuponer resultados submilisegundo.
 
-**Estado del DoD (2026-10-23).** Cumplido salvo Windows. La integración completa
-está en `phase0.test.ts`, la caída entre commit y entrega del outbox en
-`outbox.test.ts`, y el restore con `foreign_key_check` en `backup.test.ts`. Las
-latencias POSIX están en [docs/benchmarks](../benchmarks/README.md). La latencia
-de Windows espera al Named Pipe.
+**Estado del DoD (2026-10-23).** Cumplido en POSIX y en Windows nativo, salvo la
+ACL del endpoint en Windows.
+
+- La integración completa está en `phase0.test.ts`, la caída entre commit y
+  entrega del outbox en `outbox.test.ts`, y el restore con `foreign_key_check`
+  en `backup.test.ts`.
+- Los 156 tests pasan en Linux (WSL2) y en Windows 11.
+- Las latencias de ambos están en [docs/benchmarks](../benchmarks/README.md).
+- El Named Pipe de Bun da lectura a Todos. La propuesta de usar AF_UNIX en
+  Windows está en ADR-0005 y la decide el humano.
 
 ### Fase 1 · Sidecar, autenticación y telemetría — semanas 3–4
 

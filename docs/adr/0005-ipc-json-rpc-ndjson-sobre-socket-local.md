@@ -45,6 +45,31 @@ en otra máquina por SSH.
    no de un campo del mensaje. Un agente nunca puede fabricar un actor humano
    (SDD 01 §3, «cierre humano»).
 
+## Revisión propuesta del punto 1 en Windows (2026-10-23, pendiente de decisión)
+
+Medido en Windows 11 (10.0.26200) con Bun 1.4.4 y el daemon real:
+
+- El Named Pipe que crea `Bun.listen` lleva el DACL por defecto:
+  `D:(A;;FR;;;WD)(A;;FR;;;AN)(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;<usuario>)`. Todos
+  (`WD`) y ANONYMOUS LOGON (`AN`) tienen lectura, y el pipe es alcanzable por la
+  red. Sin escritura no pueden mandar comandos, pero no es «la ACL del usuario»
+  que exige el punto 1. Bun no permite fijar el descriptor de seguridad.
+- Un socket AF_UNIX (Windows 10 1803 o posterior), que Bun también soporta, en
+  `%LOCALAPPDATA%\keel\keel.sock` hereda
+  `D:(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;<usuario>)`: sólo SYSTEM,
+  Administradores y el usuario, y es local.
+- La latencia es la misma con los dos: ida y vuelta p50 0.17 frente a 0.18 ms,
+  mutación p50 1.02 frente a 1.01 ms
+  ([docs/benchmarks](../benchmarks/README.md)).
+
+Propuesta: en Windows, socket AF_UNIX en `%LOCALAPPDATA%\keel\` en lugar del
+Named Pipe. El resto del punto 1 no cambia. Consecuencia: el shell de Tauri
+necesita un cliente AF_UNIX para Windows, porque `tokio::net::UnixStream` sólo
+existe en Unix; hoy usa el cliente de Named Pipe. La alternativa que conserva el
+pipe exige crearlo con `SECURITY_ATTRIBUTES` propios fuera de Bun (FFI o un
+binario nativo) y que el daemon lo integre en su bucle. Hasta que el humano
+decida, el daemon sigue usando el Named Pipe en Windows y no cumple este punto.
+
 ## Consecuencias
 
 **Positivas**

@@ -1,0 +1,69 @@
+{
+  "script": "scripts/bench-phase0.ts",
+  "env": {
+    "measured_at": "2026-10-23T00:26:44.253Z",
+    "platform": "win32",
+    "release": "10.0.26200",
+    "wsl": false,
+    "cpu": "AMD Ryzen 7 7730U with Radeon Graphics         ",
+    "cpus": 16,
+    "memory_gib": 15.4,
+    "bun": "1.4.4",
+    "sqlite": "3.53.4",
+    "git": "git version 2.51.2.windows.1",
+    "tmp_filesystem": "NTFS",
+    "commit": "4821f36",
+    "transport": "pipe"
+  },
+  "results": {
+    "ipc_roundtrip_health_ms": {
+      "n": 500,
+      "p50": 0.168,
+      "p95": 0.274,
+      "p99": 0.433,
+      "max": 7.271
+    },
+    "mutation_work_items_create_ms": {
+      "n": 300,
+      "p50": 1.02,
+      "p95": 1.525,
+      "p99": 3.35,
+      "max": 10.597
+    },
+    "event_delivery_after_create_ms": {
+      "n": 300,
+      "p50": 0.982,
+      "p95": 1.363,
+      "p99": 3.326,
+      "max": 10.51
+    },
+    "subscribe_replay_20300_events_ms": {
+      "n": 1,
+      "p50": 124.615,
+      "p95": 124.615,
+      "p99": 124.615,
+      "max": 124.615
+    },
+    "backup_vacuum_into_10mib_ms": {
+      "n": 1,
+      "p50": 68.471,
+      "p95": 68.471,
+      "p99": 68.471,
+      "max": 68.471
+    },
+    "worktree_create_500_files_ms": {
+      "n": 30,
+      "p50": 459.419,
+      "p95": 490.978,
+      "p99": 506.575,
+      "max": 506.575
+    },
+    "worktree_release_clean_ms": {
+      "n": 30,
+      "p50": 538.509,
+      "p95": 688.549,
+      "p99": 697.935,
+      "max": 697.935
+    }
+  }
+}
