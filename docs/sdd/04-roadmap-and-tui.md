@@ -103,9 +103,10 @@ flowchart LR
       disparadores medidos), migraciones SQLite WAL, eventos, outbox y comandos
       idempotentes. Evidencia: `packages/daemon/test/commands.test.ts` y
       `outbox.test.ts`.
-- [ ] JSON-RPC por UDS/Named Pipes, permisos de endpoint, snapshot y cursor de
-      reconexión. Hecho sobre UDS (`ipc.test.ts`) y sobre Named Pipe en Windows.
-      Falta la ACL de usuario en Windows (propuesta en ADR-0005).
+- [x] JSON-RPC por UDS/Named Pipes, permisos de endpoint, snapshot y cursor de
+      reconexión. UDS en POSIX y AF_UNIX en Windows con la ACL del usuario
+      (ADR-0005 §1, revisión 2026-10-23), probados con el daemon real en las dos
+      plataformas.
 - [x] Git engine con worktrees aislados, base SHA, cleanup recuperable y
       preservación de cambios. `@keel/git` más
       `packages/daemon/src/workspaces.ts`; evidencia en
@@ -122,16 +123,16 @@ el mismo resultado; reiniciar entre commit y entrega de outbox conserva el
 evento. `foreign_key_check` y restore pasan. Registrar latencia y entorno de
 Windows y POSIX sin presuponer resultados submilisegundo.
 
-**Estado del DoD (2026-10-23).** Cumplido en POSIX y en Windows nativo, salvo la
-ACL del endpoint en Windows.
+**Estado del DoD (2026-10-23).** Cumplido en POSIX y en Windows nativo.
 
 - La integración completa está en `phase0.test.ts`, la caída entre commit y
-  entrega del outbox en `outbox.test.ts`, y el restore con `foreign_key_check`
-  en `backup.test.ts`.
-- Los 156 tests pasan en Linux (WSL2) y en Windows 11.
+  entrega del outbox en `outbox.test.ts`, el restore con `foreign_key_check` en
+  `backup.test.ts` y la reconciliación de procesos por identidad en
+  `processes.test.ts`.
+- Los 162 tests pasan en Linux (WSL2) y en Windows 11.
 - Las latencias de ambos están en [docs/benchmarks](../benchmarks/README.md).
-- El Named Pipe de Bun da lectura a Todos. La propuesta de usar AF_UNIX en
-  Windows está en ADR-0005 y la decide el humano.
+- Queda compilar el cliente AF_UNIX del shell de Tauri en Windows, que no es
+  parte de este DoD.
 
 ### Fase 1 · Sidecar, autenticación y telemetría — semanas 3–4
 
