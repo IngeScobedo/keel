@@ -27,7 +27,7 @@ un repo de 500 archivos en un directorio temporal, que borra al terminar.
 
 ### POSIX: Linux en WSL2, 2026-10-23
 
-[Datos completos](2026-10-23-linux-wsl.json). Equipo: AMD Ryzen 7 7730U con 16
+[Datos completos](2026-10-23-linux-wsl-unix.json). Equipo: AMD Ryzen 7 7730U con 16
 hilos y 15 GiB, kernel 6.6.87.2-microsoft-standard-WSL2, Bun 1.4.2, SQLite
 3.53.2, git 2.43.0, `/tmp` en ext4, commit `8ebadf5`. Hubo tres corridas
 seguidas con resultados del mismo orden; la tabla y el JSON son la tercera.

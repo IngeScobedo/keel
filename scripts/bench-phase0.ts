@@ -3,7 +3,8 @@
  * POSIX sin presuponer resultados submilisegundo»).
  *
  *   bun scripts/bench-phase0.ts            # imprime entorno y percentiles
- *   bun scripts/bench-phase0.ts --write    # además guarda docs/benchmarks/<fecha>-<plataforma>.json
+ *   bun scripts/bench-phase0.ts --write    # además guarda docs/benchmarks/<fecha>-<plataforma>-<transporte>.json
+ *   bun scripts/bench-phase0.ts --transport pipe|unix   # por defecto el de la plataforma (ADR-0005 §1)
  *
  * El daemon corre como proceso aparte (`packages/daemon/src/main.ts`) y el
  * cliente mide desde este proceso por el socket real. No lanza agentes: no
@@ -68,7 +69,14 @@ function environment(dir: string) {
     })(),
     git: sh("git", ["--version"]),
     // `stat -f` no distingue ext2/3/4 (mismo número mágico); findmnt da el tipo montado.
-    tmp_filesystem: sh("findmnt", ["-no", "FSTYPE", "-T", dir]),
+    tmp_filesystem:
+      platform() === "win32"
+        ? sh("powershell", [
+            "-NoProfile",
+            "-Command",
+            `(Get-Volume -FilePath '${dir}').FileSystemType`,
+          ])
+        : sh("findmnt", ["-no", "FSTYPE", "-T", dir]),
     commit: sh("git", ["rev-parse", "--short", "HEAD"]),
   }
 }
@@ -103,11 +111,16 @@ function seedEvents(dbPath: string, rootPath: string): void {
   store.db.close()
 }
 
-async function waitFor(path: string, ms = 10_000): Promise<void> {
+/** Conecta reintentando hasta que el daemon escuche (un Named Pipe no es un archivo). */
+async function connectWhenReady(endpoint: string, ms = 15_000): Promise<IpcClient> {
   const until = Date.now() + ms
-  while (!existsSync(path)) {
-    if (Date.now() > until) throw new Error(`no apareció ${path}`)
-    await new Promise((r) => setTimeout(r, 20))
+  for (;;) {
+    try {
+      return await IpcClient.connect(endpoint)
+    } catch (e) {
+      if (Date.now() > until) throw e
+      await new Promise((r) => setTimeout(r, 50))
+    }
   }
 }
 
@@ -115,11 +128,17 @@ async function main(): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "keel-bench-"))
   const root = join(dir, "repo")
   const dbPath = join(dir, "keel.sqlite")
-  const socket = join(dir, "keel.sock")
+  const transport =
+    process.argv[process.argv.indexOf("--transport") + 1] === "unix" ||
+    (!process.argv.includes("--transport") && platform() !== "win32")
+      ? "unix"
+      : "pipe"
+  const socket =
+    transport === "pipe" ? `\\\\.\\pipe\\keel-bench-${process.pid}` : join(dir, "keel.sock")
   mkdirSync(root)
   seedRepo(root)
   seedEvents(dbPath, root)
-  const env = environment(dir)
+  const env = { ...environment(dir), transport }
 
   const daemon = spawn(
     "bun",
@@ -128,8 +147,7 @@ async function main(): Promise<void> {
   )
   const results: Record<string, Stat> = {}
   try {
-    await waitFor(socket)
-    const c = await IpcClient.connect(socket)
+    const c = await connectWhenReady(socket)
 
     // 1. ida y vuelta IPC sin trabajo de dominio
     const health = zeros(ITER.health)
@@ -189,7 +207,10 @@ async function main(): Promise<void> {
     ])
     store.db.close()
   } finally {
+    // En Windows no se puede borrar la base mientras el proceso la tenga abierta.
+    const exited = new Promise((r) => daemon.once("exit", r))
     daemon.kill("SIGTERM")
+    await exited
   }
 
   // 6. worktree: crear y liberar sobre un repo de REPO_FILES archivos
@@ -214,7 +235,7 @@ async function main(): Promise<void> {
     const out = join(
       "docs",
       "benchmarks",
-      `${env.measured_at.slice(0, 10)}-${env.platform}${env.wsl ? "-wsl" : ""}.json`,
+      `${env.measured_at.slice(0, 10)}-${env.platform}${env.wsl ? "-wsl" : ""}-${transport}.json`,
     )
     mkdirSync(join("docs", "benchmarks"), { recursive: true })
     writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`)
