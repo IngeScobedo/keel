@@ -20,11 +20,22 @@ export type UnitOfWork = {
   readonly projectId: string
   /** Añade un evento del daemon dentro de la transacción; se publica tras el commit. */
   emit(kind: string, runId: string | null, payload: unknown): void
-  /** Efecto fuera de la base que sólo debe ocurrir si la transacción confirma. */
+  /** Efecto fuera de la base que sólo debe ocurrir si la transacción confirma. Se pierde si el proceso cae. */
   afterCommit(effect: () => void): void
+  /**
+   * Efecto durable: se guarda en `outbox` dentro de la transacción y se entrega
+   * tras el commit o, si el proceso cae, al arrancar (outbox.ts).
+   */
+  enqueue(eventType: string, aggregateId: string, dedupeKey: string, payload: unknown): void
 }
 
-export type UnitOfWorkDeps = { db: Database; repo: Repo; bus: EventBus }
+export type UnitOfWorkDeps = {
+  db: Database
+  repo: Repo
+  bus: EventBus
+  /** Si se da, se drena tras confirmar una transacción que encoló mensajes. */
+  outbox?: { drain(): Promise<number> }
+}
 export type UnitOfWorkScope = { projectId: string; actorId: string }
 
 /** Corre `fn` en una transacción `IMMEDIATE` y, si confirma, sus efectos en orden. */
@@ -35,6 +46,7 @@ export function runUnitOfWork<T>(
 ): T {
   const { db, repo, bus } = deps
   const effects: (() => void)[] = []
+  let enqueued = false
   const uow: UnitOfWork = {
     actorId: scope.actorId,
     projectId: scope.projectId,
@@ -65,8 +77,22 @@ export function runUnitOfWork<T>(
     afterCommit(effect) {
       effects.push(effect)
     },
+    enqueue(eventType, aggregateId, dedupeKey, payload) {
+      repo.enqueueOutbox({
+        project_id: scope.projectId,
+        event_type: eventType,
+        aggregate_id: aggregateId,
+        dedupe_key: dedupeKey,
+        payload,
+      })
+      enqueued = true
+    },
   }
   const result = db.transaction(() => fn(uow)).immediate()
+  if (enqueued && deps.outbox) {
+    const outbox = deps.outbox
+    effects.push(() => void outbox.drain())
+  }
   for (const effect of effects) {
     try {
       effect()

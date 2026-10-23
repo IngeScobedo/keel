@@ -7,7 +7,6 @@ import {
   allowedTransitions,
   checkTransition,
   ErrorCode,
-  isLive,
   type Lifecycle,
   type MethodName,
   type Methods,
@@ -29,6 +28,7 @@ import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
 import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server.js"
+import { Outbox } from "./outbox.js"
 import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
 import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
@@ -57,8 +57,9 @@ export class Daemon {
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
   private readonly approvalWaiters = new Map<string, (d: "approved" | "denied") => void>()
-  /** Cancelaciones que llegan mientras se prepara el worktree, antes de que exista el proceso. */
-  private readonly cancelBeforeStart = new Set<string>()
+  readonly outbox: Outbox
+  /** Runs que este proceso ya está despachando: una entrega repetida del outbox no los duplica. */
+  private readonly dispatching = new Set<string>()
   /** Trabajo en segundo plano (runs, liberaciones); `idle()` espera a que termine. */
   private readonly background = new Set<Promise<unknown>>()
   private lagMs = 0
@@ -72,6 +73,11 @@ export class Daemon {
     this.project = this.repo.ensureDefaultProject(opts.rootPath)
     this.profile = { ...DEFAULT_PROFILE, cwd: opts.rootPath, ...opts.profile }
     this.claude = new ClaudeAdapter(opts.adapterDeps ?? {})
+    this.outbox = new Outbox(this.repo)
+    this.outbox.on(RUN_DISPATCH, (m) => this.onRunDispatch(m.payload as RunDispatch))
+    this.outbox.on(WORKTREE_RELEASE, (m) =>
+      this.captureAndRelease((m.payload as { run_id: string }).run_id),
+    )
     this.workspaces = new RunWorkspaces({
       repo: this.repo,
       rootPath: opts.rootPath,
@@ -93,8 +99,8 @@ export class Daemon {
   /** Reconcilia (una vez), abre el socket y devuelve lo reconciliado. */
   start(): { interrupted: string[]; killed: number[] } {
     const reconciled = this.reconcile()
-    // Un run interrumpido libera su worktree igual que uno fallido.
-    for (const runId of reconciled.interrupted) this.track(this.releaseWorkspaces(runId))
+    // Lo que quedó pendiente antes de una caída: despachos y liberaciones (DoD Fase 0).
+    this.track(this.outbox.drain())
     this.server.start()
     let last = performance.now()
     this.lagTimer = setInterval(() => {
@@ -124,12 +130,17 @@ export class Daemon {
 
   /**
    * Runs vivos de un daemon anterior: su proceso ya no es nuestro. Se termina si
-   * sigue, el run queda `interrupted` y su tarea sale de `running`.
+   * sigue, el run queda `interrupted`, su tarea sale de `running` y su worktree
+   * se encola para liberar. Un run `queued` con el despacho pendiente en el
+   * outbox no se toca: nunca arrancó y se despachará al drenar.
    */
   reconcile(): { interrupted: string[]; killed: number[] } {
     const interrupted: string[] = []
     const killed: number[] = []
     for (const run of this.repo.liveRuns()) {
+      // Nunca arrancó: su despacho sigue en el outbox y se entrega al drenar.
+      if (run.status === "queued" && this.repo.hasPendingOutbox(`${RUN_DISPATCH}:${run.id}`))
+        continue
       const manifest = JSON.parse(run.context_manifest_json) as {
         provider_process?: { pid: number; cwd: string } | null
       }
@@ -172,7 +183,7 @@ export class Daemon {
         payload_json: JSON.stringify({ killed_pid: p?.pid ?? null }),
       })
       interrupted.push(run.id)
-      this.settleWorkItem(this.repo.getRun(run.id) as RunRow)
+      this.settleWorkItem(this.repo.getRun(run.id) as RunRow, "reconcile")
     }
     return { interrupted, killed }
   }
@@ -192,7 +203,14 @@ export class Daemon {
   }
 
   private uowDeps() {
-    return { db: this.store.db, repo: this.repo, bus: this.bus }
+    const outbox = {
+      drain: () => {
+        const p = this.outbox.drain()
+        this.track(p)
+        return p
+      },
+    }
+    return { db: this.store.db, repo: this.repo, bus: this.bus, outbox }
   }
 
   /** Comando idempotente del protocolo: dominio, eventos y recibo en una transacción (K-04). */
@@ -263,10 +281,8 @@ export class Daemon {
     })
     // El worktree de un run completed se conserva para la revisión; salir de ella lo libera.
     if (w.lifecycle === "needs_review")
-      uow.afterCommit(() => {
-        for (const runId of this.repo.runsWithWorktrees(w.id))
-          this.track(this.releaseWorkspaces(runId))
-      })
+      for (const runId of this.repo.runsWithWorktrees(w.id))
+        this.enqueueRelease(uow, runId, "review_exit")
     return updated
   }
 
@@ -344,17 +360,32 @@ export class Daemon {
         const view = repo.runView(run)
         uow.emit("run.created", run.id, view)
         const prompt = p.prompt !== undefined && p.prompt.length > 0 ? p.prompt : w.title
-        // El run corre en segundo plano tras el commit y se observa por events.subscribe.
-        uow.afterCommit(() => this.track(this.dispatchRun(run, w, prompt)))
+        // Despacho durable: si el daemon cae tras el commit, se entrega al arrancar.
+        uow.enqueue(RUN_DISPATCH, run.id, `${RUN_DISPATCH}:${run.id}`, {
+          run_id: run.id,
+          prompt,
+        } satisfies RunDispatch)
         return view
       }),
       "runs.cancel": this.mutation<Params<"runs.cancel">>("runs.cancel", (p, uow) => {
         const run = repo.getRun(p.run_id)
         if (!run) throw rpcError(ErrorCode.notFound, "run no existe")
-        uow.afterCommit(() => {
-          if (!this.claude.cancel(run.id, p.reason ?? null) && isLive(run.status))
-            this.cancelBeforeStart.add(run.id)
-        })
+        if (run.status === "queued") {
+          // Aún sin proceso del proveedor: la cancelación se registra en esta misma
+          // transacción y sobrevive a una caída. El despacho la verá y no arrancará.
+          const t = nowIso()
+          const cancelled = repo.updateRun(run.id, {
+            status: "cancelled",
+            end_reason: "cancelled",
+            started_at: t,
+            ended_at: t,
+          })
+          uow.emit("run.cancelled", run.id, { message: p.reason ?? "cancelado antes de arrancar" })
+          uow.emit("run.updated", run.id, repo.runView(cancelled))
+          this.settleInTransaction(uow, cancelled, "cancel")
+          return repo.runView(cancelled)
+        }
+        uow.afterCommit(() => this.claude.cancel(run.id, p.reason ?? null))
         return repo.runView(run)
       }),
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
@@ -381,10 +412,20 @@ export class Daemon {
     }
   }
 
+  /** Handler del outbox: idempotente. Sólo despacha un run que sigue `queued` y no está ya en marcha. */
+  private onRunDispatch(m: RunDispatch): void {
+    const run = this.repo.getRun(m.run_id)
+    if (run?.status !== "queued" || this.dispatching.has(run.id)) return
+    const item = this.repo.getWorkItem(run.work_item_id)
+    if (!item) return
+    this.dispatching.add(run.id)
+    this.track(this.dispatchRun(run, item, m.prompt).finally(() => this.dispatching.delete(run.id)))
+  }
+
   /**
-   * Prepara el espacio del run, lo corre, asienta la tarea, captura los cambios
-   * y libera el worktree según cómo terminó. Nunca rechaza: un fallo del
-   * adaptador o de git termina el run en `failed` con su evento (K-08).
+   * Prepara el espacio del run, lo corre y asienta la tarea; la liberación del
+   * worktree va por el outbox. Nunca rechaza: un fallo del adaptador o de git
+   * termina el run en `failed` con su evento (K-08).
    */
   private async dispatchRun(run: RunRow, item: WorkItemRow, prompt: string): Promise<void> {
     const provider: ProviderAdapter<ClaudeProfile> = this.claude
@@ -399,21 +440,27 @@ export class Daemon {
     let final: RunRow
     try {
       const ws = await this.workspaces.provision(run, item)
+      const current = this.repo.getRun(run.id) ?? run
       if (!ws.ok) final = ctx.fail(ws.message, "run.start_failed")
       else {
         if (ws.worktree) this.emitSystem("worktree.created", run.id, ws.worktree)
-        if (this.cancelBeforeStart.delete(run.id)) final = this.cancelUnstarted(run)
-        // Sin await entre la comprobación y execute: el adaptador registra el abort en
-        // la parte síncrona de execute, así que una cancelación posterior lo alcanza.
+        // Cancelado mientras se preparaba: no se lanza el proveedor. Sin await entre esta
+        // lectura y execute; el adaptador pasa a `initializing` en su parte síncrona.
+        if (current.status !== "queued") final = current
         else final = await provider.execute(ctx, prompt, { ...this.profile, cwd: ws.cwd })
       }
     } catch (e) {
       final = ctx.fail(e instanceof Error ? e.message : String(e))
     }
-    // La tarea refleja el final del run sin esperar a git; los cambios llegan después.
-    this.settleWorkItem(final)
-    for (const { worktree, changes } of await this.workspaces.capture(run.id))
-      this.emitSystem("worktree.changes", run.id, {
+    // La tarea refleja el final sin esperar a git. Si el final libera, la liberación
+    // (que captura antes) va encolada; si no, se capturan los cambios para la revisión.
+    this.settleWorkItem(final, "dispatch")
+    if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
+  }
+
+  private async captureChanges(runId: string): Promise<void> {
+    for (const { worktree, changes } of await this.workspaces.capture(runId))
+      this.emitSystem("worktree.changes", runId, {
         worktree_id: worktree.id,
         branch: worktree.branch_name,
         base_sha: worktree.base_sha,
@@ -422,39 +469,45 @@ export class Daemon {
         dirty: changes.dirty,
         files: changes.files,
       })
-    if (releasesOnFinish(final.status)) await this.releaseWorkspaces(run.id)
   }
 
-  private async releaseWorkspaces(runId: string): Promise<void> {
-    for (const { worktree, result } of await this.workspaces.release(runId))
+  /** Handler del outbox: captura los cambios finales y libera, rescatando antes. Idempotente. */
+  private async captureAndRelease(runId: string): Promise<void> {
+    await this.captureChanges(runId)
+    for (const { worktree, branch, result } of await this.workspaces.release(runId))
       this.emitSystem("worktree.released", runId, {
-        worktree_id: worktree.id,
-        branch: worktree.branch_name,
+        worktree_id: worktree?.id ?? null,
+        branch,
         rescue_ref: result.rescueRef,
         branch_kept: result.branchKept,
       })
   }
 
-  /** Cancelado antes de existir el proceso del proveedor: el daemon cierra el run. */
-  private cancelUnstarted(run: RunRow): RunRow {
-    const t = nowIso()
-    const r = this.repo.updateRun(run.id, {
-      status: "cancelled",
-      end_reason: "cancelled",
-      started_at: t,
-      ended_at: t,
+  /**
+   * La clave lleva el origen del pedido: cada pedido real de liberación es un
+   * mensaje propio (una cancelación durante la preparación pide liberar antes de
+   * que exista el worktree, y el final del despacho lo pide otra vez); las
+   * entregas repetidas de un mismo pedido sí se deduplican. Liberar es idempotente.
+   */
+  private enqueueRelease(uow: UnitOfWork, runId: string, origin: ReleaseOrigin): void {
+    uow.enqueue(WORKTREE_RELEASE, runId, `${WORKTREE_RELEASE}:${runId}:${origin}`, {
+      run_id: runId,
+      origin,
     })
-    this.emitSystem("run.cancelled", run.id, { message: "cancelado antes de arrancar" })
-    this.emitSystem("run.updated", run.id, this.repo.runView(r))
-    return r
   }
 
   private emitSystem(kind: string, runId: string, payload: unknown): void {
     runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => uow.emit(kind, runId, payload))
   }
 
-  /** Tras un run `execute` terminal, la tarea sale de `running` según cómo terminó. */
-  private settleWorkItem(final: RunRow): void {
+  /** Tras un run terminal, la tarea sale de `running` y, si el final lo pide, se encola la liberación. */
+  private settleWorkItem(final: RunRow, origin: ReleaseOrigin): void {
+    runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) =>
+      this.settleInTransaction(uow, final, origin),
+    )
+  }
+
+  private settleInTransaction(uow: UnitOfWork, final: RunRow, origin: ReleaseOrigin): void {
     if (final.purpose !== "execute") return
     const to: Lifecycle =
       final.status === "completed"
@@ -462,17 +515,22 @@ export class Daemon {
         : final.status === "cancelled"
           ? "planned"
           : "failed"
-    runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => {
-      const w = this.repo.getWorkItem(final.work_item_id)
-      if (w?.lifecycle === "running")
-        this.transition(uow, w, to, "system", { runId: final.id, reason: `run ${final.status}` })
-    })
+    const w = this.repo.getWorkItem(final.work_item_id)
+    if (w?.lifecycle === "running")
+      this.transition(uow, w, to, "system", { runId: final.id, reason: `run ${final.status}` })
+    if (releasesOnFinish(final.status)) this.enqueueRelease(uow, final.id, origin)
   }
 
   private systemScope() {
     return { projectId: this.project.project_id, actorId: "system:daemon" }
   }
 }
+
+/** Tipos de mensaje del outbox que consume el daemon. */
+export const RUN_DISPATCH = "run_dispatch"
+export const WORKTREE_RELEASE = "worktree_release"
+type RunDispatch = { run_id: string; prompt: string }
+type ReleaseOrigin = "dispatch" | "cancel" | "reconcile" | "review_exit"
 
 type Params<M extends MethodName> = z.infer<(typeof Methods)[M]["params"]>
 

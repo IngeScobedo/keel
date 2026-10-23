@@ -31,6 +31,7 @@ import {
   git,
   openRepo,
   type RemoveResult,
+  reconcile,
   removeWorktree,
 } from "@keel/git"
 import type { Repo, RunRow, RunWorktreeRow, WorkItemRow } from "./store/repo.js"
@@ -43,6 +44,13 @@ export function defaultWorktreesDir(): string {
 /** Run cuyo final libera el worktree en cuanto termina; `completed` espera a la revisión. */
 export function releasesOnFinish(status: RunRow["status"]): boolean {
   return ["cancelled", "failed", "interrupted", "budget_exceeded"].includes(status)
+}
+
+export type Released = {
+  /** null si git lo conocía pero `run_worktrees` no (caída entre crear y registrar). */
+  worktree: RunWorktreeRow | null
+  branch: string
+  result: RemoveResult
 }
 
 export type Provisioned =
@@ -121,15 +129,33 @@ export class RunWorkspaces {
     return out
   }
 
-  /** Libera los worktrees del run, rescatando antes. Idempotente. */
-  async release(runId: string): Promise<{ worktree: RunWorktreeRow; result: RemoveResult }[]> {
-    const out: { worktree: RunWorktreeRow; result: RemoveResult }[] = []
+  /**
+   * Libera los worktrees del run, rescatando antes. Idempotente. Además de los
+   * registrados en `run_worktrees`, busca en git los de este run que no llegaron
+   * a registrarse (caída entre crearlo y guardarlo): la verdad está en git.
+   */
+  async release(runId: string): Promise<Released[]> {
+    const out: Released[] = []
+    const seen = new Set<string>()
     for (const w of this.deps.repo.runWorktrees(runId)) {
       const projectRepo = this.deps.repo.getProjectRepo(w.project_repo_id)
       if (!projectRepo) continue
-      const gitRepo = await this.gitRepo(projectRepo.local_path)
-      const result = await removeWorktree(gitRepo, w.branch_name.slice(BRANCH_PREFIX.length))
-      if (result.removed) out.push({ worktree: w, result })
+      const key = w.branch_name.slice(BRANCH_PREFIX.length)
+      seen.add(key)
+      const result = await removeWorktree(await this.gitRepo(projectRepo.local_path), key)
+      if (result.removed) out.push({ worktree: w, branch: w.branch_name, result })
+    }
+    let root: GitRepo
+    try {
+      root = await this.gitRepo(this.deps.rootPath)
+    } catch (e) {
+      if (e instanceof GitError && e.kind === "not_a_repository") return out
+      throw e
+    }
+    for (const wt of await reconcile(root)) {
+      if (seen.has(wt.runId) || wt.runId.split("/")[1] !== runId) continue
+      const result = await removeWorktree(root, wt.runId)
+      if (result.removed) out.push({ worktree: null, branch: wt.branch, result })
     }
     return out
   }

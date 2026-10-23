@@ -84,6 +84,15 @@ export type ToolCallRow = {
   error_message: string | null
 }
 
+export type OutboxRow = {
+  id: number
+  project_id: string
+  event_type: string
+  aggregate_id: string
+  dedupe_key: string
+  payload_json: string
+  attempts: number
+}
 export type ProjectRepoRow = { id: string; project_id: string; alias: string; local_path: string }
 export type RunWorktreeRow = {
   id: string
@@ -196,6 +205,54 @@ export class Repo {
       )
       .all(workItemId)
       .map((r) => r.id)
+  }
+
+  // --- outbox (SDD 02 §2: entrega al menos una vez, dedupe por clave estable) ------
+  /** Encola dentro de la transacción del llamador. Una clave repetida no duplica el mensaje. */
+  enqueueOutbox(m: {
+    project_id: string
+    event_type: string
+    aggregate_id: string
+    dedupe_key: string
+    payload: unknown
+  }): void {
+    this.db
+      .query(
+        "INSERT OR IGNORE INTO outbox(project_id, event_type, aggregate_id, dedupe_key, payload_json) VALUES (?,?,?,?,?)",
+      )
+      .run(m.project_id, m.event_type, m.aggregate_id, m.dedupe_key, JSON.stringify(m.payload))
+  }
+  pendingOutbox(eventTypes: readonly string[]): OutboxRow[] {
+    if (eventTypes.length === 0) return []
+    return this.db
+      .query<OutboxRow, string[]>(
+        `SELECT id, project_id, event_type, aggregate_id, dedupe_key, payload_json, attempts FROM outbox WHERE delivered_at IS NULL AND event_type IN (${eventTypes.map(() => "?").join(",")}) ORDER BY id`,
+      )
+      .all(...eventTypes)
+  }
+  hasPendingOutbox(dedupeKey: string): boolean {
+    return (
+      this.db
+        .query<{ n: number }, [string]>(
+          "SELECT count(*) n FROM outbox WHERE dedupe_key = ? AND delivered_at IS NULL",
+        )
+        .get(dedupeKey)?.n === 1
+    )
+  }
+  markOutboxAttempt(id: number): void {
+    this.db.query("UPDATE outbox SET attempts = attempts + 1 WHERE id = ?").run(id)
+  }
+  markOutboxDelivered(id: number): void {
+    this.db
+      .query("UPDATE outbox SET delivered_at = ? WHERE id = ? AND delivered_at IS NULL")
+      .run(nowIso(), id)
+  }
+  getOutbox(dedupeKey: string): (OutboxRow & { delivered_at: string | null }) | null {
+    return this.db
+      .query<OutboxRow & { delivered_at: string | null }, [string]>(
+        "SELECT id, project_id, event_type, aggregate_id, dedupe_key, payload_json, attempts, delivered_at FROM outbox WHERE dedupe_key = ?",
+      )
+      .get(dedupeKey)
   }
 
   // --- eventos (append-only) ---------------------------------------------------
