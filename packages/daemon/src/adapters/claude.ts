@@ -29,6 +29,7 @@ import type {
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
+import type { PermissionMode } from "@keel/core"
 import { nowIso, ulid } from "../ids.js"
 import { defaultProcessTable, type ProcessTable } from "../processes.js"
 import { RunProjector } from "../projector.js"
@@ -57,7 +58,19 @@ export type ClaudeProfile = {
    * tools se autorizan en el daemon por operación, así que se auto-aprueban.
    */
   mcp_servers: Record<string, { command: string; args: string[]; env: Record<string, string> }>
+  /** Modo de permisos del run (ADR-0019 §4); `ask` deja todo lo no permitido al gate de Keel. */
+  permission_mode: PermissionMode
+  /** Variables extra del proceso del agente (atribución en git, ADR-0018 §1). */
+  env: Record<string, string>
 }
+
+/** Modo de Keel → modo del SDK. `bypass` exige además `allowDangerouslySkipPermissions`. */
+const SDK_PERMISSION_MODE = {
+  ask: "default",
+  accept_edits: "acceptEdits",
+  plan: "plan",
+  bypass: "bypassPermissions",
+} as const
 
 export const DEFAULT_PROFILE: ClaudeProfile = {
   auth_mode: "subscription_session",
@@ -70,6 +83,8 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   max_budget_usd: null,
   cwd: process.cwd(),
   mcp_servers: {},
+  permission_mode: "ask",
+  env: {},
 }
 
 const HOOK_EVENTS = [
@@ -273,8 +288,9 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
         ...Object.keys(profile.mcp_servers).map((name) => `mcp__${name}`),
       ],
       ...mcpOptions(profile.mcp_servers),
-      permissionMode: "default",
-      env,
+      permissionMode: SDK_PERMISSION_MODE[profile.permission_mode],
+      ...(profile.permission_mode === "bypass" ? { allowDangerouslySkipPermissions: true } : {}),
+      env: { ...env, ...profile.env },
       abortController: abort,
       hooks,
       canUseTool,

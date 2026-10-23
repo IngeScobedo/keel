@@ -55,6 +55,22 @@ export type RunRow = {
   cost_kind: "observed" | "estimated" | "unknown"
   started_at: string | null
   ended_at: string | null
+  /** Run del que continúa esta conversación (ADR-0019 §3). */
+  parent_run_id: string | null
+}
+export type PermissionRuleRow = {
+  id: string
+  project_id: string
+  tool: string
+  prefix: string | null
+  exact: number
+  effect: "auto" | "deny"
+  source_approval_id: string | null
+  created_by: string
+  created_at: string
+  expires_at: string | null
+  revoked_at: string | null
+  revoked_by: string | null
 }
 export type AgentRow = {
   id: string
@@ -699,13 +715,21 @@ export class Repo {
     work_item_id: string
     purpose: RunPurpose
     manifest?: Record<string, unknown>
+    parent_run_id?: string | null
   }): RunRow {
     const id = ulid()
     this.db
       .query(
-        "INSERT INTO runs(id, project_id, work_item_id, purpose, status, context_manifest_json, cost_kind) VALUES (?,?,?,?, 'queued', ?, 'unknown')",
+        "INSERT INTO runs(id, project_id, work_item_id, purpose, status, context_manifest_json, cost_kind, parent_run_id) VALUES (?,?,?,?, 'queued', ?, 'unknown', ?)",
       )
-      .run(id, p.project_id, p.work_item_id, p.purpose, JSON.stringify(p.manifest ?? {}))
+      .run(
+        id,
+        p.project_id,
+        p.work_item_id,
+        p.purpose,
+        JSON.stringify(p.manifest ?? {}),
+        p.parent_run_id ?? null,
+      )
     return this.getRun(id) as RunRow
   }
   getRun(id: string): RunRow | null {
@@ -954,40 +978,98 @@ export class Repo {
       >("SELECT * FROM approval_requests WHERE id = ?")
       .get(id)
   }
-  /** Pendientes: excluye las vencidas aunque el gate aún no las haya marcado. */
+  /**
+   * Pendientes (excluye las vencidas aunque el gate aún no las haya marcado) o,
+   * con `includeResolved`, el historial de decisiones para la vista de permisos.
+   */
   listApprovals(
     projectId: string,
-    state: string,
-  ): {
-    id: string
-    run_id: string
-    work_item_id: string
-    operation_hash: string
-    operation_json: string
-    state: string
-    expires_at: string | null
-  }[] {
+    q: { state?: string; includeResolved?: boolean; runId?: string; limit?: number } = {},
+  ): ApprovalListRow[] {
+    const where = ["a.project_id = ?"]
+    const args: string[] = [projectId]
+    if (q.runId) {
+      where.push("a.run_id = ?")
+      args.push(q.runId)
+    }
+    if (!q.includeResolved || q.state) {
+      const state = q.state ?? "pending"
+      where.push("a.state = ?")
+      args.push(state)
+      if (state === "pending") {
+        where.push("(a.expires_at IS NULL OR a.expires_at > ?)")
+        args.push(new Date().toISOString())
+      }
+    }
     return this.db
-      .query<
-        {
-          id: string
-          run_id: string
-          work_item_id: string
-          operation_hash: string
-          operation_json: string
-          state: string
-          expires_at: string | null
-        },
-        [string, string, string, string]
-      >(
-        `SELECT a.id, a.run_id, r.work_item_id, a.operation_hash, a.operation_json, a.state, a.expires_at
+      .query<ApprovalListRow, string[]>(
+        `SELECT a.id, a.run_id, r.work_item_id, a.operation_hash, a.operation_json, a.state,
+                a.expires_at, a.decision_actor
            FROM approval_requests a JOIN runs r ON r.id = a.run_id
-          WHERE a.project_id = ? AND a.state = ?
-            AND (? <> 'pending' OR a.expires_at IS NULL OR a.expires_at > ?)
-          ORDER BY a.id`,
+          WHERE ${where.join(" AND ")}
+          ORDER BY a.id DESC LIMIT ${Math.min(q.limit ?? 200, 1000)}`,
       )
-      .all(projectId, state, state, new Date().toISOString())
+      .all(...args)
   }
+
+  // --- reglas de permiso (ADR-0019 §4) -------------------------------------------------
+  addPermissionRule(p: {
+    project_id: string
+    tool: string
+    prefix: string | null
+    exact: boolean
+    effect: "auto" | "deny"
+    created_by: string
+    source_approval_id?: string | null
+    expires_at?: string | null
+  }): PermissionRuleRow {
+    const id = ulid()
+    this.db
+      .query(
+        "INSERT INTO permission_rules(id, project_id, tool, prefix, exact, effect, source_approval_id, created_by, expires_at) VALUES (?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        id,
+        p.project_id,
+        p.tool,
+        p.prefix,
+        p.exact ? 1 : 0,
+        p.effect,
+        p.source_approval_id ?? null,
+        p.created_by,
+        p.expires_at ?? null,
+      )
+    return this.getPermissionRule(id) as PermissionRuleRow
+  }
+  getPermissionRule(id: string): PermissionRuleRow | null {
+    return this.db
+      .query<PermissionRuleRow, [string]>("SELECT * FROM permission_rules WHERE id = ?")
+      .get(id)
+  }
+  /** Activas: sin revocar y sin vencer. Con `includeRevoked`, todas. */
+  listPermissionRules(projectId: string, includeRevoked = false): PermissionRuleRow[] {
+    return includeRevoked
+      ? this.db
+          .query<PermissionRuleRow, [string]>(
+            "SELECT * FROM permission_rules WHERE project_id = ? ORDER BY created_at DESC, id DESC",
+          )
+          .all(projectId)
+      : this.db
+          .query<PermissionRuleRow, [string, string]>(
+            `SELECT * FROM permission_rules WHERE project_id = ? AND revoked_at IS NULL
+               AND (expires_at IS NULL OR expires_at > ?) ORDER BY created_at DESC, id DESC`,
+          )
+          .all(projectId, new Date().toISOString())
+  }
+  revokePermissionRule(id: string, actor: string): PermissionRuleRow | null {
+    this.db
+      .query(
+        "UPDATE permission_rules SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), revoked_by = ? WHERE id = ? AND revoked_at IS NULL",
+      )
+      .run(actor, id)
+    return this.getPermissionRule(id)
+  }
+
   setApproval(
     id: string,
     state: "approved" | "denied" | "expired" | "consumed",
@@ -1024,6 +1106,8 @@ export class Repo {
       end_reason: r.end_reason,
       cost_kind: r.cost_kind,
       total_cost_micro_usd: r.total_cost_micro_usd,
+      options: runOptionsOf(r),
+      parent_run_id: r.parent_run_id ?? null,
       revision: 0,
       visual_state: visualForRun(r.status, r.purpose),
     }
@@ -1057,5 +1141,34 @@ export class Repo {
       revision: 0,
       visual_state: visualForNode(n.state),
     }
+  }
+}
+
+export type ApprovalListRow = {
+  id: string
+  run_id: string
+  work_item_id: string
+  operation_hash: string
+  operation_json: string
+  state: string
+  expires_at: string | null
+  decision_actor: string | null
+}
+
+/** Opciones efectivas del run, del manifest; los runs viejos no las tienen. */
+function runOptionsOf(r: RunRow): {
+  model: string | null
+  max_turns: number | null
+  permission_mode: "ask" | "accept_edits" | "plan" | "bypass"
+} | null {
+  const m = JSON.parse(r.context_manifest_json) as {
+    options?: { model?: string | null; max_turns?: number | null; permission_mode?: string }
+  }
+  const o = m.options
+  if (!o?.permission_mode) return null
+  return {
+    model: o.model ?? null,
+    max_turns: o.max_turns ?? null,
+    permission_mode: o.permission_mode as "ask" | "accept_edits" | "plan" | "bypass",
   }
 }

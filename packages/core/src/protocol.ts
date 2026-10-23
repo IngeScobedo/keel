@@ -113,6 +113,32 @@ export const NodeStateSchema = z.enum([
   "interrupted",
   "orphan",
 ])
+/**
+ * Modo de permisos de un run (ADR-0019 §4). `ask` es el valor por defecto;
+ * `bypass` deja al agente sin gate y sólo existe para `execute` en un worktree.
+ */
+export const PermissionModeSchema = z.enum(["ask", "accept_edits", "plan", "bypass"])
+export type PermissionMode = z.infer<typeof PermissionModeSchema>
+/** Lo que el humano elige al arrancar; el daemon guarda los valores efectivos en el manifest. */
+export const RunOptionsSchema = z.object({
+  model: z.string().min(1).max(120).optional(),
+  max_turns: z.number().int().min(1).max(500).optional(),
+  permission_mode: PermissionModeSchema.optional(),
+})
+export const PermissionRuleViewSchema = z.object({
+  id: z.string(),
+  tool: z.string(),
+  prefix: z.string().nullable(),
+  exact: z.boolean(),
+  effect: z.enum(["auto", "deny"]),
+  /** Texto corto: `Bash(git status:*)`. */
+  label: z.string(),
+  source_approval_id: z.string().nullable(),
+  created_by: z.string(),
+  created_at: z.string(),
+  expires_at: z.string().nullable(),
+  revoked_at: z.string().nullable(),
+})
 export const CostKindSchema = z.enum(["observed", "estimated", "unknown"])
 export type CostKind = z.infer<typeof CostKindSchema>
 
@@ -164,6 +190,8 @@ export const ApprovalViewSchema = z.object({
   operation: z.unknown(),
   state: z.enum(["pending", "approved", "denied", "expired", "consumed"]),
   expires_at: z.string().nullable(),
+  /** Quién decidió (humano o regla); null si nadie todavía. */
+  decision_actor: z.string().nullable().optional(),
 })
 export const NoteViewSchema = z.object({
   id: z.string(),
@@ -180,6 +208,16 @@ export const RunViewSchema = z.object({
   end_reason: z.string().nullable(),
   cost_kind: CostKindSchema,
   total_cost_micro_usd: z.number().int().nullable(),
+  /** Modelo, turnos y modo efectivos del run (ADR-0019 §4). */
+  options: z
+    .object({
+      model: z.string().nullable(),
+      max_turns: z.number().int().nullable(),
+      permission_mode: PermissionModeSchema,
+    })
+    .nullable()
+    .optional(),
+  parent_run_id: z.string().nullable().optional(),
   ...projected,
 })
 export const NodeViewSchema = z.object({
@@ -312,6 +350,7 @@ export const Methods = {
       purpose: RunPurposeSchema,
       profile: z.string().optional(),
       prompt: z.string().optional(),
+      options: RunOptionsSchema.optional(),
     }),
     result: RunViewSchema,
   },
@@ -328,7 +367,11 @@ export const Methods = {
     params: MutationMeta.extend({
       approval_id: z.string(),
       operation_hash: z.string(),
-      decision: z.enum(["approve_once", "approve_session", "amend", "deny"]),
+      /**
+       * `approve_session`: el mismo patrón el resto del run (máx. 15 min).
+       * `approve_always`: además crea una regla `auto` del proyecto (ADR-0019 §4).
+       */
+      decision: z.enum(["approve_once", "approve_session", "approve_always", "amend", "deny"]),
       amended_operation: z.unknown().optional(),
       reason: z.string().optional(),
     }),
@@ -340,8 +383,30 @@ export const Methods = {
   "approvals.list": {
     params: z.object({
       state: z.enum(["pending", "approved", "denied", "expired", "consumed"]).optional(),
+      /** Todas las decisiones, no sólo las pendientes: la vista de permisos. */
+      include_resolved: z.boolean().optional(),
+      run_id: z.string().optional(),
+      limit: z.number().int().positive().max(1000).optional(),
     }),
     result: z.object({ approvals: z.array(ApprovalViewSchema) }),
+  },
+  "permissions.rules_list": {
+    params: z.object({ include_revoked: z.boolean().optional() }),
+    result: z.object({ rules: z.array(PermissionRuleViewSchema) }),
+  },
+  "permissions.rule_add": {
+    params: MutationMeta.extend({
+      tool: z.string().min(1),
+      prefix: z.string().min(1).nullable().optional(),
+      exact: z.boolean().optional(),
+      effect: z.enum(["auto", "deny"]),
+      expires_at: z.string().optional(),
+    }),
+    result: PermissionRuleViewSchema,
+  },
+  "permissions.rule_revoke": {
+    params: MutationMeta.extend({ rule_id: z.string() }),
+    result: PermissionRuleViewSchema,
   },
   "events.subscribe": {
     params: z.object({

@@ -1,4 +1,10 @@
-import { allowedTransitions, type Lifecycle, RUN_START_RULES, type RunPurpose } from "@keel/core"
+import {
+  allowedTransitions,
+  type Lifecycle,
+  type PermissionMode,
+  RUN_START_RULES,
+  type RunPurpose,
+} from "@keel/core"
 import { ArrowRight, Play, Square } from "lucide-react"
 import { useState } from "react"
 import { mutationMeta } from "./client.js"
@@ -8,6 +14,17 @@ import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"])
+const MODE_LABEL: Record<PermissionMode, string> = {
+  ask: "Preguntar",
+  accept_edits: "Aceptar ediciones",
+  plan: "Sólo lectura",
+  bypass: "Bypass (sin permisos)",
+}
+/** Alias del SDK de Claude; el humano puede escribir un ID completo. */
+const MODELS: Record<string, string[]> = {
+  claude: ["haiku", "sonnet", "opus"],
+  codex: [],
+}
 const PURPOSE_LABEL: Record<RunPurpose, string> = {
   plan: "Planear",
   triage_eval: "Evaluar triage",
@@ -37,10 +54,17 @@ export function LiveTaskActions({
   const [purpose, setPurpose] = useState<RunPurpose | "">(purposes[0] ?? "")
   const [profile, setProfile] = useState("claude")
   const [prompt, setPrompt] = useState("")
+  const [mode, setMode] = useState<PermissionMode>("ask")
+  const [model, setModel] = useState("")
+  const [turns, setTurns] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const active = runs.filter((r) => !TERMINAL.has(r.status))
   const chosen = purposes.includes(purpose as RunPurpose) ? purpose : (purposes[0] ?? "")
+  // Lo mismo que valida el daemon: sólo `execute` trabaja en un worktree.
+  const modes: PermissionMode[] =
+    chosen === "execute" ? ["ask", "accept_edits", "plan", "bypass"] : ["ask", "plan"]
+  const chosenMode = modes.includes(mode) ? mode : "ask"
 
   async function act(work: () => Promise<unknown>) {
     if (busy) return
@@ -86,6 +110,11 @@ export function LiveTaskActions({
                 purpose: chosen,
                 profile,
                 ...(prompt.trim() ? { prompt: prompt.trim() } : {}),
+                options: {
+                  permission_mode: chosenMode,
+                  ...(model.trim() ? { model: model.trim() } : {}),
+                  ...(turns && profile === "claude" ? { max_turns: Number(turns) } : {}),
+                },
               })
               setPrompt("")
               onRun(run)
@@ -117,6 +146,55 @@ export function LiveTaskActions({
               <option value="codex">Codex</option>
             </select>
           </label>
+          <label>
+            Permisos
+            <select
+              aria-label="Modo de permisos"
+              value={chosenMode}
+              onChange={(e) => setMode(e.target.value as PermissionMode)}
+            >
+              {modes.map((m) => (
+                <option key={m} value={m}>
+                  {MODE_LABEL[m]}
+                </option>
+              ))}
+            </select>
+          </label>
+          {chosenMode === "bypass" && (
+            <p className="deleted" role="alert">
+              El agente actuará sin pedirte permiso dentro de su worktree. Keel lo registra, pero no
+              lo detiene.
+            </p>
+          )}
+          <label>
+            Modelo
+            <input
+              aria-label="Modelo"
+              list={`models-${profile}`}
+              placeholder="del perfil"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            />
+            <datalist id={`models-${profile}`}>
+              {(MODELS[profile] ?? []).map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </label>
+          {profile === "claude" && (
+            <label>
+              Turnos máx.
+              <input
+                aria-label="Turnos máximos"
+                type="number"
+                min={1}
+                max={500}
+                placeholder="12"
+                value={turns}
+                onChange={(e) => setTurns(e.target.value)}
+              />
+            </label>
+          )}
           <textarea
             aria-label="Instrucción para el agente"
             rows={3}

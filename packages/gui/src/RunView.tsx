@@ -107,6 +107,16 @@ export function RunView({
         <ChevronRight size={12} />
         <span className="mono">{run.id}</span>
         <Status state={run.visual_state} />
+        {run.options && (
+          <span
+            className={`mode-badge ${run.options.permission_mode}`}
+            title={`modelo ${run.options.model ?? "del perfil"} · turnos ${run.options.max_turns ?? "—"}`}
+          >
+            {run.options.permission_mode === "bypass"
+              ? "BYPASS · sin permisos"
+              : run.options.permission_mode}
+          </span>
+        )}
         <div className="toolbar-spacer" />
         {demo || !call ? (
           <Button disabled title="Sólo con el daemon conectado">

@@ -15,6 +15,7 @@ import {
   Plus,
   Search,
   Settings as SettingsIcon,
+  ShieldCheck,
   Sun,
   Terminal,
 } from "lucide-react"
@@ -27,6 +28,7 @@ import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
 import { LiveInbox } from "./LiveInbox.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
+import { Permissions } from "./Permissions.js"
 import { RunsList, RunView } from "./RunView.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
 import { Button, Hint, Modal } from "./ui.js"
@@ -38,6 +40,7 @@ const nav = [
   { id: "runs", label: "Runs", icon: Activity },
   { id: "workbench", label: "Workbench", icon: Terminal },
   { id: "design", label: "Design Studio", icon: PenTool },
+  { id: "permissions", label: "Permisos", icon: ShieldCheck },
   { id: "connections", label: "Connections", icon: Plug },
   { id: "agents", label: "Agent Control Plane", icon: Bot },
   { id: "settings", label: "Project setup", icon: SettingsIcon },
@@ -356,6 +359,19 @@ export function App() {
             onTask={openTask}
           />
         )}
+        {page === "permissions" &&
+          (workspace.mode === "live" ? (
+            <Permissions
+              call={workspace.call}
+              tick={workspace.inboxTick}
+              tasks={workspace.work_items}
+              runs={workspace.runs}
+            />
+          ) : (
+            <div className="padded">
+              <Hint>Conecta el daemon para ver y revocar lo que has permitido.</Hint>
+            </div>
+          ))}
         {page === "agents" && <ControlPlane demo={demo} />}
         {page === "connections" && <Connections demo={demo} />}
         {page === "workbench" && <Workbench demo={demo} />}

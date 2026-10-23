@@ -8,6 +8,7 @@
 export * from "./correlation.js"
 export * from "./envelope.js"
 export * from "./lifecycle.js"
+export * from "./permissions.js"
 export * from "./protocol.js"
 export * from "./redaction.js"
 export * from "./run-outcome.js"

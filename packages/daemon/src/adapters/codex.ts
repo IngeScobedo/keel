@@ -18,7 +18,7 @@
  * - Costo: sólo tokens. `cost_kind = unknown`; nunca dólares inventados.
  */
 import { spawn } from "node:child_process"
-import { classifyRunOutcome, type RunSignals, toolCallLabel } from "@keel/core"
+import { classifyRunOutcome, type PermissionMode, type RunSignals, toolCallLabel } from "@keel/core"
 import {
   Codex,
   type CodexOptions,
@@ -64,11 +64,22 @@ export type CodexProfile = {
   codex_path: string | null
   /** El puente `keel mcp` y otros servidores stdio, como en el perfil de Claude. */
   mcp_servers: Record<string, { command: string; args: string[]; env: Record<string, string> }>
+  /**
+   * Modo de permisos del run (ADR-0019 §4). En Codex: `plan` usa `read-only`;
+   * `bypass` quita las aprobaciones pero conserva el sandbox `workspace-write`;
+   * `ask` y `accept_edits` piden aprobación (Codex ya aplica las ediciones del
+   * sandbox sin preguntar).
+   */
+  permission_mode: PermissionMode
+  /** Variables extra del proceso del agente (atribución en git, ADR-0018 §1). */
+  env: Record<string, string>
 }
 
 export const DEFAULT_CODEX_PROFILE: CodexProfile = {
   transport: "app_server",
   approval_policy: "on-request",
+  permission_mode: "ask",
+  env: {},
   auth_mode: "subscription_session",
   subscription_enabled: false,
   model: null,
@@ -169,7 +180,7 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
   ): Promise<RunRow> {
     const { run, store } = ctx
 
-    const execute = run.purpose === "execute"
+    const execute = run.purpose === "execute" && profile.permission_mode !== "plan"
     const threadOptions: ThreadOptions = {
       workingDirectory: profile.cwd,
       sandboxMode: execute ? "workspace-write" : "read-only",
@@ -208,6 +219,10 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     const codex = (this.deps.createCodex ?? defaultCreateCodex)({
       ...(profile.codex_path ? { codexPathOverride: profile.codex_path } : {}),
       ...mcpConfig(profile.mcp_servers),
+      // Con `env` el SDK no hereda process.env: se pasa entero más lo del run.
+      ...(Object.keys(profile.env).length
+        ? { env: { ...(process.env as Record<string, string>), ...profile.env } }
+        : {}),
     })
     const abort = new AbortController()
     this.running.set(run.id, abort)
@@ -268,9 +283,10 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     profile: CodexProfile,
   ): Promise<RunRow> {
     const { run, store } = ctx
-    const execute = run.purpose === "execute"
+    const execute = run.purpose === "execute" && profile.permission_mode !== "plan"
     const sandbox = execute ? "workspace-write" : "read-only"
-    const approvalPolicy = execute ? profile.approval_policy : "never"
+    const approvalPolicy =
+      execute && profile.permission_mode !== "bypass" ? profile.approval_policy : "never"
     store.updateRun(run.id, { status: "initializing", started_at: nowIso(), cost_kind: "unknown" })
     store.mergeManifest(run.id, {
       adapter: CODEX_ADAPTER_VERSION,
@@ -289,7 +305,8 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     ctx.notifyRun()
 
     const args = ["app-server", ...configOverrides(profile, execute)]
-    const launch = (this.deps.appServerLaunch ?? defaultAppServerLaunch)(args, profile)
+    const base = (this.deps.appServerLaunch ?? defaultAppServerLaunch)(args, profile)
+    const launch = { ...base, env: { ...base.env, ...profile.env } }
     const server = new AppServerClient(launch)
     this.recordProcess(ctx, server, launch)
     const abort = new AbortController()

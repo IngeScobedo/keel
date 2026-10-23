@@ -4,8 +4,9 @@ import type {
   PairingViewSchema,
   RunRequestViewSchema,
 } from "@keel/core"
-import { Check, Hand, Inbox as InboxIcon, Play, Plug, ShieldAlert, X } from "lucide-react"
+import { Check, Hand, Inbox as InboxIcon, Play, Plug, ShieldAlert } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
+import { ApprovalActions } from "./ApprovalActions.js"
 import { mutationMeta } from "./client.js"
 import { actorLabel, formatCost, type Run, type WorkItem } from "./model.js"
 import { Button, Empty, Hint, Modal, Status } from "./ui.js"
@@ -63,7 +64,6 @@ export function LiveInbox({
   const [category, setCategory] = useState("Everything")
   const [error, setError] = useState("")
   const [now, setNow] = useState(Date.now)
-  const [confirm, setConfirm] = useState<{ approval: Approval; approve: boolean } | null>(null)
   const [pairForm, setPairForm] = useState<{
     pairing: Pairing
     task: string
@@ -178,23 +178,17 @@ export function LiveInbox({
                     </div>
                     <div className="approval-body">
                       <pre>{op.body}</pre>
-                      <div className="approval-actions">
-                        <Button
-                          variant="primary"
-                          disabled={busy}
-                          onClick={() => setConfirm({ approval, approve: true })}
-                        >
-                          Aprobar una vez
-                        </Button>
-                        <span className="mono muted">{approval.operation_hash.slice(0, 12)}</span>
-                        <Button
-                          variant="danger"
-                          disabled={busy}
-                          onClick={() => setConfirm({ approval, approve: false })}
-                        >
-                          Denegar
-                        </Button>
-                      </div>
+                      <p className="mono muted">
+                        run {approval.run_id} · hash {approval.operation_hash.slice(0, 12)}
+                      </p>
+                      <ApprovalActions
+                        approvalId={approval.id}
+                        operationHash={approval.operation_hash}
+                        tool={op.tool}
+                        input={(approval.operation as { input?: unknown } | null)?.input}
+                        call={call}
+                        onDone={() => void refresh()}
+                      />
                     </div>
                   </article>
                 )
@@ -339,52 +333,6 @@ export function LiveInbox({
           )}
         </section>
       </div>
-      {confirm && (
-        <Modal
-          title={confirm.approve ? "Confirmar aprobación única" : "Denegar operación"}
-          onClose={() => setConfirm(null)}
-        >
-          <p>
-            <strong>{operationText(confirm.approval.operation).tool}</strong> en{" "}
-            {task(confirm.approval.work_item_id)?.display_id ?? confirm.approval.work_item_id}
-          </p>
-          <pre>{operationText(confirm.approval.operation).body}</pre>
-          <dl className="confirmation-scope">
-            <dt>Run</dt>
-            <dd className="mono">{confirm.approval.run_id}</dd>
-            <dt>Operation hash</dt>
-            <dd className="mono">{confirm.approval.operation_hash}</dd>
-            <dt>Vence</dt>
-            <dd>
-              {confirm.approval.expires_at
-                ? new Date(confirm.approval.expires_at).toLocaleTimeString()
-                : "—"}
-            </dd>
-          </dl>
-          <div className="modal-actions">
-            <Button onClick={() => setConfirm(null)}>Volver</Button>
-            <Button
-              variant={confirm.approve ? "primary" : "danger"}
-              icon={confirm.approve ? Check : X}
-              disabled={busy}
-              onClick={() => {
-                const { approval, approve } = confirm
-                setConfirm(null)
-                void act(() =>
-                  call("approvals.resolve", {
-                    ...mutationMeta(),
-                    approval_id: approval.id,
-                    operation_hash: approval.operation_hash,
-                    decision: approve ? "approve_once" : "deny",
-                  }),
-                )
-              }}
-            >
-              {confirm.approve ? "Confirmar aprobación" : "Confirmar denegación"}
-            </Button>
-          </div>
-        </Modal>
-      )}
       {pairForm && (
         <Modal title="Aprobar sesión externa" onClose={() => setPairForm(null)}>
           <p>

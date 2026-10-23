@@ -1,9 +1,9 @@
 import type { EventNotification } from "@keel/core"
 import { Bot, Check, ChevronDown, ChevronRight, CircleAlert, Send, User, X } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
-import { mutationMeta } from "./client.js"
+import { ApprovalActions } from "./ApprovalActions.js"
 import { buildChat, type ChatItem } from "./model.js"
-import { Button, Empty, Hint } from "./ui.js"
+import { Button, Empty } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -89,6 +89,18 @@ function ChatRow({ item, call }: { item: ChatItem; call?: Call }) {
       )
     case "approval":
       return <ApprovalRow item={item} {...(call ? { call } : {})} />
+    case "auto":
+      return (
+        <p className={`chat-auto ${item.effect}`} data-testid="chat-auto">
+          {item.effect === "deny" ? <X size={12} /> : <Check size={12} />}
+          <code className="tool-name">{item.tool}</code>
+          <span className="mono tool-input">{item.input}</span>
+          <span className="muted">
+            {item.effect === "deny" ? "negado" : "permitido"} por{" "}
+            {item.source.startsWith("session:") ? "esta sesión" : "regla"} {item.label}
+          </span>
+        </p>
+      )
     case "status":
       return (
         <p className={`chat-status ${item.tone}`} data-testid="chat-status">
@@ -107,8 +119,6 @@ function ApprovalRow({
   call?: Call
 }) {
   const [now, setNow] = useState(Date.now)
-  const [error, setError] = useState("")
-  const [busy, setBusy] = useState(false)
   const pending = item.decision === null
   useEffect(() => {
     if (!pending) return
@@ -119,22 +129,6 @@ function ApprovalRow({
     ? Math.max(0, Math.ceil((Date.parse(item.expires_at) - now) / 1000))
     : null
   const expired = pending && left === 0
-  async function decide(approve: boolean) {
-    if (!call || busy) return
-    setBusy(true)
-    try {
-      await call("approvals.resolve", {
-        ...mutationMeta(),
-        approval_id: item.approval_id,
-        operation_hash: item.operation_hash,
-        decision: approve ? "approve_once" : "deny",
-      })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
   return (
     <div
       className="chat-approval"
@@ -150,16 +144,14 @@ function ApprovalRow({
       </strong>
       {item.input && <pre className="chat-approval-input">{item.input}</pre>}
       {pending && !expired && call && (
-        <span className="chat-approval-actions">
-          <Button variant="primary" icon={Check} disabled={busy} onClick={() => void decide(true)}>
-            Aprobar una vez
-          </Button>
-          <Button variant="danger" icon={X} disabled={busy} onClick={() => void decide(false)}>
-            Denegar
-          </Button>
-        </span>
+        <ApprovalActions
+          approvalId={item.approval_id}
+          operationHash={item.operation_hash}
+          tool={item.tool}
+          input={item.raw_input}
+          call={call}
+        />
       )}
-      {error && <Hint>{error}</Hint>}
     </div>
   )
 }

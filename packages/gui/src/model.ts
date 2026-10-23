@@ -107,6 +107,7 @@ export function actorLabel(actor: string): {
 export function touchesInbox(kind: string): boolean {
   return (
     kind.startsWith("approval.") ||
+    kind.startsWith("permission.") ||
     kind.startsWith("session.pairing") ||
     kind === "run.requested" ||
     kind === "run.request_resolved"
@@ -182,10 +183,20 @@ export type ChatItem =
       operation_hash: string
       tool: string
       input: string
+      raw_input: unknown
       expires_at: string | null
       decision: string | null
     }
   | { kind: "status"; key: string; text: string; tone: "info" | "error" }
+  | {
+      kind: "auto"
+      key: string
+      tool: string
+      input: string
+      effect: string
+      label: string
+      source: string
+    }
 
 const TURN_ACTIONS: Record<string, string> = {
   raise_limit: "Sube el límite del perfil y vuelve a lanzar el run.",
@@ -249,6 +260,7 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           operation_hash: String(p.operation_hash),
           tool: String(p.tool),
           input: p.input === undefined ? "" : toolInput(p.input),
+          raw_input: p.input,
           expires_at: typeof p.expires_at === "string" ? p.expires_at : null,
           decision: null as string | null,
         }
@@ -256,6 +268,17 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         items.push(a)
         break
       }
+      case "approval.auto":
+        items.push({
+          kind: "auto",
+          key,
+          tool: String(p.tool),
+          input: p.input === undefined ? "" : toolInput(p.input),
+          effect: String(p.effect),
+          label: String(p.label),
+          source: String(p.source),
+        })
+        break
       case "approval.resolved": {
         const a = approvals.get(String(p.approval_id))
         if (a) a.decision = String(p.decision)

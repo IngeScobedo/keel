@@ -932,3 +932,37 @@ CREATE TABLE session_pairings (
 );
 CREATE INDEX idx_pairings_pending ON session_pairings(state) WHERE state = 'pending';
 ```
+
+### 0004 · Uso interactivo: reglas de permiso, conversación y proyectos (ADR-0019)
+
+`permission_rules` guarda lo que el humano decidió «permitir siempre» (o
+negar) en un proyecto. Una regla nombra la herramienta y, para comandos, el
+prefijo (`git status`) o el comando exacto; `prefix` nulo cubre toda la
+herramienta. Se revoca, no se borra, para que la vista de permisos conserve el
+historial. `runs.parent_run_id` encadena la continuación de una conversación:
+cada mensaje después del final es un run hijo con su propio costo y estado.
+`projects.last_opened_at` ordena los proyectos recientes; cada carpeta abierta
+es su `work_space` con su proyecto, como el de `--root`.
+
+```sql
+-- migración: 0004-uso-interactivo
+CREATE TABLE permission_rules (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    tool TEXT NOT NULL,
+    prefix TEXT,
+    exact INTEGER NOT NULL DEFAULT 0 CHECK (exact IN (0, 1)),
+    effect TEXT NOT NULL CHECK (effect IN ('auto', 'deny')),
+    source_approval_id TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    expires_at TEXT,
+    revoked_at TEXT,
+    revoked_by TEXT
+);
+CREATE INDEX idx_permission_rules_active ON permission_rules(project_id)
+    WHERE revoked_at IS NULL;
+
+ALTER TABLE runs ADD COLUMN parent_run_id TEXT;
+ALTER TABLE projects ADD COLUMN last_opened_at TEXT;
+```

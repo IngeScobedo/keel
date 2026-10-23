@@ -10,11 +10,14 @@ import {
   type AgentScope,
   allowedTransitions,
   checkTransition,
+  describePattern,
   ErrorCode,
   type Lifecycle,
   type MethodName,
   type Methods,
   type MutationMeta,
+  type PermissionMode,
+  patternFor,
   RUN_START_RULES,
   type TransitionAuthority,
 } from "@keel/core"
@@ -60,6 +63,7 @@ import { openStore, type Store } from "./store/db.js"
 import {
   type NoteRow,
   type PairingRow,
+  type PermissionRuleRow,
   Repo,
   type RunRequestRow,
   type RunRow,
@@ -122,6 +126,8 @@ export class Daemon {
   private orphanSweep: Promise<void> = Promise.resolve()
   /** Runs que este proceso ya está despachando: una entrega repetida del outbox no los duplica. */
   private readonly dispatching = new Set<string>()
+  /** Carpeta de trabajo de cada run vivo: las reglas no cubren archivos fuera de ella. */
+  private readonly runCwd = new Map<string, string>()
   /** Trabajo en segundo plano (runs, liberaciones); `idle()` espera a que termine. */
   private readonly background = new Set<Promise<unknown>>()
   private lagMs = 0
@@ -164,6 +170,7 @@ export class Daemon {
       repo: this.repo,
       waitApproval: (id, ms) => this.waitApproval(id, ms),
       timeoutMs: this.profile.approval_timeout_ms,
+      cwdOf: (runId) => this.runCwd.get(runId) ?? null,
     })
     this.server = new IpcServer({
       socketPath: opts.socketPath,
@@ -736,13 +743,59 @@ export class Daemon {
         const p = params as Params<"approvals.list">
         return {
           approvals: repo
-            .listApprovals(project.project_id, p.state ?? "pending")
+            .listApprovals(project.project_id, {
+              ...(p.state ? { state: p.state } : {}),
+              ...(p.include_resolved ? { includeResolved: true } : {}),
+              ...(p.run_id ? { runId: p.run_id } : {}),
+              ...(p.limit ? { limit: p.limit } : {}),
+            })
             .map(({ operation_json, ...a }) => ({
               ...a,
+              state: a.state as "pending" | "approved" | "denied" | "expired" | "consumed",
               operation: JSON.parse(operation_json) as unknown,
             })),
         }
       },
+      "permissions.rules_list": (params, ctx) => {
+        requireHuman(ctx, "revisar las reglas de permiso")
+        const p = params as Params<"permissions.rules_list">
+        return {
+          rules: repo
+            .listPermissionRules(project.project_id, p.include_revoked ?? false)
+            .map(ruleView),
+        }
+      },
+      "permissions.rule_add": this.mutation<Params<"permissions.rule_add">>(
+        "permissions.rule_add",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "crear una regla de permiso")
+          const rule = repo.addPermissionRule({
+            project_id: project.project_id,
+            tool: p.tool,
+            prefix: p.prefix ?? null,
+            exact: p.exact ?? false,
+            effect: p.effect,
+            created_by: uow.actorId,
+            expires_at: p.expires_at ?? null,
+          })
+          const view = ruleView(rule)
+          uow.emit("permission.rule_added", null, view)
+          return view
+        },
+      ),
+      "permissions.rule_revoke": this.mutation<Params<"permissions.rule_revoke">>(
+        "permissions.rule_revoke",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "revocar una regla de permiso")
+          const old = repo.getPermissionRule(p.rule_id)
+          if (!old || old.project_id !== project.project_id)
+            throw rpcError(ErrorCode.notFound, "la regla no existe")
+          const rule = repo.revokePermissionRule(p.rule_id, uow.actorId) as PermissionRuleRow
+          const view = ruleView(rule)
+          uow.emit("permission.rule_revoked", null, view)
+          return view
+        },
+      ),
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
         "approvals.resolve",
         (p, uow) => {
@@ -756,10 +809,27 @@ export class Daemon {
           if (a.state !== "pending")
             throw rpcError(ErrorCode.invalidTransition, `la aprobación está ${a.state}`)
           const decision =
-            p.decision === "approve_once" || p.decision === "approve_session"
+            p.decision === "approve_once" ||
+            p.decision === "approve_session" ||
+            p.decision === "approve_always"
               ? "approved"
               : "denied"
           repo.setApproval(a.id, decision, uow.actorId)
+          // ADR-0019 §4: recordar lo aprobado, para el run o para el proyecto.
+          if (p.decision === "approve_session" || p.decision === "approve_always") {
+            const op = JSON.parse(a.operation_json) as { tool: string; input: unknown }
+            const pattern = patternFor(op.tool, op.input)
+            if (p.decision === "approve_always") {
+              const rule = repo.addPermissionRule({
+                project_id: a.project_id,
+                ...pattern,
+                effect: "auto",
+                created_by: uow.actorId,
+                source_approval_id: a.id,
+              })
+              uow.emit("permission.rule_added", a.run_id, ruleView(rule))
+            } else uow.afterCommit(() => this.toolGate.grantSession(a.run_id, pattern, a.id))
+          }
           uow.afterCommit(() => this.approvalWaiters.get(a.id)?.(decision))
           return { approval_id: a.id, state: decision }
         },
@@ -786,7 +856,10 @@ export class Daemon {
     const manifest = JSON.parse(run.context_manifest_json) as {
       budget_micro_usd?: number
       provider?: string
+      options?: { model: string | null; max_turns: number | null; permission_mode: PermissionMode }
     }
+    const opt = manifest.options
+    const env = agentEnv(run, item, manifest.provider === "codex" ? "Codex" : "Claude")
     const useCodex = manifest.provider === "codex"
     const provider = useCodex ? this.codex : this.claude
     const ctx = createRunContext({
@@ -820,14 +893,25 @@ export class Daemon {
           ).budget_micro_usd
           const mcp_servers = this.keelMcpServer(current)
           // ADR-0008 §7: el presupuesto en USD no aplica a Codex (sólo reporta tokens).
+          this.runCwd.set(run.id, ws.cwd)
           final = useCodex
             ? await this.codex.execute(ctx, prompt, {
                 ...this.codexProfile,
+                ...(opt ? { model: opt.model, permission_mode: opt.permission_mode } : {}),
+                env,
                 cwd: ws.cwd,
                 mcp_servers,
               })
             : await this.claude.execute(ctx, prompt, {
                 ...this.profile,
+                ...(opt
+                  ? {
+                      model: opt.model ?? this.profile.model,
+                      max_turns: opt.max_turns ?? this.profile.max_turns,
+                      permission_mode: opt.permission_mode,
+                    }
+                  : {}),
+                env,
                 cwd: ws.cwd,
                 max_budget_usd: budget === undefined ? null : budget / 1_000_000,
                 mcp_servers,
@@ -841,6 +925,8 @@ export class Daemon {
     // (que captura antes) va encolada; si no, se capturan los cambios para la revisión.
     // La capacidad del agente caduca con el run (ADR-0009 §3).
     this.agentTokens.revokeRun(run.id)
+    this.toolGate.forgetRun(run.id)
+    this.runCwd.delete(run.id)
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
   }
@@ -909,6 +995,8 @@ export class Daemon {
       prompt?: string | undefined
       profile?: string | undefined
       expected_revision?: number | undefined
+      options?: Params<"runs.start">["options"]
+      parent_run_id?: string | null
     },
   ): ReturnType<Repo["runView"]> {
     const repo = this.repo
@@ -945,13 +1033,15 @@ export class Daemon {
     const provider = p.profile ?? "claude"
     if (provider !== "claude" && provider !== "codex")
       throw rpcError(ErrorCode.invalidParams, `perfil desconocido: ${provider} (claude | codex)`)
+    const options = this.runOptions(p.purpose, provider, p.options)
     const run = repo.createRun({
       project_id: project.project_id,
       work_item_id: w.id,
       purpose: p.purpose,
       // Va en el manifest para que el despacho, aunque llegue tras una caída, use el
-      // mismo tope y el mismo proveedor.
-      manifest: { budget_micro_usd: lim.runBudgetMicroUsd, provider },
+      // mismo tope, el mismo proveedor y las mismas opciones.
+      manifest: { budget_micro_usd: lim.runBudgetMicroUsd, provider, options },
+      parent_run_id: p.parent_run_id ?? null,
     })
     if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
     const view = repo.runView(run)
@@ -963,6 +1053,36 @@ export class Daemon {
       prompt,
     } satisfies RunDispatch)
     return view
+  }
+
+  /**
+   * Opciones efectivas del run (ADR-0019 §4): lo que pidió el humano o el
+   * perfil. `bypass` sólo para `execute` en un worktree de git; los runs que
+   * no ejecutan trabajan en la raíz del repo y sólo admiten `ask` o `plan`.
+   */
+  private runOptions(
+    purpose: Params<"runs.start">["purpose"],
+    provider: "claude" | "codex",
+    o: Params<"runs.start">["options"],
+  ): { model: string | null; max_turns: number | null; permission_mode: PermissionMode } {
+    const mode = o?.permission_mode ?? "ask"
+    if (purpose !== "execute" && mode !== "ask" && mode !== "plan")
+      throw rpcError(
+        ErrorCode.invalidParams,
+        `un run ${purpose} trabaja en la raíz del repo: sólo admite los modos ask o plan`,
+      )
+    if (mode === "bypass" && this.repo.getProjectVcs(this.project.project_id).vcs !== "git")
+      throw rpcError(
+        ErrorCode.invalidParams,
+        "bypass sólo existe dentro de un worktree de git; este proyecto no usa git",
+      )
+    return provider === "claude"
+      ? {
+          model: o?.model ?? this.profile.model,
+          max_turns: o?.max_turns ?? this.profile.max_turns,
+          permission_mode: mode,
+        }
+      : { model: o?.model ?? this.codexProfile.model, max_turns: null, permission_mode: mode }
   }
 
   /** La conexión viva que pidió este emparejamiento, si sigue abierta. */
@@ -1102,6 +1222,40 @@ function agentRun(ctx: HandlerContext): string | null {
 function pairingCode(): string {
   const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
   return [...randomBytes(6)].map((b) => alphabet[b % alphabet.length]).join("")
+}
+
+/**
+ * Atribución en el proceso del agente (ADR-0018 §1): los commits salen a su
+ * nombre sin tocar la configuración de git del usuario, y el correo lleva el
+ * run. `KEEL_RUN_ID` y `KEEL_ACTOR` sirven para que hooks y herramientas
+ * etiqueten lo que hacen; no son seguridad.
+ */
+export function agentEnv(run: RunRow, item: WorkItemRow, who: string): Record<string, string> {
+  const name = `${who} (Keel ${item.display_id})`
+  const email = `${run.id.toLowerCase()}@agents.keel.local`
+  return {
+    GIT_AUTHOR_NAME: name,
+    GIT_AUTHOR_EMAIL: email,
+    GIT_COMMITTER_NAME: name,
+    GIT_COMMITTER_EMAIL: email,
+    KEEL_RUN_ID: run.id,
+    KEEL_ACTOR: `agent:${run.id}`,
+  }
+}
+
+function ruleView(r: PermissionRuleRow) {
+  const pattern = { tool: r.tool, prefix: r.prefix, exact: r.exact === 1 }
+  return {
+    id: r.id,
+    ...pattern,
+    effect: r.effect,
+    label: describePattern(pattern),
+    source_approval_id: r.source_approval_id,
+    created_by: r.created_by,
+    created_at: r.created_at,
+    expires_at: r.expires_at,
+    revoked_at: r.revoked_at,
+  }
 }
 
 function pairingView(p: PairingRow) {

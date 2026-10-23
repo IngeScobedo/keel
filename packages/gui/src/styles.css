@@ -1990,3 +1990,53 @@ progress::-moz-progress-bar {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.approval-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  order: 3;
+  flex-basis: 100%;
+}
+.approval-choices .danger {
+  margin-left: auto;
+}
+.chat-auto {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+}
+.chat-auto.deny {
+  color: var(--color-status-failed);
+}
+.mode-badge {
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--color-border-default);
+  color: var(--color-text-secondary);
+}
+.mode-badge.bypass {
+  color: #fff;
+  background: var(--color-status-failed);
+  border-color: var(--color-status-failed);
+}
+.permissions section {
+  margin-bottom: 24px;
+}
+.permissions td code,
+.permissions td .mono {
+  overflow-wrap: anywhere;
+}
+.rule-form {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 4px;
+}
+.rule-form input:nth-child(2) {
+  flex: 1;
+}
