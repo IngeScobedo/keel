@@ -1,6 +1,6 @@
 # ADR-0012: Artefactos, evidencias y retención
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0004 §3 y §6 (umbral de 256 KiB, retención explícita),

@@ -20,26 +20,26 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0008](./0008-adaptador-codex.md)                               | Adaptador de Codex: transportes SDK y App Server, suscripción local con opción explícita, aprobaciones por capacidad | Aceptado (2026-10-22)             | Alta       |
 | [0009](./0009-tools-mcp-y-actor-agente.md)                      | Acceso de agentes a Keel por MCP e identidad de ejecución                                                            | Aceptado (2026-10-22)             | **Máxima** |
 | [0010](./0010-workspace-driver-y-modo-sin-vcs.md)               | `WorkspaceDriver` y modo sin VCS                                                                                     | Aceptado (2026-10-22)             | Alta       |
-| [0011](./0011-observabilidad-eventos-semanticos-y-cobertura.md) | Observabilidad: eventos de origen, eventos semánticos y cobertura declarada                                          | Propuesto                         | Alta       |
-| [0012](./0012-artefactos-evidencias-y-retencion.md)             | Artefactos direccionados por contenido, evidencias con procedencia y retención                                       | Propuesto                         | Alta       |
-| [0013](./0013-intermediario-de-recursos-y-secretos.md)          | Intermediario de recursos: secretos por referencia y permisos por operación                                          | Propuesto                         | **Máxima** |
-| [0014](./0014-integraciones-plugins-y-visualizadores.md)        | Integraciones en tres niveles, plugins fuera de proceso y visualizadores                                             | Propuesto                         | Alta       |
-| [0015](./0015-operaciones-git-con-plan-aprobado.md)             | Operaciones de git del agente con plan aprobado y verificado                                                         | Propuesto                         | Alta       |
-| [0016](./0016-investigaciones-y-reportes-con-evidencia.md)      | Investigaciones y reportes con evidencia                                                                             | Propuesto                         | Alta       |
-| [0017](./0017-contexto-para-agentes-y-busqueda.md)              | Contexto para agentes: tarea vinculada, recursos MCP y búsqueda                                                      | Propuesto                         | Media      |
-| [0018](./0018-identidad-del-agente-en-el-sistema.md)            | Identidad del agente fuera de las tools: dos puertas, shell aislada y atribución                                     | Propuesto                         | **Máxima** |
-| [0019](./0019-uso-interactivo-desde-la-gui.md)                  | Uso interactivo desde la GUI: daemon de usuario, proyectos, conversación y permisos                                  | Propuesto                         | Alta       |
+| [0011](./0011-observabilidad-eventos-semanticos-y-cobertura.md) | Observabilidad: eventos de origen, eventos semánticos y cobertura declarada                                          | Aceptado (2026-10-23)             | Alta       |
+| [0012](./0012-artefactos-evidencias-y-retencion.md)             | Artefactos direccionados por contenido, evidencias con procedencia y retención                                       | Aceptado (2026-10-23)             | Alta       |
+| [0013](./0013-intermediario-de-recursos-y-secretos.md)          | Intermediario de recursos: secretos por referencia y permisos por operación                                          | Aceptado (2026-10-23)             | **Máxima** |
+| [0014](./0014-integraciones-plugins-y-visualizadores.md)        | Integraciones en tres niveles, plugins fuera de proceso y visualizadores                                             | Aceptado (2026-10-23)             | Alta       |
+| [0015](./0015-operaciones-git-con-plan-aprobado.md)             | Operaciones de git del agente con plan aprobado y verificado                                                         | Aceptado (2026-10-23)             | Alta       |
+| [0016](./0016-investigaciones-y-reportes-con-evidencia.md)      | Investigaciones y reportes con evidencia                                                                             | Aceptado (2026-10-23)             | Alta       |
+| [0017](./0017-contexto-para-agentes-y-busqueda.md)              | Contexto para agentes: tarea vinculada, recursos MCP y búsqueda                                                      | Aceptado (2026-10-23)             | Media      |
+| [0018](./0018-identidad-del-agente-en-el-sistema.md)            | Identidad del agente fuera de las tools: dos puertas, shell aislada y atribución                                     | Aceptado (2026-10-23)             | **Máxima** |
+| [0019](./0019-uso-interactivo-desde-la-gui.md)                  | Uso interactivo desde la GUI: daemon de usuario, proyectos, conversación y permisos                                  | Aceptado (2026-10-23)             | Alta       |
 
 ## Estado «Propuesto»
 
-0008, 0009 y 0010 los aceptó el humano el 2026-10-22. El resto está en
-**Propuesto**; 0006 tiene sus tres decisiones tomadas por el humano (2026-10-09)
-y aplicadas, y aun así el cambio de estado es suyo. Los escribió Claude a
-petición del humano el 2026-10-08 a partir del SDD, los ADRs de Mirador, el
-canvas de pen.dev y los docs oficiales de Anthropic verificados ese día. Pasan a
-**Aceptado** cuando el humano los lea, corrija y cambie el estado; hasta
-entonces el código que dependa de uno se escribe como si fuera a aceptarse, y se
-reescribe si no.
+0008, 0009 y 0010 los aceptó el humano el 2026-10-22, y de 0011 a 0019 el
+2026-10-23. El resto está en **Propuesto**; 0006 tiene sus tres decisiones
+tomadas por el humano (2026-10-09) y aplicadas, y aun así el cambio de estado es
+suyo. Los escribió Claude a petición del humano el 2026-10-08 a partir del SDD,
+los ADRs de Mirador, el canvas de pen.dev y los docs oficiales de Anthropic
+verificados ese día. Pasan a **Aceptado** cuando el humano los lea, corrija y
+cambie el estado; hasta entonces el código que dependa de uno se escribe como si
+fuera a aceptarse, y se reescribe si no.
 
 ## Orden de lectura
 

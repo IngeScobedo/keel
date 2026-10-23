@@ -1,6 +1,6 @@
 # ADR-0015: Operaciones de git del agente con plan aprobado y verificado
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0002 (Keel no maneja credenciales de terceros), ADR-0009

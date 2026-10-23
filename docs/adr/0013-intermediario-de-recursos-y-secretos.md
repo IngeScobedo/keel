@@ -1,6 +1,6 @@
 # ADR-0013: Intermediario de recursos: conexiones, secretos y permisos por operación
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Máxima
 - **Relacionados:** ADR-0002 (sin manejo de credenciales de proveedores),

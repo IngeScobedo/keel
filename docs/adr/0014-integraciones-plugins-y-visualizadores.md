@@ -1,6 +1,6 @@
 # ADR-0014: Integraciones: tres niveles, plugins fuera de proceso y visualizadores
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0007 (kit, extraer con el segundo consumidor), ADR-0009

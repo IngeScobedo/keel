@@ -1,6 +1,6 @@
 # ADR-0018: Identidad del agente fuera de las tools: dos puertas, shell aislada y atribución
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-23
 - **Criticidad:** **Máxima**
 - **Relacionados:** ADR-0002 (Keel no toca credenciales), ADR-0005 §1 (endpoint

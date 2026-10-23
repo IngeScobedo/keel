@@ -1,6 +1,6 @@
 # ADR-0011: Observabilidad: eventos de origen, eventos semánticos y cobertura
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0004 §3–§4 (envelope de eventos, proyecciones), ADR-0005

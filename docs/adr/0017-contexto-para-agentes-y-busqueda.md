@@ -1,6 +1,6 @@
 # ADR-0017: Contexto para agentes: tarea vinculada, recursos MCP y búsqueda
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Media
 - **Relacionados:** ADR-0004 §5 (FTS5 siempre, `sqlite-vec` opcional), ADR-0009

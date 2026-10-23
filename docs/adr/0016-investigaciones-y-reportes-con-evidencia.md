@@ -1,6 +1,6 @@
 # ADR-0016: Investigaciones y reportes con evidencia
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-22
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0006 (estados), ADR-0009 (actor agente), ADR-0011,

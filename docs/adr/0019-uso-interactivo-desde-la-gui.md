@@ -1,6 +1,6 @@
 # ADR-0019: Uso interactivo desde la GUI: daemon de usuario, proyectos, conversación y permisos
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-23)
 - **Fecha:** 2026-10-23
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0002 regla 5 (límites bajos, subirlos es explícito),
