@@ -126,8 +126,11 @@ export class Daemon {
     this.processes = opts.processes ?? defaultProcessTable()
     this.limits = { ...DEFAULT_LIMITS, ...opts.limits }
     this.claude = new ClaudeAdapter({ processes: this.processes, ...opts.adapterDeps })
-    this.codex = new CodexAdapter(opts.codexDeps)
     this.codexProfile = { ...DEFAULT_CODEX_PROFILE, cwd: opts.rootPath, ...opts.codex }
+    this.codex = new CodexAdapter(
+      { processes: this.processes, ...opts.codexDeps },
+      this.codexProfile.transport,
+    )
     this.outbox = new Outbox(this.repo)
     this.outbox.on(RUN_DISPATCH, (m) => this.onRunDispatch(m.payload as RunDispatch))
     this.outbox.on(WORKTREE_RELEASE, (m) =>

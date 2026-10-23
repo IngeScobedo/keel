@@ -8,7 +8,7 @@
  *
  * Codex (ADR-0008): los runs con `profile: "codex"` usan la sesión de `codex`
  * del usuario sólo si se habilita aquí, explícitamente:
- *   --codex-subscription      [--codex-model nombre]
+ *   --codex-subscription      [--codex-model nombre]  [--codex-transport app_server|sdk]
  *
  * Mantenimiento del store (SDD 03 §7), seguro con el daemon en marcha:
  *   main.ts backup  [--db ruta] --out dir             → manifest con sha256
@@ -90,6 +90,7 @@ if (import.meta.main && process.argv[2] === "mcp") {
     codex: {
       subscription_enabled: process.argv.includes("--codex-subscription"),
       ...(arg("--codex-model") ? { model: arg("--codex-model") as string } : {}),
+      ...(arg("--codex-transport") === "sdk" ? { transport: "sdk" as const } : {}),
     },
   })
   // start() reconcilia una sola vez y libera los worktrees de lo interrumpido.

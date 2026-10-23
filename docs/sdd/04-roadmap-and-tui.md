@@ -143,12 +143,13 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       El backpressure del IPC viene de la Fase 0 (ADR-0005 §4).
 - [ ] Adaptadores oficiales con matriz de capacidades y versiones; login
       delegado al proveedor. Claude hecho, con capacidades medidas
-      (`ProviderCapabilities`). Codex con el transporte `sdk` (ADR-0008):
-      sandbox `read-only`/`workspace-write`, red apagada, sin aprobaciones,
-      `process_control: indirect`, `cancel_scope: turn`, errores por reglas
-      versionadas y costo `unknown`; la suscripción sólo con
-      `--codex-subscription`. El transporte `app_server` sigue tras su spike
-      (docs/reviews/2026-10-22-spike-codex-app-server.md).
+      (`ProviderCapabilities`). Codex con dos transportes (ADR-0008).
+      `app_server` (por defecto): un `codex app-server` por run lanzado y
+      reconciliado por Keel, aprobaciones de comandos por el gate de Keel
+      (`accept`/`decline`), cancelar = `turn/interrupt` y cerrar el proceso,
+      errores por `codexErrorInfo` y cuota por ventana. `sdk`: sin pid ni
+      aprobaciones (`--codex-transport sdk`). La suscripción sólo con
+      `--codex-subscription`. Evidencia en `docs/reviews/2026-10-22-codex-*`.
 - [ ] Verificar qué modos de cuenta/suscripción admite cada integración; API
       facturada explícita. Claude según ADR-0002. Los términos de OpenAI para el
       login de ChatGPT los verifica el humano (ADR-0008 §2).

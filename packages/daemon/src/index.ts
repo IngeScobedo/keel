@@ -3,6 +3,7 @@
  */
 export * from "./adapters/claude.js"
 export * from "./adapters/codex.js"
+export * from "./adapters/codex-app-server.js"
 export * from "./adapters/provider.js"
 export * from "./approvals.js"
 export * from "./bus.js"

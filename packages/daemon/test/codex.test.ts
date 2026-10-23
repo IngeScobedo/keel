@@ -104,7 +104,7 @@ function boot(script: Script, codex: Partial<CodexProfile> = {}, login = 0) {
     rootPath: join(dir, "repo"),
     worktreesDir: join(dir, "worktrees"),
     adapterDeps: { binary: "/fake/claude" },
-    codex: { subscription_enabled: true, ...codex },
+    codex: { transport: "sdk", subscription_enabled: true, ...codex },
     codexDeps: {
       loginStatus: async () => ({
         code: login,
