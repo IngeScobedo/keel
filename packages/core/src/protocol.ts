@@ -35,6 +35,7 @@ export const ErrorCode = {
   invalidTransition: -32006,
   backpressure: -32007,
   limitExceeded: -32008, // concurrencia o presupuesto antes del spawn (ADR-0002 regla 3)
+  cursorExpired: -32009, // el cursor es anterior a una purga; details.min_cursor (ADR-0012 §8)
 } as const
 
 export const RpcError = z.object({
@@ -199,6 +200,35 @@ export const ProjectViewSchema = z.object({
   root_path: z.string(),
   vcs: z.string(),
   last_opened_at: z.string().nullable(),
+})
+/** Tipos de evidencia (ADR-0012 §3). */
+export const EvidenceKindSchema = z.enum([
+  "sql_result",
+  "screenshot",
+  "diff",
+  "test_report",
+  "chart",
+  "document",
+  "log",
+])
+export const SensitivitySchema = z.enum(["internal", "restricted"])
+export const EvidenceViewSchema = z.object({
+  id: z.string(),
+  work_item_id: z.string().nullable(),
+  run_id: z.string().nullable(),
+  kind: z.string(),
+  title: z.string().nullable(),
+  artifact_ref: z.string(),
+  sha256: z.string(),
+  size: z.number().int().nullable(),
+  media_type: z.string().nullable(),
+  sensitivity: SensitivitySchema.nullable(),
+  integrity: z.enum(["ok", "mismatch", "missing"]).nullable(),
+  metadata: z.unknown(),
+  provenance: z.unknown(),
+  created_by: z.string(),
+  supersedes_id: z.string().nullable(),
+  created_at: z.string(),
 })
 export const NoteViewSchema = z.object({
   id: z.string(),
@@ -454,6 +484,67 @@ export const Methods = {
     }),
     result: z.object({ approvals: z.array(ApprovalViewSchema) }),
   },
+  /** ADR-0012 §9: lectura por partes; el cliente verifica el hash al final. */
+  "artifacts.read": {
+    params: z.object({
+      ref: z.string(),
+      offset: z.number().int().nonnegative().optional(),
+      length: z.number().int().positive().optional(),
+    }),
+    result: z.object({
+      sha256: z.string(),
+      size: z.number().int(),
+      media_type: z.string(),
+      sensitivity: SensitivitySchema,
+      integrity: z.enum(["ok", "mismatch", "missing"]),
+      offset: z.number().int(),
+      data_base64: z.string(),
+      eof: z.boolean(),
+    }),
+  },
+  /**
+   * Adjunta evidencia (ADR-0012 §3). El humano manda el contenido; un agente,
+   * la ruta de un archivo de su worktree. Una corrección apunta a la anterior.
+   */
+  "evidence.attach": {
+    params: MutationMeta.extend({
+      work_item_id: z.string().optional(),
+      run_id: z.string().optional(),
+      kind: EvidenceKindSchema,
+      title: z.string().max(200).optional(),
+      content_base64: z.string().optional(),
+      media_type: z.string().optional(),
+      path: z.string().optional(),
+      supersedes_id: z.string().optional(),
+      metadata: z.record(z.string(), z.unknown()).optional(),
+      sensitivity: SensitivitySchema.optional(),
+    }),
+    result: EvidenceViewSchema,
+  },
+  "evidence.list": {
+    params: z.object({ work_item_id: z.string().optional(), run_id: z.string().optional() }),
+    result: z.object({ evidence: z.array(EvidenceViewSchema) }),
+  },
+  /**
+   * Retención explícita (ADR-0012 §7): borra eventos de un proyecto más viejos
+   * que `older_than_days` (y, si se nombra, su evidencia); luego recolecta los
+   * artefactos sin referencias. `dry_run` sólo cuenta.
+   */
+  "retention.purge": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      older_than_days: z.number().int().positive(),
+      event_kinds: z.array(z.string()).optional(),
+      include_evidence: z.boolean().optional(),
+      dry_run: z.boolean().optional(),
+    }),
+    result: z.object({
+      events: z.number().int(),
+      evidence: z.number().int(),
+      artifacts: z.number().int(),
+      dry_run: z.boolean(),
+    }),
+  },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),
     result: z.object({ rules: z.array(PermissionRuleViewSchema) }),
@@ -552,6 +643,7 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "handoffs.request",
   "runs.request",
   "session.pair_status",
+  "evidence.attach",
 ]
 
 /** El scope que exige cada método de agente; los demás no necesitan scope. */
@@ -562,6 +654,7 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "handoffs.request": "tasks:write",
   "notes.add": "notes:write",
   "runs.request": "runs:request",
+  "evidence.attach": "notes:write",
 }
 
 /**

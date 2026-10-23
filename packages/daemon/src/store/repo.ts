@@ -15,7 +15,9 @@ import {
   visualForRun,
   visualForWorkItem,
 } from "@keel/core"
+import type { ArtifactStore } from "../artifacts.js"
 import { nowIso, ulid } from "../ids.js"
+import { inlineOrPreview, previewOrInline } from "../payload.js"
 
 export type EventRow = {
   event_seq: number
@@ -187,8 +189,20 @@ const SNAPSHOT_COLS =
 
 export class Repo {
   readonly db: Database
+  /** Almacén de artefactos (ADR-0012); sin él, los cuerpos grandes no salen de la base. */
+  artifacts: ArtifactStore | null = null
   constructor(db: Database) {
     this.db = db
+  }
+
+  /**
+   * Un JSON de más de 256 KiB (ADR-0004 §3) se guarda como artefacto y queda un
+   * preview válido con `body_ref` hacia él. Sin almacén, se devuelve tal cual.
+   */
+  spill(json: string, bodyRef: string): { json: string; artifactRef: string | null } {
+    const store = this.artifacts
+    if (!store) return inlineOrPreview(JSON.parse(json), bodyRef)
+    return previewOrInline(json, (body) => store.put(body, "application/json").ref)
   }
 
   // --- workspace / proyecto por defecto ---------------------------------------
@@ -606,6 +620,9 @@ export class Repo {
   ): EventRow | null {
     const id = e.id ?? ulid()
     const received_at = nowIso()
+    const payloadJson = this.artifacts
+      ? this.spill(e.payload_json, `event:${id}`).json
+      : e.payload_json
     try {
       this.db
         .query(
@@ -622,7 +639,7 @@ export class Repo {
           e.kind,
           e.occurred_at,
           received_at,
-          e.payload_json,
+          payloadJson,
         )
     } catch (err) {
       // UNIQUE(project_id, source, source_event_key): el evento ya está; no es error (ingesta idempotente, ADR-0002 Mirador).
@@ -632,6 +649,22 @@ export class Repo {
     return this.db
       .query<EventRow, [string]>("SELECT * FROM events WHERE id = ?")
       .get(id) as EventRow
+  }
+  /**
+   * El cursor más viejo que todavía da una historia completa (ADR-0012 §8): el
+   * último evento borrado por una purga. 0 si nunca se purgó.
+   */
+  purgeFloor(projectId: string | null): number {
+    const row = projectId
+      ? this.db
+          .query<{ m: number | null }, [string]>(
+            "SELECT max(before_event_seq) - 1 m FROM event_purges WHERE project_id = ? OR project_id IS NULL",
+          )
+          .get(projectId)
+      : this.db
+          .query<{ m: number | null }, []>("SELECT max(before_event_seq) - 1 m FROM event_purges")
+          .get()
+    return row?.m ?? 0
   }
   /** Una página de eventos con `seq < event_seq <= upTo`, en orden. */
   eventsAfter(
@@ -1062,6 +1095,65 @@ export class Repo {
       .all(...args)
   }
 
+  // --- evidencia (ADR-0012 §3): append-only ------------------------------------------
+  addEvidence(p: {
+    project_id: string
+    work_item_id: string | null
+    run_id: string | null
+    kind: string
+    title: string | null
+    artifact_ref: string
+    sha256: string
+    metadata: unknown
+    provenance: unknown
+    created_by: string
+    supersedes_id: string | null
+  }): EvidenceRow {
+    const id = ulid()
+    this.db
+      .query(
+        `INSERT INTO evidence(id, project_id, work_item_id, run_id, kind, title, artifact_ref, sha256,
+           metadata_json, provenance_json, created_by, supersedes_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .run(
+        id,
+        p.project_id,
+        p.work_item_id,
+        p.run_id,
+        p.kind,
+        p.title,
+        p.artifact_ref,
+        p.sha256,
+        JSON.stringify(p.metadata ?? {}),
+        JSON.stringify(p.provenance ?? {}),
+        p.created_by,
+        p.supersedes_id,
+      )
+    return this.getEvidence(id) as EvidenceRow
+  }
+  getEvidence(id: string): EvidenceRow | null {
+    return this.db.query<EvidenceRow, [string]>("SELECT * FROM evidence WHERE id = ?").get(id)
+  }
+  /** La evidencia de una tarea (y de sus runs) o de un run, la más nueva primero. */
+  listEvidence(q: {
+    work_item_id?: string | undefined
+    run_id?: string | undefined
+  }): EvidenceRow[] {
+    if (q.run_id)
+      return this.db
+        .query<EvidenceRow, [string]>(
+          "SELECT * FROM evidence WHERE run_id = ? ORDER BY created_at DESC, id DESC",
+        )
+        .all(q.run_id)
+    return this.db
+      .query<EvidenceRow, [string, string]>(
+        `SELECT * FROM evidence WHERE work_item_id = ?
+            OR run_id IN (SELECT id FROM runs WHERE work_item_id = ?)
+          ORDER BY created_at DESC, id DESC`,
+      )
+      .all(q.work_item_id ?? "", q.work_item_id ?? "")
+  }
+
   // --- reglas de permiso (ADR-0019 §4) -------------------------------------------------
   addPermissionRule(p: {
     project_id: string
@@ -1235,4 +1327,20 @@ function isolationOf(r: RunRow): "none" | "sandbox" | "provider" | "os_user" | n
   // Codex corre en su propio sandbox; que oculte la puerta humana no está medido.
   if (m.provider === "codex" && m.sandbox) return "provider"
   return null
+}
+
+export type EvidenceRow = {
+  id: string
+  project_id: string
+  work_item_id: string | null
+  run_id: string | null
+  kind: string
+  title: string | null
+  artifact_ref: string
+  sha256: string
+  metadata_json: string
+  provenance_json: string
+  created_by: string
+  supersedes_id: string | null
+  created_at: string
 }

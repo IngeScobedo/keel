@@ -29,6 +29,7 @@ export type ProjectionStore = Pick<
   | "openToolCall"
   | "closeToolCall"
   | "openToolCalls"
+  | "spill"
 >
 
 export type ToolRequest = {

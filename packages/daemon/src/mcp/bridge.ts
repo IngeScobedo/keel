@@ -120,6 +120,24 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       (a) => client.call("handoffs.request", { ...mutation(), ...a }),
     ),
     tool(
+      "evidence_attach",
+      "Adjunta como evidencia de tu tarea un archivo de tu worktree (resultado de pruebas, captura, diff, log). Queda con su hash y su procedencia.",
+      z.object({
+        path: z.string().min(1),
+        kind: z.enum([
+          "sql_result",
+          "screenshot",
+          "diff",
+          "test_report",
+          "chart",
+          "document",
+          "log",
+        ]),
+        title: z.string().max(200).optional(),
+      }),
+      (a) => client.call("evidence.attach", { ...mutation(), ...a }),
+    ),
+    tool(
       "run_request",
       "Pide que Keel arranque un run sobre una tarea (plan, execute o triage_eval). No lo arranca: un humano lo aprueba.",
       z.object({

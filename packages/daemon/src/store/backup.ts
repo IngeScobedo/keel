@@ -10,7 +10,7 @@
  *   `foreign_key_check` y la verificación de FTS. Si algo falla, borra lo que
  *   escribió y lanza.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { openStore, type Store } from "./db.js"
 
@@ -25,6 +25,11 @@ export type BackupManifest = {
   sha256: string
   sqlite_version: string
   migrations: { id: string; status: string; checksum: string }[]
+  /**
+   * Artefactos copiados junto al backup (ADR-0012 §6), en `<dir>/artifacts`
+   * con la misma estructura. Ausente en backups anteriores.
+   */
+  artifacts?: { sha256: string; size: number }[]
 }
 
 export type RestoreReport = {
@@ -33,6 +38,8 @@ export type RestoreReport = {
   foreign_key_violations: number
   fts: "ok"
   migrations_applied: string[]
+  /** Artefactos verificados y, si se pidió destino, copiados. */
+  artifacts_verified: number
 }
 
 export class BackupError extends Error {
@@ -46,6 +53,7 @@ export class BackupError extends Error {
 export function backupStore(
   store: Store,
   destDir: string,
+  opts: { artifactsDir?: string } = {},
 ): { manifestPath: string; manifest: BackupManifest } {
   mkdirSync(destDir, { recursive: true, mode: 0o700 })
   const stamp = new Date().toISOString().replace(/[-:.]/g, "")
@@ -69,6 +77,24 @@ export function backupStore(
       )
       .all(),
   }
+  // Los artefactos que la base conoce y están en disco van con el backup (ADR-0012 §6).
+  if (opts.artifactsDir) {
+    const listed: { sha256: string; size: number }[] = []
+    const into = join(destDir, `${file}.artifacts`)
+    for (const a of store.db
+      .query<{ sha256: string; size: number }, []>(
+        "SELECT sha256, size FROM artifacts ORDER BY sha256",
+      )
+      .all()) {
+      const from = artifactPath(opts.artifactsDir, a.sha256)
+      if (!existsSync(from)) continue
+      const to = artifactPath(into, a.sha256)
+      mkdirSync(dirname(to), { recursive: true, mode: 0o700 })
+      copyFileSync(from, to)
+      listed.push(a)
+    }
+    manifest.artifacts = listed
+  }
   const manifestPath = `${path}.manifest.json`
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
   return { manifestPath, manifest }
@@ -78,7 +104,7 @@ export function backupStore(
 export function restoreStore(
   manifestPath: string,
   targetPath: string,
-  opts: { migrationsDir?: string; loadVector?: boolean } = {},
+  opts: { migrationsDir?: string; loadVector?: boolean; artifactsDir?: string } = {},
 ): RestoreReport {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as BackupManifest
   if (manifest.version !== 1)
@@ -88,6 +114,21 @@ export function restoreStore(
     throw new BackupError("el backup no coincide con su manifest (tamaño o sha256)")
   for (const p of [targetPath, `${targetPath}-wal`, `${targetPath}-shm`])
     if (existsSync(p)) throw new BackupError(`restore no pisa una base existente: ${p}`)
+  // Todos los hashes de los artefactos se verifican antes de tocar nada (ADR-0012 §6).
+  const fromDir = join(dirname(manifestPath), `${basename(manifest.file)}.artifacts`)
+  for (const a of manifest.artifacts ?? []) {
+    const path = artifactPath(fromDir, a.sha256)
+    if (!existsSync(path)) throw new BackupError(`falta el artefacto ${a.sha256} del backup`)
+    if (sha256(readFileSync(path)) !== a.sha256)
+      throw new BackupError(`el artefacto ${a.sha256} no coincide con su hash`)
+  }
+  if (opts.artifactsDir)
+    for (const a of manifest.artifacts ?? []) {
+      const to = artifactPath(opts.artifactsDir, a.sha256)
+      if (existsSync(to)) continue
+      mkdirSync(dirname(to), { recursive: true, mode: 0o700 })
+      copyFileSync(artifactPath(fromDir, a.sha256), to)
+    }
   mkdirSync(dirname(targetPath), { recursive: true, mode: 0o700 })
   writeFileSync(targetPath, bytes, { mode: 0o600 })
   let store: Store | null = null
@@ -107,6 +148,7 @@ export function restoreStore(
       foreign_key_violations: 0,
       fts: "ok",
       migrations_applied: store.migrations.filter((m) => m.status === "applied").map((m) => m.id),
+      artifacts_verified: manifest.artifacts?.length ?? 0,
     }
   } catch (e) {
     store?.db.close()
@@ -121,4 +163,8 @@ export function restoreStore(
 
 function sha256(bytes: Uint8Array): string {
   return new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
+}
+
+function artifactPath(root: string, sha: string): string {
+  return join(root, "sha256", sha.slice(0, 2), sha.slice(2))
 }

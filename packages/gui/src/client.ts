@@ -67,7 +67,9 @@ export class KeelClient {
     const outgoing = request(crypto.randomUUID(), method, checked)
     const raw = await this.wire.exchange(outgoing)
     const failure = ErrorResponse.safeParse(raw)
-    if (failure.success) throw new Error(failure.data.error.message)
+    // El error lleva el código y los detalles del daemon (p. ej., `cursor_expired`).
+    if (failure.success)
+      throw Object.assign(new Error(failure.data.error.message), { rpc: failure.data.error })
     const result = SuccessResponse.parse(raw)
     if (result.id !== outgoing.id) throw new Error("Respuesta IPC sin correlación con la solicitud")
     return Methods[method].result.parse(result.result) as ReturnType<

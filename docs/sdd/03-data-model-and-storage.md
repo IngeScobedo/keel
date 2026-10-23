@@ -966,3 +966,77 @@ CREATE INDEX idx_permission_rules_active ON permission_rules(project_id)
 ALTER TABLE runs ADD COLUMN parent_run_id TEXT;
 ALTER TABLE projects ADD COLUMN last_opened_at TEXT;
 ```
+
+### 0005 · Artefactos, evidencia con procedencia y retención (ADR-0012)
+
+Los bytes viven fuera de SQLite, direccionados por su sha256
+(`$XDG_STATE_HOME/keel/artifacts/sha256/<2>/<62>`); `artifacts` guarda lo que
+se sabe de cada uno: tamaño, tipo, sensibilidad y si su hash sigue
+coincidiendo. `evidence` se rehace porque cambia una restricción (`run_id` deja
+de ser obligatorio para que el humano adjunte la suya): gana `work_item_id`,
+`title`, `provenance_json`, `created_by` y `supersedes_id`, y exige al menos un
+vínculo. Es append-only: una corrección es otra fila que apunta a la anterior.
+`event_purges` deja constancia de cada purga explícita para que una
+suscripción con un cursor más viejo reciba `cursor_expired`. Los eventos siguen
+siendo append-only: el trigger sólo deja borrar mientras una purga explícita
+está marcada en `retention_in_progress`, dentro de su misma transacción.
+
+```sql
+-- migración: 0005-artefactos-y-evidencia
+CREATE TABLE artifacts (
+    sha256 TEXT PRIMARY KEY NOT NULL CHECK (length(sha256) = 64),
+    size INTEGER NOT NULL CHECK (size >= 0),
+    media_type TEXT NOT NULL,
+    sensitivity TEXT NOT NULL DEFAULT 'internal'
+        CHECK (sensitivity IN ('internal', 'restricted')),
+    integrity TEXT NOT NULL DEFAULT 'ok' CHECK (integrity IN ('ok', 'mismatch', 'missing')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE evidence_v2 (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    work_item_id TEXT,
+    run_id TEXT,
+    kind TEXT NOT NULL,
+    title TEXT,
+    artifact_ref TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json)),
+    provenance_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(provenance_json)),
+    created_by TEXT NOT NULL DEFAULT 'system:migration',
+    supersedes_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(id, project_id),
+    CHECK (work_item_id IS NOT NULL OR run_id IS NOT NULL),
+    FOREIGN KEY(run_id, project_id) REFERENCES runs(id, project_id),
+    FOREIGN KEY(work_item_id, project_id) REFERENCES work_items(id, project_id),
+    FOREIGN KEY(supersedes_id, project_id) REFERENCES evidence_v2(id, project_id)
+);
+INSERT INTO evidence_v2(id, project_id, run_id, kind, artifact_ref, sha256, metadata_json, created_at)
+    SELECT id, project_id, run_id, kind, artifact_ref, sha256, metadata_json, created_at FROM evidence;
+DROP TABLE evidence;
+ALTER TABLE evidence_v2 RENAME TO evidence;
+CREATE INDEX idx_evidence_work_item ON evidence(work_item_id);
+CREATE INDEX idx_evidence_run ON evidence(run_id);
+
+CREATE TABLE retention_in_progress (
+    purge_id TEXT PRIMARY KEY NOT NULL,
+    actor_id TEXT NOT NULL
+);
+DROP TRIGGER events_no_delete;
+CREATE TRIGGER events_no_delete BEFORE DELETE ON events
+WHEN NOT EXISTS (SELECT 1 FROM retention_in_progress) BEGIN
+    SELECT RAISE(ABORT, 'events are append-only');
+END;
+
+CREATE TABLE event_purges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT REFERENCES projects(id),
+    before_event_seq INTEGER NOT NULL,
+    events_deleted INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+```

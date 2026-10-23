@@ -16,7 +16,6 @@ import {
 } from "@keel/core"
 import type { ProjectionStore } from "./adapters/provider.js"
 import { nowIso } from "./ids.js"
-import { inlineOrPreview } from "./payload.js"
 import type { RunRow } from "./store/repo.js"
 
 type Json = Record<string, unknown>
@@ -212,8 +211,8 @@ export class RunProjector {
       // K-06: preview JSON válido + referencia al cuerpo íntegro, nunca un slice.
       const output =
         ok && input.tool_response !== undefined
-          ? inlineOrPreview(
-              input.tool_response,
+          ? this.ctx.store.spill(
+              JSON.stringify(input.tool_response),
               sourceEventId
                 ? `event:${sourceEventId}#/tool_response`
                 : `tool_use:${input.tool_use_id}`,

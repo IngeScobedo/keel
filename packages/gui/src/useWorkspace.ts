@@ -90,7 +90,17 @@ export function useWorkspace() {
         // descubre del primer evento.
         const wanted = projectId || daemonHealth.project?.id || ""
         if (wanted) project.current = wanted
-        let result = await rpc.call("events.subscribe", wanted ? { project_id: wanted } : {})
+        let result = await rpc
+          .call("events.subscribe", wanted ? { project_id: wanted } : {})
+          .catch(async (e: { rpc?: { code: number; details?: { min_cursor?: number } } }) => {
+            // ADR-0012 §8: la historia anterior se purgó; snapshot y replay desde el mínimo.
+            const min = e.rpc?.code === -32009 ? e.rpc.details?.min_cursor : undefined
+            if (min === undefined) throw e
+            return rpc.call("events.subscribe", {
+              ...(wanted ? { project_id: wanted } : {}),
+              after_event_seq: min,
+            })
+          })
         const discovered = wanted || buffered[0]?.project_id
         if (discovered && !wanted) {
           project.current = discovered

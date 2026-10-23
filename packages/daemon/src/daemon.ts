@@ -3,9 +3,9 @@
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
 import { randomBytes } from "node:crypto"
-import { existsSync, realpathSync, statSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path"
 import {
   AGENT_SCOPES,
   type AgentScope,
@@ -40,10 +40,11 @@ import {
 } from "./adapters/codex.js"
 import { AgentTokens } from "./agent-tokens.js"
 import { ApprovalGate } from "./approvals.js"
+import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
-import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
+import { canonicalJson, nowIso, sha256Hex, ulid } from "./ids.js"
 import { agentDoorPath, isNamedPipe } from "./ipc/endpoint.js"
 import {
   type ClientState,
@@ -65,6 +66,7 @@ import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
 import { openStore, type Store } from "./store/db.js"
 import {
+  type EvidenceRow,
   type NoteRow,
   type PairingRow,
   type PermissionRuleRow,
@@ -81,6 +83,8 @@ export type DaemonOptions = {
   socketPath: string
   /** Puerta de agentes; por defecto `<socket>-agent` junto a la humana (ADR-0018 §2). */
   agentSocketPath?: string
+  /** Almacén de artefactos (ADR-0012); por defecto `artifacts/` junto a la base. */
+  artifactsDir?: string
   /**
    * ADR-0018 §3: `auto` aísla con bubblewrap los runs `execute` de Claude donde
    * exista (Linux, WSL2); `off` no aísla. Por defecto `auto`.
@@ -119,6 +123,7 @@ export class Daemon {
   readonly store: Store
   readonly repo: Repo
   readonly bus = new EventBus()
+  readonly artifacts: ArtifactStore
   readonly server: IpcServer
   /** Puerta de agentes (ADR-0018 §2): nada que entre por ella es humano. */
   readonly agentServer: IpcServer
@@ -157,6 +162,11 @@ export class Daemon {
     this.opts = opts
     this.store = openStore(opts.dbPath)
     this.repo = new Repo(this.store.db)
+    this.artifacts = new ArtifactStore(
+      opts.artifactsDir ?? join(dirname(opts.dbPath), "artifacts"),
+      this.store.db,
+    )
+    this.repo.artifacts = this.artifacts
     const root = opts.rootPath ?? this.repo.listProjects()[0]?.root_path ?? process.cwd()
     this.rootPath = root
     this.project = this.repo.ensureDefaultProject(root, basename(root))
@@ -897,6 +907,114 @@ export class Daemon {
             })),
         }
       },
+      "artifacts.read": (params, ctx) => {
+        requireHuman(ctx, "leer artefactos")
+        const p = params as Params<"artifacts.read">
+        const sha = parseArtifactRef(p.ref) ?? (/^[0-9a-f]{64}$/.test(p.ref) ? p.ref : null)
+        const row = sha ? this.artifacts.get(sha) : null
+        if (!sha || !row) throw rpcError(ErrorCode.notFound, "el artefacto no existe")
+        const offset = p.offset ?? 0
+        let chunk: ReturnType<ArtifactStore["read"]>
+        try {
+          chunk = this.artifacts.read(sha, offset, p.length)
+        } catch {
+          this.artifacts.verify(sha)
+          throw rpcError(ErrorCode.notFound, "los bytes del artefacto no están en disco")
+        }
+        // Al terminar de leer se comprueba el hash; uno que no coincide no se da por válido.
+        const integrity = chunk.eof ? this.artifacts.verify(sha) : row.integrity
+        return {
+          sha256: sha,
+          size: chunk.size,
+          media_type: row.media_type,
+          sensitivity: row.sensitivity,
+          integrity,
+          offset,
+          data_base64: Buffer.from(chunk.data).toString("base64"),
+          eof: chunk.eof,
+        }
+      },
+      "evidence.list": (params, ctx) => {
+        const p = params as Params<"evidence.list">
+        if (!p.work_item_id && !p.run_id)
+          throw rpcError(ErrorCode.invalidParams, "evidence.list necesita work_item_id o run_id")
+        if (p.work_item_id) this.workItemIn(ctx, p.work_item_id)
+        return { evidence: repo.listEvidence(p).map((e) => this.evidenceView(e)) }
+      },
+      "evidence.attach": this.mutation<Params<"evidence.attach">>(
+        "evidence.attach",
+        (p, uow, ctx) => {
+          const actor = ctx.actor
+          const agent = actor.kind === "agent" ? actor : null
+          // Un agente sólo adjunta a su tarea y a su run, y sólo archivos de su worktree.
+          const workItemId = agent ? agent.work_item_id : (p.work_item_id ?? null)
+          const runId = agent ? agent.run_id : (p.run_id ?? null)
+          if (agent && p.work_item_id && p.work_item_id !== agent.work_item_id)
+            throw rpcError(ErrorCode.unauthorized, "el agente sólo adjunta evidencia a su tarea")
+          if (!workItemId && !runId)
+            throw rpcError(ErrorCode.invalidParams, "la evidencia necesita una tarea o un run")
+          if (workItemId) this.workItemIn(ctx, workItemId)
+          let bytes: Buffer
+          let mediaType = p.media_type ?? "application/octet-stream"
+          if (p.path !== undefined) {
+            const base = agent?.run_id ? this.runCwd.get(agent.run_id) : null
+            if (!agent || !base)
+              throw rpcError(
+                ErrorCode.invalidParams,
+                "path sólo vale para un agente con worktree; el humano manda content_base64",
+              )
+            const full = resolve(base, p.path)
+            const rel = relative(base, full)
+            if (rel.startsWith("..") || isAbsolute(rel))
+              throw rpcError(ErrorCode.unauthorized, "el archivo está fuera del worktree del run")
+            try {
+              bytes = readFileSync(full)
+            } catch (e) {
+              throw rpcError(
+                ErrorCode.notFound,
+                `no se puede leer ${p.path}: ${(e as Error).message}`,
+              )
+            }
+            if (!p.media_type) mediaType = mediaTypeOf(full)
+          } else if (p.content_base64 !== undefined) bytes = Buffer.from(p.content_base64, "base64")
+          else throw rpcError(ErrorCode.invalidParams, "falta content_base64 o path")
+          if (p.supersedes_id) {
+            const old = repo.getEvidence(p.supersedes_id)
+            if (!old || old.project_id !== uow.projectId)
+              throw rpcError(ErrorCode.notFound, "la evidencia que se corrige no existe")
+          }
+          const stored = this.artifacts.put(bytes, mediaType, p.sensitivity ?? "internal")
+          const row = repo.addEvidence({
+            project_id: uow.projectId,
+            work_item_id: workItemId,
+            run_id: runId,
+            kind: p.kind,
+            title: p.title ?? null,
+            artifact_ref: stored.ref,
+            sha256: stored.sha256,
+            metadata: p.metadata ?? {},
+            // Procedencia (ADR-0012 §3): quién, cuándo, desde dónde y el hash de la entrada.
+            provenance: {
+              actor: actorOf(ctx),
+              captured_at: nowIso(),
+              source: p.path !== undefined ? { worktree_path: p.path } : { upload: true },
+              input_sha256: stored.sha256,
+            },
+            created_by: actor.actor_id,
+            supersedes_id: p.supersedes_id ?? null,
+          })
+          const view = this.evidenceView(row)
+          uow.emit("evidence.attached", runId, view)
+          return view
+        },
+      ),
+      "retention.purge": this.mutation<Params<"retention.purge">>(
+        "retention.purge",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "purgar historia")
+          return this.purge(this.scopeOf(ctx, p.project_id), p, uow.actorId)
+        },
+      ),
       "permissions.rules_list": (params, ctx) => {
         requireHuman(ctx, "revisar las reglas de permiso")
         const p = params as Params<"permissions.rules_list">
@@ -1367,6 +1485,111 @@ export class Daemon {
     })
   }
 
+  evidenceView(e: EvidenceRow) {
+    const sha = parseArtifactRef(e.artifact_ref)
+    const a = sha ? this.artifacts.get(sha) : null
+    return {
+      id: e.id,
+      work_item_id: e.work_item_id,
+      run_id: e.run_id,
+      kind: e.kind,
+      title: e.title,
+      artifact_ref: e.artifact_ref,
+      sha256: e.sha256,
+      size: a?.size ?? null,
+      media_type: a?.media_type ?? null,
+      sensitivity: a?.sensitivity ?? null,
+      integrity: a?.integrity ?? null,
+      metadata: JSON.parse(e.metadata_json) as unknown,
+      provenance: JSON.parse(e.provenance_json) as unknown,
+      created_by: e.created_by,
+      supersedes_id: e.supersedes_id,
+      created_at: e.created_at,
+    }
+  }
+
+  /**
+   * Purga explícita (ADR-0012 §7): eventos del proyecto más viejos que el
+   * corte (filtrados por tipo si se pide), su evidencia sólo si se nombra, y
+   * los artefactos que quedan sin referencias. Deja la marca de la purga para
+   * que un cursor anterior reciba `cursor_expired`.
+   */
+  private purge(
+    projectId: string,
+    p: Params<"retention.purge">,
+    actorId: string,
+  ): { events: number; evidence: number; artifacts: number; dry_run: boolean } {
+    const db = this.store.db
+    const cutoff = new Date(Date.now() - p.older_than_days * 86_400_000).toISOString()
+    const kinds = p.event_kinds ?? []
+    const kindSql = kinds.length ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""
+    const evWhere = `project_id = ? AND received_at < ?${kindSql}`
+    const evArgs = [projectId, cutoff, ...kinds]
+    const events =
+      db
+        .query<{ n: number }, string[]>(`SELECT count(*) n FROM events WHERE ${evWhere}`)
+        .get(...evArgs)?.n ?? 0
+    const evidenceWhere = "project_id = ? AND created_at < ?"
+    const evidence = p.include_evidence
+      ? (db
+          .query<{ n: number }, string[]>(`SELECT count(*) n FROM evidence WHERE ${evidenceWhere}`)
+          .get(projectId, cutoff)?.n ?? 0)
+      : 0
+    if (p.dry_run) return { events, evidence, artifacts: 0, dry_run: true }
+    const maxSeq =
+      db
+        .query<{ m: number | null }, string[]>(
+          `SELECT max(event_seq) m FROM events WHERE ${evWhere}`,
+        )
+        .get(...evArgs)?.m ?? null
+    // Los eventos son append-only: el trigger sólo deja borrar con la purga marcada.
+    const purgeId = ulid()
+    db.query("INSERT INTO retention_in_progress(purge_id, actor_id) VALUES (?, ?)").run(
+      purgeId,
+      actorId,
+    )
+    db.query(`DELETE FROM events WHERE ${evWhere}`).run(...evArgs)
+    db.query("DELETE FROM retention_in_progress WHERE purge_id = ?").run(purgeId)
+    if (p.include_evidence)
+      db.query(`DELETE FROM evidence WHERE ${evidenceWhere}`).run(projectId, cutoff)
+    if (maxSeq !== null)
+      db.query(
+        "INSERT INTO event_purges(project_id, before_event_seq, events_deleted, reason, actor_id) VALUES (?,?,?,?,?)",
+      ).run(projectId, maxSeq + 1, events, `older_than_days=${p.older_than_days}`, actorId)
+    return { events, evidence, artifacts: this.collectArtifacts(), dry_run: false }
+  }
+
+  /** Artefactos sin referencias en eventos, tool calls ni evidencia: se recolectan. */
+  private collectArtifacts(): number {
+    const db = this.store.db
+    const referenced = new Set<string>()
+    const add = (text: string | null) => {
+      for (const m of (text ?? "").matchAll(/artifact:sha256:([0-9a-f]{64})/g))
+        referenced.add(m[1] as string)
+    }
+    for (const r of db.query<{ v: string }, []>("SELECT artifact_ref v FROM evidence").all())
+      add(r.v)
+    for (const r of db
+      .query<{ v: string | null }, []>(
+        "SELECT artifact_ref v FROM tool_calls WHERE artifact_ref IS NOT NULL",
+      )
+      .all())
+      add(r.v)
+    for (const r of db
+      .query<{ v: string }, []>(
+        "SELECT payload_json v FROM events WHERE payload_json LIKE '%artifact:sha256:%'",
+      )
+      .all())
+      add(r.v)
+    let removed = 0
+    for (const a of db.query<{ sha256: string }, []>("SELECT sha256 FROM artifacts").all())
+      if (!referenced.has(a.sha256)) {
+        this.artifacts.remove(a.sha256)
+        removed++
+      }
+    return removed
+  }
+
   private projectViewOf(projectId: string) {
     const row = this.repo.listProjects().find((x) => x.id === projectId)
     if (!row) throw rpcError(ErrorCode.notFound, "el proyecto no existe")
@@ -1550,4 +1773,24 @@ function noteView(n: NoteRow) {
 function defaultBridge(): { command: string; args: string[] } {
   const main = new URL(import.meta.url.endsWith(".ts") ? "./main.ts" : "./main.js", import.meta.url)
   return { command: process.execPath, args: [Bun.fileURLToPath(main), "mcp"] }
+}
+
+/** Tipo de un archivo adjuntado desde el worktree, por su extensión. */
+function mediaTypeOf(path: string): string {
+  const types: Record<string, string> = {
+    ".json": "application/json",
+    ".md": "text/markdown",
+    ".txt": "text/plain",
+    ".log": "text/plain",
+    ".csv": "text/csv",
+    ".html": "text/html",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".svg": "image/svg+xml",
+    ".diff": "text/x-diff",
+    ".patch": "text/x-diff",
+    ".xml": "application/xml",
+  }
+  return types[extname(path).toLowerCase()] ?? "application/octet-stream"
 }

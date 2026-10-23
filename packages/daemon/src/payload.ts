@@ -39,3 +39,25 @@ export function inlineOrPreview(
   }
   return { json: JSON.stringify(preview), artifactRef: bodyRef }
 }
+
+/**
+ * Como `inlineOrPreview`, pero el cuerpo íntegro va a un almacén (ADR-0012 §2):
+ * `store` lo guarda y devuelve su referencia (`artifact:sha256:<hex>`).
+ */
+export function previewOrInline(
+  json: string,
+  store: (body: string) => string,
+  maxBytes: number = INLINE_JSON_MAX_BYTES,
+): { json: string; artifactRef: string | null } {
+  const bytes = Buffer.byteLength(json, "utf8")
+  if (bytes <= maxBytes) return { json, artifactRef: null }
+  const ref = store(json)
+  const preview: JsonPreview = {
+    keel_preview: 1,
+    bytes,
+    sha256: new Bun.CryptoHasher("sha256").update(json).digest("hex"),
+    body_ref: ref,
+    preview: json.slice(0, PREVIEW_CHARS),
+  }
+  return { json: JSON.stringify(preview), artifactRef: ref }
+}

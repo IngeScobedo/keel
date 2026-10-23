@@ -258,6 +258,18 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.locator(".task-card").first().click()
   const note = page.getByTestId("note").filter({ hasText: "hola desde fuera" })
   await expect(note).toContainText("Agente externo")
+  // Evidencia propia del humano (ADR-0012): se adjunta, se lista con su hash y se ve.
+  await page.getByRole("tab", { name: "Evidence", exact: true }).click()
+  await page.getByLabel("Archivo de evidencia").setInputFiles({
+    name: "resultado.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("12 pruebas en verde"),
+  })
+  const ev = page.getByTestId("evidence")
+  await expect(ev).toContainText("resultado.txt")
+  await ev.locator(".evidence-head").click()
+  await expect(page.locator(".evidence-text")).toHaveText("12 pruebas en verde")
+  await page.getByRole("tab", { name: "Activity", exact: true }).click()
   await page.getByLabel("Nota para la tarea").fill("revisado")
   await page.getByRole("button", { name: "Post", exact: true }).click()
   await expect(page.getByTestId("note").filter({ hasText: "revisado" })).toContainText("Tú")

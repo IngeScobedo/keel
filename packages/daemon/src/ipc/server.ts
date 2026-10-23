@@ -301,11 +301,21 @@ export class IpcServer {
     const repo = this.opts.repo
     const subscriptionId = `sub-${state.id}-${state.subscriptions.size + 1}`
     const projectId = p.project_id ?? null
+    // ADR-0012 §8: un cursor anterior a una purga no recibe una historia con huecos.
+    const floor = repo.purgeFloor(projectId)
+    if (floor > 0 && p.after_event_seq < floor)
+      throw new RpcFailure({
+        code: ErrorCode.cursorExpired,
+        message: `cursor_expired: la historia anterior a ${floor} se purgó; resincroniza desde un snapshot`,
+        retryable: true,
+        details: { min_cursor: floor },
+      })
     const workItems = projectId
       ? repo.listWorkItems(projectId).map((w) => repo.workItemView(w))
       : []
     const runs = projectId ? repo.listRuns(projectId).map((r) => repo.runView(r)) : []
-    const cursor = repo.lastEventSeq()
+    // Tras una purga que lo borró todo, el cursor no retrocede por debajo de ella.
+    const cursor = Math.max(repo.lastEventSeq(), floor)
     // Un cursor por delante del último evento significa «desde ahora»: no se puede
     // saltar el futuro. Replay paginado de lo que el cliente no vio, hasta el cursor
     // capturado; luego el bus. Todo es síncrono, así que ningún evento se publica

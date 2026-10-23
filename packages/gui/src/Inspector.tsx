@@ -11,6 +11,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { mutationMeta } from "./client.js"
+import { EvidencePanel } from "./Evidence.js"
 import { demoActivity, demoDiff } from "./fixtures.js"
 import { LiveTaskActions } from "./LiveTaskActions.js"
 import {
@@ -71,7 +72,9 @@ export function Inspector({
     (e) =>
       (e.kind === "note.added" &&
         (e.payload as { work_item_id?: string } | null)?.work_item_id === task.id) ||
-      (e.kind.startsWith("work_item.") && (e.payload as { id?: string } | null)?.id === task.id),
+      (e.kind.startsWith("work_item.") && (e.payload as { id?: string } | null)?.id === task.id) ||
+      (e.kind === "evidence.attached" &&
+        (e.payload as { work_item_id?: string } | null)?.work_item_id === task.id),
   ).length
   // biome-ignore lint/correctness/useExhaustiveDependencies: `touches` y la revisión sólo disparan la relectura.
   useEffect(() => {
@@ -332,7 +335,11 @@ export function Inspector({
           ) : (
             <Empty title="Sin checklist">El snapshot no entrega criterios de aceptación.</Empty>
           ))}
+        {tab === "Evidence" && !demo && call && (
+          <EvidencePanel call={call} workItemId={task.id} tick={touches} />
+        )}
         {tab === "Evidence" &&
+          (demo || !call) &&
           (demo ? (
             <div className="evidence">
               <div className="callout" data-state="succeeded">

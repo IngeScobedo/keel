@@ -117,6 +117,7 @@ describe("ADR-0009: puente keel mcp", () => {
       "task_create",
       "note_add",
       "handoff_request",
+      "evidence_attach",
       "run_request",
     ])
 

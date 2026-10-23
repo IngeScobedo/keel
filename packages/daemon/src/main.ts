@@ -21,6 +21,7 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
+import { defaultArtifactsDir } from "./artifacts.js"
 import { Daemon } from "./daemon.js"
 import { IpcClient } from "./ipc/client.js"
 import { defaultEndpoint } from "./ipc/endpoint.js"
@@ -65,7 +66,9 @@ function maintenance(command: string): void {
     if (!out) throw new Error("backup necesita --out <dir>")
     const store = openStore(arg("--db") ?? d.dbPath)
     try {
-      const { manifestPath, manifest } = backupStore(store, out)
+      const { manifestPath, manifest } = backupStore(store, out, {
+        artifactsDir: arg("--artifacts") ?? defaultArtifactsDir(),
+      })
       console.log(`backup ${manifest.bytes} bytes · sha256 ${manifest.sha256} · ${manifestPath}`)
     } finally {
       store.db.close()
@@ -74,7 +77,13 @@ function maintenance(command: string): void {
     const manifest = arg("--manifest")
     const db = arg("--db")
     if (!manifest || !db) throw new Error("restore necesita --manifest <ruta> y --db <ruta nueva>")
-    console.log(JSON.stringify(restoreStore(manifest, db), null, 2))
+    console.log(
+      JSON.stringify(
+        restoreStore(manifest, db, { artifactsDir: arg("--artifacts") ?? defaultArtifactsDir() }),
+        null,
+        2,
+      ),
+    )
   }
 }
 
@@ -105,6 +114,7 @@ if (import.meta.main && process.argv[2] === "mcp") {
   const daemon = new Daemon({
     dbPath,
     socketPath,
+    artifactsDir: arg("--artifacts") ?? defaultArtifactsDir(),
     // Sin --root: el último proyecto abierto (la GUI arranca el daemon así, ADR-0019 §1).
     ...(arg("--root") ? { rootPath: arg("--root") as string } : {}),
     limits: limitsFromArgs(),
