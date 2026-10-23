@@ -4,6 +4,7 @@ import { useState } from "react"
 import { mutationMeta } from "./client.js"
 import { demoTools } from "./fixtures.js"
 import { formatCost, type Run, type WorkItem } from "./model.js"
+import { Operations } from "./Operations.js"
 import { RunChat } from "./RunChat.js"
 import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -80,7 +81,7 @@ export function RunsList({
     </div>
   )
 }
-const runTabs = ["Agents", "Timeline", "Cost"] as const
+const runTabs = ["Agents", "Timeline", "Operaciones", "Cost"] as const
 export function RunView({
   run,
   task,
@@ -387,6 +388,12 @@ export function RunView({
               )}
             </div>
           )}
+          {tab === "Operaciones" &&
+            (call ? (
+              <Operations call={call} runId={run.id} version={runEvents.length} />
+            ) : (
+              <Empty title="Conecta el daemon para ver las operaciones" />
+            ))}
           {tab === "Cost" && (
             <div className="cost-view">
               <h2>Usage & budget</h2>

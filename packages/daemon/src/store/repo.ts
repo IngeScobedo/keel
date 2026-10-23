@@ -666,6 +666,9 @@ export class Repo {
           .get()
     return row?.m ?? 0
   }
+  eventBySeq(seq: number): EventRow | null {
+    return this.db.query<EventRow, [number]>("SELECT * FROM events WHERE event_seq = ?").get(seq)
+  }
   /** Una página de eventos con `seq < event_seq <= upTo`, en orden. */
   eventsAfter(
     seq: number,

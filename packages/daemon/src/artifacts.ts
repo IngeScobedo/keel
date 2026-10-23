@@ -122,6 +122,11 @@ export class ArtifactStore {
     }
   }
 
+  /** El contenido entero, para usos internos del daemon (proyecciones). */
+  readAll(sha256: string): Buffer {
+    return readFileSync(this.pathOf(sha256))
+  }
+
   /** ¿Siguen coincidiendo los bytes con su hash? Lo marca en la tabla (ADR-0012 §6). */
   verify(sha256: string): "ok" | "mismatch" | "missing" {
     const path = this.pathOf(sha256)

@@ -1040,3 +1040,39 @@ CREATE TABLE event_purges (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 ```
+
+### 0006 · Eventos semánticos (ADR-0011)
+
+`semantic_events` es una proyección de `events`: se borra y se reconstruye con
+los intérpretes sin perder historia. Cada fila dice qué intérprete la produjo
+(`nombre@versión`), de qué eventos de origen sale, con qué cobertura
+(`instrumented`, `observed` o `inferred`) y con qué sensibilidad. `seq` es su
+cursor propio para leerlos en orden. `dedupe_key` hace idempotente reproyectar
+el mismo evento de origen.
+
+```sql
+-- migración: 0006-eventos-semanticos
+CREATE TABLE semantic_events (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    work_item_id TEXT,
+    run_id TEXT,
+    tool_use_id TEXT,
+    kind TEXT NOT NULL,
+    schema_version INTEGER NOT NULL CHECK (schema_version > 0),
+    coverage TEXT NOT NULL CHECK (coverage IN ('instrumented', 'observed', 'inferred')),
+    sensitivity TEXT NOT NULL DEFAULT 'internal'
+        CHECK (sensitivity IN ('internal', 'restricted')),
+    interpreter TEXT NOT NULL,
+    dedupe_key TEXT NOT NULL UNIQUE,
+    source_event_ids_json TEXT NOT NULL CHECK (json_valid(source_event_ids_json)),
+    artifact_refs_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(artifact_refs_json)),
+    payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+    occurred_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+CREATE INDEX idx_semantic_run ON semantic_events(run_id, seq);
+CREATE INDEX idx_semantic_work_item ON semantic_events(work_item_id, seq);
+CREATE INDEX idx_semantic_kind ON semantic_events(project_id, kind, seq);
+```

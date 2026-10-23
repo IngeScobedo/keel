@@ -2116,3 +2116,21 @@ progress::-moz-progress-bar {
   overflow: auto;
   white-space: pre-wrap;
 }
+.operations {
+  padding: 12px 16px;
+}
+.operation-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tag.coverage-instrumented {
+  color: var(--color-status-succeeded, #3fb950);
+}
+.tag.coverage-observed {
+  color: var(--color-accent-default);
+}
+.tag.coverage-inferred {
+  color: var(--color-status-waiting-human);
+}

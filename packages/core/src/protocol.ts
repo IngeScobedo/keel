@@ -10,6 +10,7 @@
  * `z.infer`, nunca se escriben a mano.
  */
 import { z } from "zod"
+import { SemanticEventViewSchema } from "./semantic.js"
 import { VISUAL_STATES } from "./visual-state.js"
 
 export const KEEL_PROTOCOL_VERSION = 1 as const
@@ -544,6 +545,22 @@ export const Methods = {
       artifacts: z.number().int(),
       dry_run: z.boolean(),
     }),
+  },
+  /** ADR-0011: eventos semánticos, por run o tarea; `after_seq` es su cursor propio. */
+  "semantic.list": {
+    params: z.object({
+      run_id: z.string().optional(),
+      work_item_id: z.string().optional(),
+      kinds: z.array(z.string()).optional(),
+      after_seq: z.number().int().nonnegative().optional(),
+      limit: z.number().int().positive().max(1000).optional(),
+    }),
+    result: z.object({ events: z.array(SemanticEventViewSchema) }),
+  },
+  /** Borra la proyección semántica y la rehace desde `events` (ADR-0011 §1). */
+  "semantic.rebuild": {
+    params: MutationMeta.extend({ project_id: z.string().optional() }),
+    result: z.object({ events: z.number().int() }),
   },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),

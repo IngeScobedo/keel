@@ -51,18 +51,33 @@ type Table = {
 }
 
 function Viewer({ call, item }: { call: Call; item: Evidence }) {
+  return (
+    <ArtifactView call={call} artifactRef={item.artifact_ref} title={item.title ?? item.kind} />
+  )
+}
+
+/** Un artefacto mostrado según su tipo (texto, imagen, tabla de Keel). */
+export function ArtifactView({
+  call,
+  artifactRef,
+  title,
+}: {
+  call: Call
+  artifactRef: string
+  title: string
+}) {
   const [state, setState] = useState<
     | { kind: "loading" }
     | { kind: "error"; message: string }
     | { kind: "ready"; bytes: Uint8Array; media: string; ok: boolean }
   >({ kind: "loading" })
   useEffect(() => {
-    readAll(call, item.artifact_ref)
+    readAll(call, artifactRef)
       .then((r) => setState({ kind: "ready", ...r }))
       .catch((e: unknown) =>
         setState({ kind: "error", message: e instanceof Error ? e.message : String(e) }),
       )
-  }, [call, item.artifact_ref])
+  }, [call, artifactRef])
   if (state.kind === "loading") return <Hint>Cargando…</Hint>
   if (state.kind === "error") return <p className="deleted">{state.message}</p>
   const text = () => new TextDecoder().decode(state.bytes)
@@ -76,7 +91,7 @@ function Viewer({ call, item }: { call: Call; item: Evidence }) {
     return (
       <>
         {warn}
-        <img className="evidence-image" src={url} alt={item.title ?? item.kind} />
+        <img className="evidence-image" src={url} alt={title} />
       </>
     )
   }

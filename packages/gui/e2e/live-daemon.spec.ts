@@ -201,6 +201,10 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(chatApproval).toContainText("aprobado")
   await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
   await expect(page.locator(".mode-badge.ask")).toHaveText("ask")
+  // Operaciones (ADR-0011): el comando de Codex queda como lo que es, sin inventar.
+  await page.getByRole("tab", { name: "Operaciones", exact: true }).click()
+  await expect(page.getByText("Cobertura: instrumented")).toBeVisible()
+  await page.getByRole("tab", { name: "Timeline", exact: true }).click()
   // Codex corre en su propio sandbox, sin verificar contra la puerta humana (ADR-0018).
   await expect(page.getByTestId("isolation")).toHaveText("sandbox del proveedor")
 

@@ -64,6 +64,7 @@ import {
 } from "./processes.js"
 import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
+import { SemanticProjector } from "./semantic.js"
 import { openStore, type Store } from "./store/db.js"
 import {
   type EvidenceRow,
@@ -124,6 +125,7 @@ export class Daemon {
   readonly repo: Repo
   readonly bus = new EventBus()
   readonly artifacts: ArtifactStore
+  readonly semantic: SemanticProjector
   readonly server: IpcServer
   /** Puerta de agentes (ADR-0018 §2): nada que entre por ella es humano. */
   readonly agentServer: IpcServer
@@ -167,6 +169,16 @@ export class Daemon {
       this.store.db,
     )
     this.repo.artifacts = this.artifacts
+    // ADR-0011: cada evento guardado pasa por los intérpretes semánticos.
+    this.semantic = new SemanticProjector({
+      db: this.store.db,
+      repo: this.repo,
+      artifacts: this.artifacts,
+    })
+    this.bus.subscribe((n) => {
+      const row = this.repo.eventBySeq(n.event_seq)
+      if (row) this.semantic.onEvent(row)
+    })
     const root = opts.rootPath ?? this.repo.listProjects()[0]?.root_path ?? process.cwd()
     this.rootPath = root
     this.project = this.repo.ensureDefaultProject(root, basename(root))
@@ -1008,6 +1020,18 @@ export class Daemon {
           return view
         },
       ),
+      "semantic.list": (params, ctx) => {
+        const p = params as Params<"semantic.list">
+        if (p.work_item_id) this.workItemIn(ctx, p.work_item_id)
+        return { events: this.semanticList(this.scopeOf(ctx), p) }
+      },
+      "semantic.rebuild": this.mutation<Params<"semantic.rebuild">>(
+        "semantic.rebuild",
+        (p, _uow, ctx) => {
+          requireHuman(ctx, "reconstruir la proyección semántica")
+          return { events: this.semantic.rebuild(this.scopeOf(ctx, p.project_id)) }
+        },
+      ),
       "retention.purge": this.mutation<Params<"retention.purge">>(
         "retention.purge",
         (p, uow, ctx) => {
@@ -1483,6 +1507,56 @@ export class Daemon {
       run_id: runId,
       origin,
     })
+  }
+
+  private semanticList(projectId: string, p: Params<"semantic.list">) {
+    const where = ["project_id = ?", "seq > ?"]
+    const args: (string | number)[] = [projectId, p.after_seq ?? 0]
+    if (p.run_id) {
+      where.push("run_id = ?")
+      args.push(p.run_id)
+    }
+    if (p.work_item_id) {
+      where.push("work_item_id = ?")
+      args.push(p.work_item_id)
+    }
+    if (p.kinds?.length) {
+      where.push(`kind IN (${p.kinds.map(() => "?").join(",")})`)
+      args.push(...p.kinds)
+    }
+    type Row = {
+      seq: number
+      id: string
+      kind: string
+      schema_version: number
+      coverage: "instrumented" | "observed" | "inferred"
+      sensitivity: "internal" | "restricted"
+      interpreter: string
+      run_id: string | null
+      work_item_id: string | null
+      tool_use_id: string | null
+      source_event_ids_json: string
+      artifact_refs_json: string
+      payload_json: string
+      occurred_at: string | null
+      created_at: string
+    }
+    return (
+      this.store.db
+        .query<Row, (string | number)[]>(
+          `SELECT * FROM semantic_events WHERE ${where.join(" AND ")} ORDER BY seq LIMIT ${Math.min(p.limit ?? 500, 1000)}`,
+        )
+        .all(...args)
+        // created_at es de la proyección, no del hecho: reconstruir lo cambia y no se expone.
+        .map(
+          ({ source_event_ids_json, artifact_refs_json, payload_json, created_at: _c, ...r }) => ({
+            ...r,
+            source_event_ids: JSON.parse(source_event_ids_json) as string[],
+            artifact_refs: JSON.parse(artifact_refs_json) as string[],
+            payload: JSON.parse(payload_json) as unknown,
+          }),
+        )
+    )
   }
 
   evidenceView(e: EvidenceRow) {
