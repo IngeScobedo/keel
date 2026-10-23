@@ -28,6 +28,7 @@ import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
 import { type Handler, type Handlers, IpcServer, RpcFailure } from "./ipc/server.js"
+import { checkRunStart, DEFAULT_LIMITS, type Limits, startOfLocalDay } from "./limits.js"
 import { Outbox } from "./outbox.js"
 import {
   defaultProcessTable,
@@ -50,6 +51,8 @@ export type DaemonOptions = {
   worktreesDir?: string
   /** Tabla de procesos para reconciliar; por defecto la de la plataforma (processes.ts). */
   processes?: ProcessTable
+  /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
+  limits?: Partial<Limits>
 }
 
 export type OrphanCheck = { runId: string; recorded: RecordedProcess }
@@ -69,6 +72,7 @@ export class Daemon {
   private readonly approvalWaiters = new Map<string, (d: "approved" | "denied") => void>()
   readonly outbox: Outbox
   readonly processes: ProcessTable
+  readonly limits: Limits
   private orphanSweep: Promise<void> = Promise.resolve()
   /** Runs que este proceso ya está despachando: una entrega repetida del outbox no los duplica. */
   private readonly dispatching = new Set<string>()
@@ -85,6 +89,7 @@ export class Daemon {
     this.project = this.repo.ensureDefaultProject(opts.rootPath)
     this.profile = { ...DEFAULT_PROFILE, cwd: opts.rootPath, ...opts.profile }
     this.processes = opts.processes ?? defaultProcessTable()
+    this.limits = { ...DEFAULT_LIMITS, ...opts.limits }
     this.claude = new ClaudeAdapter({ processes: this.processes, ...opts.adapterDeps })
     this.outbox = new Outbox(this.repo)
     this.outbox.on(RUN_DISPATCH, (m) => this.onRunDispatch(m.payload as RunDispatch))
@@ -317,6 +322,8 @@ export class Daemon {
         wal_bytes: existsSync(`${this.opts.dbPath}-wal`)
           ? Bun.file(`${this.opts.dbPath}-wal`).size
           : 0,
+        limits: this.limits,
+        spent_today_micro_usd: repo.spentSince(project.project_id, startOfLocalDay()),
       }),
       "work_items.create": this.mutation<Params<"work_items.create">>(
         "work_items.create",
@@ -370,10 +377,21 @@ export class Daemon {
           throw rpcError(ErrorCode.invalidTransition, "la tarea tiene bloqueos abiertos", {
             blocks,
           })
+        // ADR-0002 regla 3: concurrencia y presupuesto antes de crear nada.
+        const lim = checkRunStart(repo, this.limits, w)
+        if (!lim.ok)
+          throw rpcError(
+            ErrorCode.limitExceeded,
+            lim.message,
+            { limit: lim.limit, ...lim.details },
+            lim.retryable,
+          )
         const run = repo.createRun({
           project_id: project.project_id,
           work_item_id: w.id,
           purpose: p.purpose,
+          // Va en el manifest para que el despacho, aunque llegue tras una caída, use el mismo tope.
+          manifest: { budget_micro_usd: lim.runBudgetMicroUsd },
         })
         if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
         const view = repo.runView(run)
@@ -466,7 +484,16 @@ export class Daemon {
         // Cancelado mientras se preparaba: no se lanza el proveedor. Sin await entre esta
         // lectura y execute; el adaptador pasa a `initializing` en su parte síncrona.
         if (current.status !== "queued") final = current
-        else final = await provider.execute(ctx, prompt, { ...this.profile, cwd: ws.cwd })
+        else {
+          const budget = (
+            JSON.parse(current.context_manifest_json) as { budget_micro_usd?: number }
+          ).budget_micro_usd
+          final = await provider.execute(ctx, prompt, {
+            ...this.profile,
+            cwd: ws.cwd,
+            max_budget_usd: budget === undefined ? null : budget / 1_000_000,
+          })
+        }
       }
     } catch (e) {
       final = ctx.fail(e instanceof Error ? e.message : String(e))
@@ -554,11 +581,11 @@ type ReleaseOrigin = "dispatch" | "cancel" | "reconcile" | "review_exit"
 
 type Params<M extends MethodName> = z.infer<(typeof Methods)[M]["params"]>
 
-function rpcError(code: number, message: string, details?: unknown): RpcFailure {
+function rpcError(code: number, message: string, details?: unknown, retryable = false): RpcFailure {
   return new RpcFailure({
     code,
     message,
-    retryable: false,
+    retryable,
     ...(details === undefined ? {} : { details }),
   })
 }

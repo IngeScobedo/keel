@@ -207,6 +207,41 @@ export class Repo {
       .map((r) => r.id)
   }
 
+  // --- gasto estimado (limits.ts) -----------------------------------------------------
+  /** Costo estimado de los runs del proyecto que arrancaron desde `sinceIso`. */
+  spentSince(projectId: string, sinceIso: string): number {
+    return (
+      this.db
+        .query<{ s: number | null }, [string, string]>(
+          "SELECT sum(total_cost_micro_usd) s FROM runs WHERE project_id = ? AND started_at >= ?",
+        )
+        .get(projectId, sinceIso)?.s ?? 0
+    )
+  }
+  spentOnWorkItem(workItemId: string): number {
+    return (
+      this.db
+        .query<{ s: number | null }, [string]>(
+          "SELECT sum(total_cost_micro_usd) s FROM runs WHERE work_item_id = ?",
+        )
+        .get(workItemId)?.s ?? 0
+    )
+  }
+  workItemBudgetCap(workItemId: string): number | null {
+    return (
+      this.db
+        .query<{ c: number | null }, [string]>(
+          "SELECT budget_micro_usd_cap c FROM work_items WHERE id = ?",
+        )
+        .get(workItemId)?.c ?? null
+    )
+  }
+  setWorkItemBudgetCap(workItemId: string, capMicroUsd: number | null): void {
+    this.db
+      .query("UPDATE work_items SET budget_micro_usd_cap = ? WHERE id = ?")
+      .run(capMicroUsd, workItemId)
+  }
+
   // --- outbox (SDD 02 §2: entrega al menos una vez, dedupe por clave estable) ------
   /** Encola dentro de la transacción del llamador. Una clave repetida no duplica el mensaje. */
   enqueueOutbox(m: {

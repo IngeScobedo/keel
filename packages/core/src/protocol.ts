@@ -34,6 +34,7 @@ export const ErrorCode = {
   notFound: -32005,
   invalidTransition: -32006,
   backpressure: -32007,
+  limitExceeded: -32008, // concurrencia o presupuesto antes del spawn (ADR-0002 regla 3)
 } as const
 
 export const RpcError = z.object({
@@ -246,6 +247,15 @@ export const Methods = {
       rss_bytes: z.number().int(),
       ingest_queue: z.number().int(),
       wal_bytes: z.number().int(),
+      /** Límites vigentes y gasto estimado de hoy: subir un límite debe verse (ADR-0002 regla 3). */
+      limits: z
+        .object({
+          max_concurrent_runs: z.number().int(),
+          run_budget_micro_usd: z.number().int(),
+          daily_budget_micro_usd: z.number().int(),
+        })
+        .optional(),
+      spent_today_micro_usd: z.number().int().optional(),
     }),
   },
 } as const

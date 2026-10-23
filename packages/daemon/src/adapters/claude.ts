@@ -49,6 +49,8 @@ export type ClaudeProfile = {
   approval_timeout_ms: number
   /** Tiempo máximo de reloj de un run; al vencer, Keel lo aborta (`end_reason: timeout`). */
   max_wall_ms: number
+  /** Tope de costo estimado del run (`maxBudgetUsd` del SDK); lo fija el daemon (limits.ts). */
+  max_budget_usd: number | null
   cwd: string
 }
 
@@ -60,6 +62,7 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   approval_timeout_ms: 60_000,
   // Default bajo (ADR-0002 regla 3): subirlo es una decisión explícita del perfil.
   max_wall_ms: 30 * 60_000,
+  max_budget_usd: null,
   cwd: process.cwd(),
 }
 
@@ -253,6 +256,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       cwd: profile.cwd,
       settingSources: [],
       maxTurns: profile.max_turns,
+      ...(profile.max_budget_usd === null ? {} : { maxBudgetUsd: profile.max_budget_usd }),
       allowedTools: profile.allowed_tools,
       permissionMode: "default",
       env,
