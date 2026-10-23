@@ -39,6 +39,8 @@ export type WorkItemRow = {
   project_id: string
   display_id: string
   title: string
+  /** feature, bug, refactor, chore, docs o research. */
+  kind?: string
   lifecycle: Lifecycle
   board_status: string
   revision: number
@@ -745,14 +747,14 @@ export class Repo {
   getWorkItem(id: string): WorkItemRow | null {
     return this.db
       .query<WorkItemRow, [string]>(
-        "SELECT id, project_id, display_id, title, lifecycle, board_status, revision FROM work_items WHERE id = ?",
+        "SELECT id, project_id, display_id, title, kind, lifecycle, board_status, revision FROM work_items WHERE id = ?",
       )
       .get(id)
   }
   listWorkItems(projectId: string): WorkItemRow[] {
     return this.db
       .query<WorkItemRow, [string]>(
-        "SELECT id, project_id, display_id, title, lifecycle, board_status, revision FROM work_items WHERE project_id = ? ORDER BY created_at",
+        "SELECT id, project_id, display_id, title, kind, lifecycle, board_status, revision FROM work_items WHERE project_id = ? ORDER BY created_at",
       )
       .all(projectId)
   }
@@ -1236,6 +1238,7 @@ export class Repo {
       project_id: w.project_id,
       display_id: w.display_id,
       title: w.title,
+      ...(w.kind ? { kind: w.kind } : {}),
       lifecycle: w.lifecycle,
       board_status: w.board_status,
       revision: w.revision,

@@ -2194,3 +2194,34 @@ progress::-moz-progress-bar {
   width: 100%;
   min-height: 240px;
 }
+.claim {
+  border-left: 3px solid var(--color-border-default);
+  padding: 4px 12px;
+  margin: 8px 0;
+}
+.claim.status-verified {
+  border-left-color: var(--color-status-succeeded, #3fb950);
+}
+.claim.status-refuted {
+  border-left-color: var(--color-status-failed);
+  opacity: 0.7;
+}
+.tag.claim-unsupported {
+  color: var(--color-status-failed);
+}
+.claim-actions {
+  display: flex;
+  gap: 8px;
+}
+.report-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.report-body {
+  border: 1px solid var(--color-border-subtle);
+  padding: 12px 16px;
+  margin-top: 8px;
+}

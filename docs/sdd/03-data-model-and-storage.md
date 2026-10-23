@@ -1171,3 +1171,50 @@ CREATE TABLE plugins (
     uninstalled_at TEXT
 );
 ```
+
+### 0010 · Investigaciones y reportes (ADR-0016)
+
+Una investigación es una tarea `research`. Sus afirmaciones (hipótesis,
+hallazgos y conclusiones) viven en `research_claims_items`. El nombre
+`research_claims` ya lo usan los leases del hub. Cada afirmación lleva su
+estado, quién la propuso y desde qué run, y la evidencia que cita. Sólo un
+humano la pasa a `verified` o `refuted`. `research_reports` guarda versiones
+inmutables, cada una con su hash: generar dos veces desde los mismos registros
+da el mismo hash.
+
+```sql
+-- migración: 0010-investigaciones
+CREATE TABLE research_claims_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    work_item_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('hypothesis', 'finding', 'conclusion')),
+    statement TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('hypothesis', 'observed', 'verified', 'refuted')),
+    evidence_ids_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(evidence_ids_json)),
+    created_by TEXT NOT NULL,
+    run_id TEXT,
+    decided_by TEXT,
+    decided_at TEXT,
+    decision_reason TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY(work_item_id, project_id) REFERENCES work_items(id, project_id)
+);
+CREATE INDEX idx_claims_work_item ON research_claims_items(work_item_id, created_at);
+
+CREATE TABLE research_reports (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    work_item_id TEXT NOT NULL,
+    version INTEGER NOT NULL CHECK (version > 0),
+    markdown TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE(work_item_id, version),
+    FOREIGN KEY(work_item_id, project_id) REFERENCES work_items(id, project_id)
+);
+CREATE TRIGGER research_reports_no_update BEFORE UPDATE ON research_reports BEGIN
+    SELECT RAISE(ABORT, 'a report version is immutable');
+END;
+```

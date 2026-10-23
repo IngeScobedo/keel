@@ -129,6 +129,10 @@ describe("ADR-0009: puente keel mcp", () => {
       "ssh_run",
       "iac_plan",
       "iac_apply",
+      "research_hypothesis_add",
+      "research_finding_add",
+      "research_conclusion_propose",
+      "research_claims",
       "run_request",
     ])
 

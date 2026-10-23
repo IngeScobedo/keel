@@ -250,6 +250,47 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
         }),
     ),
     tool(
+      "research_hypothesis_add",
+      "Registra una hipótesis en la investigación de tu tarea. Sólo un humano la verifica o refuta.",
+      z.object({ statement: z.string().min(1) }),
+      (a) =>
+        client.call("research.claim_add", {
+          ...mutation(),
+          kind: "hypothesis",
+          statement: a.statement,
+        }),
+    ),
+    tool(
+      "research_finding_add",
+      "Registra un hallazgo citando evidencia (ids de evidence_attach o de resultados de db_query). Sin evidencia queda marcado como «sin evidencia».",
+      z.object({ statement: z.string().min(1), evidence_ids: z.array(z.string()).default([]) }),
+      (a) =>
+        client.call("research.claim_add", {
+          ...mutation(),
+          kind: "finding",
+          statement: a.statement,
+          evidence_ids: a.evidence_ids,
+        }),
+    ),
+    tool(
+      "research_conclusion_propose",
+      "Propone una conclusión. Queda como propuesta hasta que un humano la verifique.",
+      z.object({ statement: z.string().min(1), evidence_ids: z.array(z.string()).default([]) }),
+      (a) =>
+        client.call("research.claim_add", {
+          ...mutation(),
+          kind: "conclusion",
+          statement: a.statement,
+          evidence_ids: a.evidence_ids,
+        }),
+    ),
+    tool(
+      "research_claims",
+      "Las hipótesis, hallazgos y conclusiones de la investigación de tu tarea, con su estado.",
+      z.object({}),
+      () => client.call("research.claims_list", {}),
+    ),
+    tool(
       "run_request",
       "Pide que Keel arranque un run sobre una tarea (plan, execute o triage_eval). No lo arranca: un humano lo aprueba.",
       z.object({

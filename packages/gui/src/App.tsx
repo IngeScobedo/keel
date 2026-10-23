@@ -70,6 +70,7 @@ export function App() {
   const [connection, setConnection] = useState(false)
   const [title, setTitle] = useState("")
   const [spec, setSpec] = useState("")
+  const [kind, setKind] = useState("feature")
   const [submitError, setSubmitError] = useState("")
   const [busy, setBusy] = useState(false)
   const [path, setPath] = useState(workspace.socketPath || "")
@@ -157,7 +158,7 @@ export function App() {
     setBusy(true)
     setSubmitError("")
     try {
-      const created = await workspace.create(title.trim(), spec.trim())
+      const created = await workspace.create(title.trim(), spec.trim(), kind)
       if (demo)
         setLocalDetails((old) => ({
           ...old,
@@ -586,6 +587,21 @@ export function App() {
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="What needs to change?"
               />
+            </label>
+            <label>
+              Tipo
+              <select
+                aria-label="Tipo de tarea"
+                value={kind}
+                onChange={(e) => setKind(e.target.value)}
+              >
+                <option value="feature">feature</option>
+                <option value="bug">bug</option>
+                <option value="refactor">refactor</option>
+                <option value="chore">chore</option>
+                <option value="docs">docs</option>
+                <option value="research">investigación</option>
+              </select>
             </label>
             <label>
               Spec / acceptance criteria

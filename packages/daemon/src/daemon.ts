@@ -85,6 +85,7 @@ import {
   type RecordedProcess,
   sameProcess,
 } from "./processes.js"
+import { Research, ResearchError } from "./research.js"
 import { BrokerError, ResourceBroker } from "./resources/broker.js"
 import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
@@ -154,6 +155,7 @@ export class Daemon {
   readonly semantic: SemanticProjector
   readonly broker: ResourceBroker
   readonly plugins: PluginHost
+  readonly research: Research
   readonly server: IpcServer
   /** Puerta de agentes (ADR-0018 §2): nada que entre por ella es humano. */
   readonly agentServer: IpcServer
@@ -203,6 +205,7 @@ export class Daemon {
       repo: this.repo,
       artifacts: this.artifacts,
     })
+    this.research = new Research({ db: this.store.db, repo: this.repo, artifacts: this.artifacts })
     // ADR-0014: los plugins interpretan en su propio proceso, sin bloquear la ingesta.
     this.plugins = new PluginHost({
       db: this.store.db,
@@ -1281,6 +1284,94 @@ export class Daemon {
           return { id: p.id, uninstalled: true as const }
         },
       ),
+      "artifacts.put": this.mutation<Params<"artifacts.put">>("artifacts.put", (p, _uow, ctx) => {
+        requireHuman(ctx, "guardar un artefacto")
+        const stored = this.artifacts.put(Buffer.from(p.content_base64, "base64"), p.media_type)
+        return { ref: stored.ref, sha256: stored.sha256, size: stored.size }
+      }),
+      "research.claim_add": this.mutation<Params<"research.claim_add">>(
+        "research.claim_add",
+        (p, uow, ctx) => {
+          const agent = ctx.actor.kind === "agent" ? ctx.actor : null
+          const workItemId = agent ? agent.work_item_id : (p.work_item_id ?? null)
+          if (!workItemId)
+            throw rpcError(ErrorCode.invalidParams, "falta la tarea de la investigación")
+          if (agent && p.work_item_id && p.work_item_id !== agent.work_item_id)
+            throw rpcError(
+              ErrorCode.unauthorized,
+              "el agente sólo escribe en la investigación de su tarea",
+            )
+          this.workItemIn(ctx, workItemId)
+          const claim = researchCall(() =>
+            this.research.add({
+              work_item_id: workItemId,
+              kind: p.kind,
+              statement: p.statement,
+              evidence_ids: p.evidence_ids ?? [],
+              created_by: ctx.actor.actor_id,
+              run_id: agent?.run_id ?? null,
+            }),
+          )
+          uow.emit("research.claim_added", agent?.run_id ?? null, claim)
+          return claim
+        },
+      ),
+      "research.claim_decide": this.mutation<Params<"research.claim_decide">>(
+        "research.claim_decide",
+        (p, uow, ctx) => {
+          // Un agente puede proponer, no decidir (ADR-0016 §2).
+          requireHuman(ctx, "verificar o refutar una afirmación")
+          const claim = researchCall(() =>
+            this.research.decide(p.claim_id, p.decision, uow.actorId, p.reason ?? null),
+          )
+          uow.emit("research.claim_decided", null, claim)
+          return claim
+        },
+      ),
+      "research.claims_list": (params, ctx) => {
+        const p = params as Params<"research.claims_list">
+        const agent = ctx.actor.kind === "agent" ? ctx.actor : null
+        const workItemId = agent ? agent.work_item_id : (p.work_item_id ?? null)
+        if (!workItemId)
+          throw rpcError(ErrorCode.invalidParams, "falta la tarea de la investigación")
+        this.workItemIn(ctx, workItemId)
+        return { claims: this.research.list(workItemId) }
+      },
+      "research.report_generate": async (params, ctx) => {
+        requireHuman(ctx, "generar un reporte")
+        const p = params as Params<"research.report_generate">
+        this.workItemIn(ctx, p.work_item_id)
+        let out: Awaited<ReturnType<Research["generate"]>>
+        try {
+          out = await this.research.generate(p.work_item_id, ctx.actor.actor_id)
+        } catch (e) {
+          throw researchFailure(e)
+        }
+        const view = { ...reportView(out.report), reused: out.reused }
+        if (!out.reused)
+          this.emitIn(out.report.project_id, "research.report_generated", {
+            ...view,
+            markdown: undefined,
+          })
+        return view
+      },
+      "research.reports_list": (params, ctx) => {
+        requireHuman(ctx, "ver los reportes")
+        const p = params as Params<"research.reports_list">
+        this.workItemIn(ctx, p.work_item_id)
+        return {
+          reports: this.research
+            .reports(p.work_item_id)
+            .map((r) => ({ ...reportView(r), reused: false })),
+        }
+      },
+      "research.report_export": (params, ctx) => {
+        requireHuman(ctx, "exportar un reporte")
+        const p = params as Params<"research.report_export">
+        const r = this.research.report(p.report_id)
+        if (!r) throw rpcError(ErrorCode.notFound, "el reporte no existe")
+        return this.research.export(r, p.format, p.include_restricted ?? false)
+      },
       "permissions.rules_list": (params, ctx) => {
         requireHuman(ctx, "revisar las reglas de permiso")
         const p = params as Params<"permissions.rules_list">
@@ -2254,6 +2345,48 @@ export function promptHeader(item: WorkItemRow): string {
     "Su especificación, notas y evidencia están en el recurso keel://task/current;",
     "el contexto del proyecto, en keel://project/context; busca lo demás con la tool context_search.",
   ].join(" ")
+}
+
+function reportView(r: {
+  id: string
+  work_item_id: string
+  version: number
+  sha256: string
+  markdown: string
+  created_by: string
+  created_at: string
+}) {
+  return {
+    id: r.id,
+    work_item_id: r.work_item_id,
+    version: r.version,
+    sha256: r.sha256,
+    markdown: r.markdown,
+    created_by: r.created_by,
+    created_at: r.created_at,
+  }
+}
+
+function researchFailure(e: unknown): RpcFailure {
+  if (e instanceof RpcFailure) return e
+  if (e instanceof ResearchError)
+    return rpcError(
+      e.code === "not_found"
+        ? ErrorCode.notFound
+        : e.code === "denied"
+          ? ErrorCode.unauthorized
+          : ErrorCode.invalidParams,
+      e.message,
+    )
+  return rpcError(ErrorCode.internal, e instanceof Error ? e.message : String(e))
+}
+
+function researchCall<T>(f: () => T): T {
+  try {
+    return f()
+  } catch (e) {
+    throw researchFailure(e)
+  }
 }
 
 /** Errores del intermediario → errores del protocolo. */

@@ -110,3 +110,24 @@ explícita, dentro de su misma transacción.
 - **Publicar `@keel/plugin-sdk`.** Espera al primer plugin externo, como dice el
   ADR.
 - **Los visualizadores en la TUI**, que todavía no existe.
+
+## ADR-0016, investigaciones y reportes
+
+**Cubierto** (`test/research.test.ts`):
+
+- **Quién propone y quién decide.** El agente propone hipótesis, hallazgos y
+  conclusiones; sólo el humano verifica o refuta. Un hallazgo sin evidencia sale
+  como «sin evidencia», en la UI y en el reporte.
+- **Reporte determinista.** Se genera desde los registros: los mismos dan el
+  mismo hash y se reusa la versión; un cambio crea otra versión, y las
+  anteriores no se tocan (trigger).
+- **Gráficas.** La gráfica del reporte es el mismo artefacto que se vio en vivo.
+  El HTML exportado la lleva renderizada: la GUI guarda el SVG al guardar la
+  gráfica.
+- **Evidencia restringida.** Sólo se exporta si el humano lo elige.
+
+**Pendiente:**
+
+- **Publicar al Shared Research Hub (§6).** `shared_researches` exige una
+  instancia de agente y un snapshot de repo. Llega con el hub.
+- **El PDF**, que el propio ADR deja para después.

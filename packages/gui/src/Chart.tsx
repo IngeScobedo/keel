@@ -119,6 +119,7 @@ export function TableWithChart({
   const [y, setY] = useState(names[1] ?? names[0] ?? "")
   const [mark, setMark] = useState<"bar" | "line" | "point">("bar")
   const box = useRef<HTMLDivElement>(null)
+  const rendered = useRef<Promise<{ view: { toSVG(): Promise<string> } }> | null>(null)
   const [saved, setSaved] = useState("")
   const spec = chartSpec(table, x, y, mark)
   // biome-ignore lint/correctness/useExhaustiveDependencies: la especificación sale de x, y y mark.
@@ -131,6 +132,7 @@ export function TableWithChart({
       ([{ default: embed }, { expressionInterpreter }]) =>
         embed(el, spec as never, { actions: false, ast: true, expr: expressionInterpreter }),
     )
+    rendered.current = view as unknown as Promise<{ view: { toSVG(): Promise<string> } }>
     return () => {
       void view.then((v) => v.finalize()).catch(() => {})
     }
@@ -138,13 +140,24 @@ export function TableWithChart({
   async function save() {
     if (!call || !workItemId) return
     const json = JSON.stringify(spec)
+    const b64 = (s: string) => btoa(unescape(encodeURIComponent(s)))
+    // ADR-0012 §5: la especificación es la gráfica; el SVG se guarda para exportar.
+    const svg = rendered.current ? await (await rendered.current).view.toSVG() : null
+    const render = svg
+      ? await call("artifacts.put", {
+          ...mutationMeta(),
+          content_base64: b64(svg),
+          media_type: "image/svg+xml",
+        })
+      : null
     await call("evidence.attach", {
       ...mutationMeta(),
       work_item_id: workItemId,
       kind: "chart",
       title: `${y} por ${x}`,
-      content_base64: btoa(unescape(encodeURIComponent(json))),
+      content_base64: b64(json),
       media_type: "application/vnd.vegalite.v5+json",
+      ...(render ? { metadata: { render_ref: render.ref } } : {}),
     })
     setSaved("Guardada como evidencia")
   }

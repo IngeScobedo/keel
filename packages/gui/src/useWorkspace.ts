@@ -225,7 +225,7 @@ export function useWorkspace() {
       .catch(() => {})
   }, [lastKind, mode])
 
-  async function create(title: string, spec: string): Promise<WorkItem> {
+  async function create(title: string, spec: string, kind = "feature"): Promise<WorkItem> {
     if (mode === "demo") {
       const item: WorkItem = {
         id: `demo-${crypto.randomUUID()}`,
@@ -245,7 +245,7 @@ export function useWorkspace() {
     const item = await client.current.call("work_items.create", {
       ...mutationMeta(),
       title,
-      kind: "feature",
+      kind,
       spec_markdown: spec,
     })
     if (!project.current) project.current = item.project_id

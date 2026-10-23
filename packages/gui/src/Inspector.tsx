@@ -22,13 +22,22 @@ import {
   type TaskDetails,
   type WorkItem,
 } from "./model.js"
+import { ResearchPanel } from "./Research.js"
 import { Button, Empty, Hint, Modal, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
 type Detail = ReturnType<(typeof Methods)["work_items.get"]["result"]["parse"]>
 
-const taskTabs = ["Activity", "Plan", "Checklist", "Evidence", "Notes", "Diff"] as const
+const taskTabs = [
+  "Activity",
+  "Plan",
+  "Checklist",
+  "Evidence",
+  "Notes",
+  "Diff",
+  "Investigación",
+] as const
 export function Inspector({
   task,
   details,
@@ -73,6 +82,8 @@ export function Inspector({
       (e.kind === "note.added" &&
         (e.payload as { work_item_id?: string } | null)?.work_item_id === task.id) ||
       (e.kind.startsWith("work_item.") && (e.payload as { id?: string } | null)?.id === task.id) ||
+      (e.kind.startsWith("research.") &&
+        (e.payload as { work_item_id?: string } | null)?.work_item_id === task.id) ||
       (e.kind === "evidence.attached" &&
         (e.payload as { work_item_id?: string } | null)?.work_item_id === task.id),
   ).length
@@ -196,7 +207,16 @@ export function Inspector({
             {liveError}
           </p>
         )}
-        <Tabs values={taskTabs} active={tab} onChange={setTab} />
+        <Tabs
+          values={
+            task.kind === "research" ? taskTabs : taskTabs.filter((t) => t !== "Investigación")
+          }
+          active={tab}
+          onChange={setTab}
+        />
+        {tab === "Investigación" && !demo && call && (
+          <ResearchPanel call={call} workItemId={task.id} tick={touches} />
+        )}
         {tab === "Activity" && (
           <>
             <div className="comment-form">

@@ -371,4 +371,23 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(
     page.getByLabel("Política de query.write en conta").locator("option[value=auto]"),
   ).toBeDisabled()
+
+  // 8. Investigación (ADR-0016): afirmaciones, decisión humana y reporte con hash.
+  await page.getByRole("button", { name: "Board", exact: true }).click()
+  await page.getByRole("button", { name: "New task", exact: false }).click()
+  await page.getByLabel("Title", { exact: true }).fill("Faltan 30 mil")
+  await page.getByLabel("Tipo de tarea").selectOption("research")
+  await page.getByRole("button", { name: "Create task", exact: true }).click()
+  await page.getByRole("tab", { name: "Investigación", exact: true }).click()
+  await page.getByLabel("Afirmación", { exact: true }).fill("El depósito se duplicó")
+  await page.getByRole("button", { name: "Añadir", exact: true }).click()
+  const claim = page.getByTestId("claim")
+  await expect(claim).toContainText("sin evidencia")
+  await claim.getByRole("button", { name: "Verificar" }).click()
+  await expect(claim).toContainText("verificado")
+  await page.getByRole("button", { name: "Generar reporte" }).click()
+  const report = page.getByTestId("report")
+  await expect(report).toContainText("Versión 1")
+  await report.getByRole("button", { name: "Leer" }).click()
+  await expect(page.getByTestId("report-body")).toContainText("El depósito se duplicó")
 })

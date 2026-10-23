@@ -11,6 +11,7 @@
  */
 import { z } from "zod"
 import { PluginManifestSchema } from "./plugins.js"
+import { ClaimKindSchema, ClaimViewSchema } from "./research.js"
 import { SemanticEventViewSchema } from "./semantic.js"
 import { VISUAL_STATES } from "./visual-state.js"
 
@@ -153,6 +154,7 @@ export const WorkItemViewSchema = z.object({
   project_id: z.string(),
   display_id: z.string(),
   title: z.string(),
+  kind: z.string().optional(),
   lifecycle: LifecycleSchema,
   board_status: z.string(),
   ...projected,
@@ -307,6 +309,17 @@ export const PluginViewSchema = z.object({
   manifest: PluginManifestSchema,
   /** `ok`, o por qué no corre (hash cambiado, proceso caído…). */
   status: z.string(),
+})
+export const ReportViewSchema = z.object({
+  id: z.string(),
+  work_item_id: z.string(),
+  version: z.number().int(),
+  sha256: z.string(),
+  markdown: z.string(),
+  created_by: z.string(),
+  created_at: z.string(),
+  /** true si los registros no cambiaron y se devolvió la versión existente. */
+  reused: z.boolean(),
 })
 export const NoteViewSchema = z.object({
   id: z.string(),
@@ -792,6 +805,52 @@ export const Methods = {
     params: MutationMeta.extend({ id: z.string() }),
     result: z.object({ id: z.string(), uninstalled: z.literal(true) }),
   },
+  /** Guarda bytes en el almacén (p. ej., el SVG de una gráfica, ADR-0012 §5); sólo humano. */
+  "artifacts.put": {
+    params: MutationMeta.extend({ content_base64: z.string(), media_type: z.string() }),
+    result: z.object({ ref: z.string(), sha256: z.string(), size: z.number().int() }),
+  },
+  /** ADR-0016 §2–§3: hipótesis, hallazgos y conclusiones de una tarea `research`. */
+  "research.claim_add": {
+    params: MutationMeta.extend({
+      work_item_id: z.string().optional(),
+      kind: ClaimKindSchema,
+      statement: z.string().min(1).max(4000),
+      evidence_ids: z.array(z.string()).optional(),
+    }),
+    result: ClaimViewSchema,
+  },
+  /** Sólo un humano verifica o refuta (ADR-0016 §2). */
+  "research.claim_decide": {
+    params: MutationMeta.extend({
+      claim_id: z.string(),
+      decision: z.enum(["verified", "refuted"]),
+      reason: z.string().optional(),
+    }),
+    result: ClaimViewSchema,
+  },
+  "research.claims_list": {
+    params: z.object({ work_item_id: z.string().optional() }),
+    result: z.object({ claims: z.array(ClaimViewSchema) }),
+  },
+  /** Versión inmutable con hash; si nada cambió, devuelve la misma versión. */
+  "research.report_generate": {
+    params: MutationMeta.extend({ work_item_id: z.string() }),
+    result: ReportViewSchema,
+  },
+  "research.reports_list": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({ reports: z.array(ReportViewSchema) }),
+  },
+  /** Markdown o HTML con las gráficas ya renderizadas; lo restringido sólo si se elige. */
+  "research.report_export": {
+    params: z.object({
+      report_id: z.string(),
+      format: z.enum(["markdown", "html"]),
+      include_restricted: z.boolean().optional(),
+    }),
+    result: z.object({ filename: z.string(), media_type: z.string(), content: z.string() }),
+  },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),
     result: z.object({ rules: z.array(PermissionRuleViewSchema) }),
@@ -898,6 +957,8 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "evidence.list",
   "resources.list",
   "resources.execute",
+  "research.claim_add",
+  "research.claims_list",
   "git.propose",
   "git.plan_status",
 ]
@@ -915,6 +976,8 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "context.project": "tasks:read",
   "evidence.list": "tasks:read",
   "resources.list": "resources:use",
+  "research.claim_add": "notes:write",
+  "research.claims_list": "tasks:read",
   "resources.execute": "resources:use",
 }
 
