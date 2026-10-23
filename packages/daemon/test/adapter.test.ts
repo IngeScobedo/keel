@@ -136,6 +136,43 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
     s.done()
   })
 
+  test("SDD 03 §5: los secretos de hooks y mensajes no llegan a ninguna tabla ni al bus", async () => {
+    // Falsos y armados por partes: ningún escáner los toma por credenciales reales.
+    const bearer = ["tok", "x".repeat(30)].join("")
+    const gh = ["gh", "p_", "Z".repeat(36)].join("")
+    const entries = loadRecordedRun()
+    for (const e of entries) {
+      if (e.kind !== "hook" || e.input.tool_name !== "Glob") continue
+      if (e.name === "PreToolUse")
+        e.input = {
+          ...e.input,
+          tool_input: { pattern: "src/**/*", note: `Authorization: Bearer ${bearer}` },
+        }
+      if (e.name === "PostToolUse")
+        e.input = { ...e.input, tool_response: { filenames: [`GITHUB_TOKEN=${gh}`] } }
+    }
+    const s = setup(replayQuery(entries))
+    const final = await s.adapter.execute(s.ctx, "secretos", { ...DEFAULT_PROFILE, cwd: s.dir })
+    expect(final.status).toBe("completed")
+    const dump = s.store.db
+      .query<{ t: string }, []>(
+        "SELECT group_concat(payload_json, ' ') t FROM events UNION ALL SELECT group_concat(coalesce(input_json,'') || coalesce(output_json,''), ' ') FROM tool_calls",
+      )
+      .all()
+      .map((r) => r.t)
+      .join(" ")
+    expect(dump).not.toContain(bearer)
+    expect(dump).not.toContain(gh)
+    expect(JSON.stringify(s.published)).not.toContain(bearer)
+    const glob = s.repo.toolCallsOfRun(s.run.id).find((c) => c.tool_name === "Glob")
+    expect(glob?.label).toBe("src/**/*")
+    const redacted = s.published.filter((n) => n.kind === "ingest.redacted")
+    expect(redacted.length).toBeGreaterThanOrEqual(2)
+    expect(redacted[0]?.payload).toMatchObject({ rules_version: 1, hits: expect.any(Array) })
+    s.store.db.close()
+    s.done()
+  })
+
   test("cancelación: sin result del SDK, el daemon sintetiza cancelled en run y tool calls (FINDINGS §1)", async () => {
     const s = setup(hangingQuery())
     const p = s.adapter.execute(s.ctx, "cuelga", { ...DEFAULT_PROFILE, cwd: s.dir })

@@ -83,3 +83,9 @@ ya tenga; en modo API key usa la clave del entorno. Detalle y razones en
 
 Keel no está afiliado a Anthropic ni a OpenAI. El uso de cada proveedor queda
 sujeto a los términos de la cuenta de cada usuario.
+
+Antes de guardar o mostrar un evento, Keel reemplaza los valores que parecen
+secretos: cabeceras de autorización, bearer tokens, claves privadas, contraseñas
+en URLs y formatos de token conocidos (`@keel/core`, `redaction.ts`). Es
+**best-effort**, no una garantía. Las reglas están versionadas y probadas, pero
+un secreto con una forma que no reconocen puede pasar.

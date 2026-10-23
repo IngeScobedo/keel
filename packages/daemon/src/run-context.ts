@@ -3,7 +3,7 @@
  * eventos del proveedor se guardan en `events` con su fuente y versión de
  * adaptador y se publican en el bus; la proyección escribe por el `Repo`.
  */
-import { isLive } from "@keel/core"
+import { isLive, REDACTION_RULES_VERSION, redact } from "@keel/core"
 import type { RunContext, ToolGate } from "./adapters/provider.js"
 import type { EventBus } from "./bus.js"
 import { nowIso, ulid } from "./ids.js"
@@ -58,6 +58,19 @@ export function createRunContext(deps: RunContextDeps): RunContext {
     store: repo,
     decideTool: (req) => deps.gate.decide(ctx, req),
     record,
+    ingest(kind, key, payload, occurredAt) {
+      const { value, hits } = redact(payload)
+      const id = record(kind, key, value, occurredAt)
+      // Dónde y con qué regla, nunca el valor (best-effort, reglas versionadas).
+      if (id && hits.length > 0)
+        record(
+          "ingest.redacted",
+          `redacted:${id}`,
+          { event_id: id, rules_version: REDACTION_RULES_VERSION, hits },
+          null,
+        )
+      return { id, payload: value }
+    },
     notifyRun,
     fail(message, kind = "run.failed") {
       const current = repo.getRun(run.id) ?? run

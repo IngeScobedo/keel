@@ -55,6 +55,16 @@ export interface RunContext {
   decideTool(req: ToolRequest): Promise<ToolDecision>
   /** Persiste un evento crudo del proveedor y lo publica. Devuelve su id, o null si ya existía. */
   record(kind: string, key: string, payload: unknown, occurredAt: string | null): string | null
+  /**
+   * Borde de la ingesta: redacta secretos (SDD 03 §5), persiste y publica.
+   * Devuelve la copia saneada, que es la única que se debe proyectar.
+   */
+  ingest<T>(
+    kind: string,
+    key: string,
+    payload: T,
+    occurredAt: string | null,
+  ): { id: string | null; payload: T }
   /** Publica `run.updated` con la vista actual del run. */
   notifyRun(): void
   /** Termina en `failed` un run que no llegó a terminal, con su evento. Si ya es terminal no lo toca. */

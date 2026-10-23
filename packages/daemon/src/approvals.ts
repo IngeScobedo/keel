@@ -5,6 +5,8 @@
  * deniega (deny-on-timeout) y la solicitud queda en el inbox. El SDK no lo hace
  * por su cuenta (FINDINGS §3). No depende del proveedor.
  */
+
+import { redact } from "@keel/core"
 import type { RunContext, ToolDecision, ToolGate, ToolRequest } from "./adapters/provider.js"
 import { canonicalJson, sha256Hex } from "./ids.js"
 import type { Repo } from "./store/repo.js"
@@ -30,13 +32,14 @@ export class ApprovalGate implements ToolGate {
     const { repo, waitApproval, timeoutMs } = this.deps
     const run = ctx.run
     const operation = { tool: req.tool, input: req.input, run_id: run.id }
+    // El hash es de la operación real (la que se ejecuta); lo guardado es la copia saneada.
     const hash = await sha256Hex(canonicalJson(operation))
     const expires = new Date(Date.now() + timeoutMs).toISOString()
     const approvalId = repo.createApproval({
       project_id: run.project_id,
       run_id: run.id,
       operation_hash: hash,
-      operation,
+      operation: redact(operation).value,
       expires_at: expires,
     })
     repo.updateRun(run.id, { status: "waiting_human" })

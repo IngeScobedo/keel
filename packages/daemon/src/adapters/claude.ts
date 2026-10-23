@@ -203,16 +203,17 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     const hook: HookCallback = async (input: HookInput, toolUseID) => {
       const name = input.hook_event_name
       const key = `hook:${input.session_id}:${name}:${toolUseID ?? ""}:${ulid()}`
-      const eventId = ctx.record(
+      // Se proyecta la copia saneada: tool_calls.input_json tampoco guarda secretos.
+      const { id: eventId, payload } = ctx.ingest(
         `hook.${name}`,
         key,
-        { ...input, tool_use_id_callback: toolUseID ?? null },
+        {
+          ...(input as unknown as Record<string, unknown>),
+          tool_use_id_callback: toolUseID ?? null,
+        },
         null,
       )
-      notifyProjection(
-        key,
-        projector.onHook(name, input as unknown as Record<string, unknown>, toolUseID, eventId),
-      )
+      notifyProjection(key, projector.onHook(name, payload, toolUseID, eventId))
       return {}
     }
     const hooks = Object.fromEntries(
@@ -277,9 +278,14 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     let thrown: string | null = null
     try {
       for await (const message of queryFn({ prompt, options })) {
-        const m = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
-        const key = m.uuid ? `msg:${m.uuid}` : `msg:${m.type}:${ulid()}`
-        ctx.record(`sdk.${m.type}`, key, m, typeof m.timestamp === "string" ? m.timestamp : null)
+        const raw = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
+        const key = raw.uuid ? `msg:${raw.uuid}` : `msg:${raw.type}:${ulid()}`
+        const { payload: m } = ctx.ingest(
+          `sdk.${raw.type}`,
+          key,
+          raw,
+          typeof raw.timestamp === "string" ? raw.timestamp : null,
+        )
         const changed = projector.onMessage(m)
         if (m.type === "system" && projector.sessionId)
           launched.update({ session_id: projector.sessionId })
