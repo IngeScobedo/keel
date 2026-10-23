@@ -320,7 +320,9 @@ async function listWorktrees(repo: GitRepo): Promise<ListedWorktree[]> {
     const sp = field.indexOf(" ")
     const key = sp === -1 ? field : field.slice(0, sp)
     const value = sp === -1 ? "" : field.slice(sp + 1)
-    if (key === "worktree") cur = { path: value, head: null, branch: null, prunable: false }
+    // git en Windows lista `C:/…` aunque se haya creado con `C:\…`: se normaliza a la forma nativa.
+    if (key === "worktree")
+      cur = { path: resolve(value), head: null, branch: null, prunable: false }
     else if (!cur) continue
     else if (key === "HEAD") cur.head = value
     else if (key === "branch") cur.branch = value

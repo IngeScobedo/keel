@@ -224,6 +224,7 @@ describe("@keel/git: concurrencia sobre el .git compartido", () => {
     expect(w.state).toBe("active")
   })
 
+  // En Windows cada worktree cuesta ~10 veces más que en Linux (procesos git): timeout amplio.
   test("ocho worktrees creados en paralelo sobre el mismo repo terminan todos", async () => {
     const { repo, root, wt } = await fixture()
     const ids = Array.from({ length: 8 }, (_, i) => `par-${i}`)
@@ -232,5 +233,5 @@ describe("@keel/git: concurrencia sobre el .git compartido", () => {
     expect((await reconcile(repo)).every((w) => w.state === "active")).toBe(true)
     await Promise.all(ids.map((id) => removeWorktree(repo, id)))
     expect(await reconcile(repo)).toEqual([])
-  })
+  }, 60_000)
 })
