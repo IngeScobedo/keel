@@ -130,3 +130,121 @@ async fn read_frame<R: AsyncRead + Unpin>(input: &mut BufReader<R>) -> Result<Op
         if newline.is_some() { frame.pop(); return Ok(Some(frame)); }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::process::{Child, Command, Stdio};
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("keel-tauri-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("tmp");
+        dir
+    }
+
+    fn request(id: u64, method: &str, params: Value) -> Value {
+        serde_json::json!({ "jsonrpc": "2.0", "keel_protocol": 1, "id": id, "method": method, "params": params })
+    }
+
+    struct Daemon(Child, PathBuf);
+    impl Drop for Daemon {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            let _ = std::fs::remove_dir_all(&self.1);
+        }
+    }
+
+    /// El daemon real de TypeScript (packages/daemon) por el socket de la plataforma:
+    /// socket Unix en POSIX, AF_UNIX en Windows (ADR-0005 §1).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn habla_con_el_daemon_real() {
+        let dir = scratch("daemon");
+        let socket = dir.join("keel.sock");
+        let main = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../daemon/src/main.ts");
+        let child = Command::new("bun")
+            .arg(&main)
+            .args(["--db", dir.join("k.sqlite").to_str().unwrap(), "--socket", socket.to_str().unwrap(), "--root", dir.to_str().unwrap()])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("bun en el PATH");
+        let _daemon = Daemon(child, dir.clone());
+        for _ in 0..100 {
+            if socket.exists() { break; }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let session = Session::connect(socket.to_str().unwrap(), Arc::new(move |f| { let _ = tx.send(f); }))
+            .await
+            .expect("conectar");
+        let health = session.request(request(1, "daemon.health", serde_json::json!({}))).await.expect("health");
+        assert!(health["result"]["event_loop_lag_ms"].is_number(), "{health}");
+        session.request(request(2, "events.subscribe", serde_json::json!({ "after_event_seq": 0 }))).await.expect("subscribe");
+        let created = session
+            .request(request(3, "work_items.create", serde_json::json!({
+                "request_id": "r1", "idempotency_key": "k1", "title": "desde Tauri: ñandú 🦀", "kind": "chore"
+            })))
+            .await
+            .expect("create");
+        assert_eq!(created["result"]["title"], "desde Tauri: ñandú 🦀");
+        let event = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let f = rx.recv().await.expect("canal");
+                if f["params"]["kind"] == "work_item.created" { return f; }
+            }
+        })
+        .await
+        .expect("evento por la suscripción");
+        assert_eq!(event["params"]["payload"]["title"], "desde Tauri: ñandú 🦀");
+        session.close();
+    }
+
+    /// Una «ñ» partida entre dos escrituras del servidor llega intacta (el puente de
+    /// Windows copia bytes, nunca caracteres).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn utf8_partido_entre_escrituras() {
+        let dir = scratch("utf8");
+        let path = dir.join("s.sock");
+        // «Espa» + el primer byte de «ñ» (0xC3); el segundo (0xB1) va en la otra escritura.
+        let mut reply = br#"{"jsonrpc":"2.0","keel_protocol":1,"id":7,"result":{"t":"Espa"#.to_vec();
+        reply.push(0xc3);
+        let rest = b"\xb1ol\"}}\n".to_vec();
+        #[cfg(unix)]
+        let server = {
+            use tokio::io::AsyncReadExt;
+            let listener = tokio::net::UnixListener::bind(&path).expect("bind");
+            tokio::spawn(async move {
+                let (mut s, _) = listener.accept().await.expect("accept");
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
+                s.write_all(&reply).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                s.write_all(&rest).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            })
+        };
+        #[cfg(windows)]
+        let server = {
+            use std::io::{Read, Write};
+            let listener = uds_windows::UnixListener::bind(&path).expect("bind");
+            tokio::task::spawn_blocking(move || {
+                let (mut s, _) = listener.accept().expect("accept");
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf);
+                s.write_all(&reply).unwrap();
+                std::thread::sleep(Duration::from_millis(50));
+                s.write_all(&rest).unwrap();
+                std::thread::sleep(Duration::from_millis(200));
+            })
+        };
+        let session = Session::connect(path.to_str().unwrap(), Arc::new(|_| {})).await.expect("conectar");
+        let r = session.request(request(7, "daemon.health", serde_json::json!({}))).await.expect("respuesta");
+        assert_eq!(r["result"]["t"], "Español");
+        session.close();
+        let _ = server.await;
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
