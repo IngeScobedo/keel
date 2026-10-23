@@ -169,7 +169,7 @@ export function App() {
             onClick={() => setSwitcher((value) => !value)}
             aria-expanded={switcher}
           >
-            {demo ? "keel-api" : "daemon workspace"}
+            {demo ? "keel-api" : repoName(workspace.health?.project?.root_path)}
             <ChevronDown size={12} />
           </Button>
           {switcher && (
@@ -217,7 +217,7 @@ export function App() {
             {demo
               ? "Prototipo · datos de ejemplo"
               : workspace.mode === "live"
-                ? `keeld · ${workspace.health?.event_loop_lag_ms.toFixed(1) ?? "—"}ms`
+                ? `keeld · ${workspace.health?.project?.root_path ?? "proyecto"}`
                 : workspace.mode === "connecting"
                   ? "Connecting…"
                   : "Daemon offline"}
@@ -534,6 +534,11 @@ export function App() {
       )}
     </div>
   )
+}
+/** Último segmento de la carpeta que sirve el daemon, con `/` o `\\`. */
+function repoName(root: string | undefined) {
+  if (!root) return "daemon"
+  return root.split(/[\\/]/).filter(Boolean).pop() ?? root
 }
 function GitIcon() {
   return <FileText size={11} aria-hidden="true" />

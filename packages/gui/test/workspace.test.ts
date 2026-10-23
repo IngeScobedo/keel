@@ -5,6 +5,7 @@ import { DEMO_PROJECT, demoRuns, demoTasks, makeDemoApprovals } from "../src/fix
 import {
   actorLabel,
   applyEvent,
+  buildChat,
   filterTasks,
   formatCost,
   mergeReplay,
@@ -80,5 +81,40 @@ describe("modo live: identidad y resumen de eventos", () => {
       }),
     ).toEqual({ title: "Herramienta · Bash", detail: '{"command":"ls"}' })
     expect(summarizeEvent({ ...at, kind: "projection.updated", payload: {} })).toBeNull()
+  })
+})
+
+describe("el run como conversación", () => {
+  const at = (seq: number, kind: string, payload: unknown) => ({
+    event_seq: seq,
+    kind,
+    payload,
+    project_id: "p",
+    run_id: "r",
+    received_at: "2026-10-23T00:00:00Z",
+  })
+  test("orden cronológico, herramienta con su salida y aprobación con su decisión", () => {
+    const chat = buildChat([
+      at(5, "approval.resolved", { approval_id: "a1", decision: "approved" }),
+      at(1, "hook.UserPromptSubmit", { prompt: "haz X" }),
+      at(2, "sdk.assistant", { message: { content: [{ type: "text", text: "voy" }] } }),
+      at(3, "hook.PreToolUse", {
+        tool_name: "Bash",
+        tool_use_id: "t1",
+        tool_input: { command: "ls" },
+      }),
+      at(4, "approval.requested", { approval_id: "a1", operation_hash: "h", tool: "Bash" }),
+      at(6, "hook.PostToolUse", { tool_use_id: "t1", tool_response: { stdout: "a.ts" } }),
+      at(7, "run.failure", {
+        category: "turn_limit",
+        message: "12 turnos",
+        user_action: "raise_limit",
+      }),
+    ])
+    expect(chat.map((c) => c.kind)).toEqual(["prompt", "agent", "tool", "approval", "status"])
+    expect(chat[2]).toMatchObject({ input: "ls", output: "a.ts" })
+    expect(chat[3]).toMatchObject({ decision: "approved" })
+    expect(chat[4]).toMatchObject({ tone: "error" })
+    expect((chat[4] as { text: string }).text).toContain("Sube el límite")
   })
 })

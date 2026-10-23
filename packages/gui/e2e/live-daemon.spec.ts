@@ -157,7 +157,10 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.locator(".task-spec")).toHaveText("Reintentos acotados.")
   await page.locator(".live-actions").getByRole("button", { name: "Planear" }).click()
   await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
-  await expect(page.getByTestId("timeline-row").first()).toBeVisible()
+  // El run se lee como conversación: instrucción, herramientas y respuesta, lo nuevo abajo.
+  await expect(page.getByTestId("chat-tool").first()).toBeVisible()
+  await expect(page.getByTestId("chat-agent").last()).toBeVisible()
+  await expect(page.locator(".run-summary")).toContainText("raíz del repo")
 
   // 2. Pasarla a planned y ejecutar con Codex: el comando pide aprobación.
   await page.locator(".run-page .toolbar .text-link").click()
@@ -168,6 +171,12 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.locator(".run-page .toolbar")).toContainText("Waiting for you", {
     timeout: 20_000,
   })
+  // La aprobación aparece dentro de la conversación del run; también en el Inbox.
+  await expect(page.getByTestId("chat-approval")).toContainText("pide permiso")
+  await expect(page.locator(".chat-approval-input")).not.toBeEmpty()
+  await expect(page.locator(".run-summary")).toContainText("keel/")
+  if (process.env.KEEL_E2E_SHOTS)
+    await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "run.png") })
   await page.getByRole("button", { name: "Inbox", exact: true }).click()
   const approval = page.getByTestId("approval")
   await expect(approval).toHaveCount(1)

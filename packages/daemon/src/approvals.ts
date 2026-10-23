@@ -35,18 +35,26 @@ export class ApprovalGate implements ToolGate {
     // El hash es de la operación real (la que se ejecuta); lo guardado es la copia saneada.
     const hash = await sha256Hex(canonicalJson(operation))
     const expires = new Date(Date.now() + timeoutMs).toISOString()
+    const saved = redact(operation).value as { input?: unknown }
     const approvalId = repo.createApproval({
       project_id: run.project_id,
       run_id: run.id,
       operation_hash: hash,
-      operation: redact(operation).value,
+      operation: saved,
       expires_at: expires,
     })
     repo.updateRun(run.id, { status: "waiting_human" })
     ctx.record(
       "approval.requested",
       `approval:${approvalId}`,
-      { approval_id: approvalId, operation_hash: hash, tool: req.tool, expires_at: expires },
+      // La entrada va redactada: quien decide desde el timeline ve qué se pide.
+      {
+        approval_id: approvalId,
+        operation_hash: hash,
+        tool: req.tool,
+        input: saved.input,
+        expires_at: expires,
+      },
       null,
     )
     ctx.notifyRun()

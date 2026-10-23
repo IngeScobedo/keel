@@ -99,7 +99,7 @@ export function hangingQuery(): QueryFn {
 }
 
 /** Un run que pide permiso por `canUseTool` y termina según la decisión. */
-export function askingQuery(): QueryFn {
+export function askingQuery(input: Record<string, unknown> = { command: "rm -rf build" }): QueryFn {
   return ({ options }) =>
     (async function* () {
       yield {
@@ -109,7 +109,7 @@ export function askingQuery(): QueryFn {
         model: "haiku",
         uuid: "u-init2",
       } as unknown as SDKMessage
-      const decision = await options.canUseTool?.("Bash", { command: "rm -rf build" }, {
+      const decision = await options.canUseTool?.("Bash", input, {
         signal: new AbortController().signal,
         suggestions: [],
       } as never)

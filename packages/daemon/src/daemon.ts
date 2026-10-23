@@ -391,6 +391,7 @@ export class Daemon {
           : 0,
         limits: this.limits,
         spent_today_micro_usd: repo.spentSince(project.project_id, startOfLocalDay()),
+        project: { id: project.project_id, root_path: this.opts.rootPath },
       }),
       "work_items.create": this.mutation<Params<"work_items.create">>(
         "work_items.create",

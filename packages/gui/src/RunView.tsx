@@ -3,7 +3,8 @@ import { ArrowLeft, Bot, ChevronDown, ChevronRight, GitBranch, Search } from "lu
 import { useState } from "react"
 import { mutationMeta } from "./client.js"
 import { demoTools } from "./fixtures.js"
-import { formatCost, type Run, summarizeEvent, type WorkItem } from "./model.js"
+import { formatCost, type Run, type WorkItem } from "./model.js"
+import { RunChat } from "./RunChat.js"
 import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -93,6 +94,7 @@ export function RunView({
     `${tool.name} ${tool.label}`.toLowerCase().includes(query.toLowerCase()),
   )
   const runEvents = events.filter((event) => event.run_id === run.id)
+  const where = workspaceOf(run, runEvents)
   return (
     <div className="page run-page">
       <div className="toolbar">
@@ -140,13 +142,13 @@ export function RunView({
         </div>
         <div>
           <small>BASE</small>
-          <code>{demo ? "3e1d9c0" : "No disponible"}</code>
+          <code>{demo ? "3e1d9c0" : (where.base ?? where.label)}</code>
         </div>
         <div>
           <small>BRANCH</small>
           <code>
             <GitBranch size={12} />
-            {demo ? "keel/KEEL-142-auth-retry" : "No disponible"}
+            {demo ? "keel/KEEL-142-auth-retry" : (where.branch ?? where.label)}
           </code>
         </div>
         <div>
@@ -284,7 +286,20 @@ export function RunView({
                 El daemon sólo publica IDs de nodos. En Timeline puedes ver los eventos recibidos.
               </Empty>
             ))}
-          {tab === "Timeline" && (
+          {tab === "Timeline" && !demo && !raw && (
+            <RunChat
+              events={runEvents}
+              running={!TERMINAL.has(run.status)}
+              {...(call ? { call } : {})}
+            />
+          )}
+          {tab === "Timeline" && !demo && (
+            <label className="raw-toggle">
+              <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} />
+              Ver todos los eventos en crudo
+            </label>
+          )}
+          {tab === "Timeline" && (demo || raw) && (
             <div className="timeline">
               {demo
                 ? demoTools
@@ -303,18 +318,15 @@ export function RunView({
                       </article>
                     ))
                 : runEvents.flatMap((event) => {
-                    const s = summarizeEvent(event)
-                    if (!raw && !s) return []
-                    const title = s?.title ?? event.kind
-                    const detail = raw ? JSON.stringify(event.payload, null, 2) : (s?.detail ?? "")
+                    const title = event.kind
+                    const detail = JSON.stringify(event.payload, null, 2)
                     if (!`${title} ${detail}`.toLowerCase().includes(query.toLowerCase())) return []
                     return [
                       <article key={event.event_seq} data-testid="timeline-row">
                         <span className="mono muted">#{event.event_seq}</span>
                         <div>
                           <strong>{title}</strong>
-                          {detail &&
-                            (raw ? <pre>{detail}</pre> : <p className="text-block">{detail}</p>)}
+                          <pre>{detail}</pre>
                         </div>
                         <time className="mono muted">
                           {new Date(event.received_at).toLocaleTimeString()}
@@ -322,12 +334,6 @@ export function RunView({
                       </article>,
                     ]
                   })}
-              {!demo && (
-                <label className="raw-toggle">
-                  <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} />
-                  Ver todos los eventos en crudo
-                </label>
-              )}
               {!demo && runEvents.length === 0 && (
                 <Empty title="Sin eventos recibidos para este run" />
               )}
@@ -367,4 +373,22 @@ export function RunView({
       </div>
     </div>
   )
+}
+
+/** Dónde corrió: el worktree que anunció el daemon; un run que no ejecuta usa la raíz. */
+function workspaceOf(
+  run: Run,
+  events: EventNotification[],
+): { branch?: string; base?: string; label: string } {
+  const created = events.find((e) => e.kind === "worktree.created")?.payload as
+    | { branch_name?: string; base_sha?: string }
+    | undefined
+  if (created?.branch_name)
+    return {
+      branch: created.branch_name,
+      label: "",
+      ...(created.base_sha ? { base: created.base_sha.slice(0, 10) } : {}),
+    }
+  if (run.purpose !== "execute") return { label: "raíz del repo · sin worktree" }
+  return { label: "preparando…" }
 }

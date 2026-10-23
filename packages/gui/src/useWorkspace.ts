@@ -27,9 +27,11 @@ export function useWorkspace() {
   /** Sube con cada evento que cambia aprobaciones, emparejamientos o peticiones de run. */
   const [inboxTick, setInboxTick] = useState(0)
   const [socketPath, setSocketPath] = useState(rememberedSocket() ?? "")
-  const [health, setHealth] = useState<{ event_loop_lag_ms: number; rss_bytes: number } | null>(
-    null,
-  )
+  const [health, setHealth] = useState<{
+    event_loop_lag_ms: number
+    rss_bytes: number
+    project?: { id: string; root_path: string } | undefined
+  } | null>(null)
   const project = useRef(DEMO_PROJECT)
   const client = useRef<KeelClient | null>(null)
   const cleanup = useRef<(() => void) | null>(null)
@@ -73,10 +75,13 @@ export function useWorkspace() {
         const daemonHealth = await rpc.call("daemon.health", {})
         if (generation.current !== currentGeneration) return
         setHealth(daemonHealth)
-        let result = await rpc.call("events.subscribe", projectId ? { project_id: projectId } : {})
-        // Hasta que exista projects.list, el primer evento descubre el proyecto default.
-        const discovered = projectId || buffered[0]?.project_id
-        if (discovered && !projectId) {
+        // El daemon dice a qué proyecto sirve; un daemon viejo no lo dice y se
+        // descubre del primer evento.
+        const wanted = projectId || daemonHealth.project?.id || ""
+        if (wanted) project.current = wanted
+        let result = await rpc.call("events.subscribe", wanted ? { project_id: wanted } : {})
+        const discovered = wanted || buffered[0]?.project_id
+        if (discovered && !wanted) {
           project.current = discovered
           await rpc.call("events.unsubscribe", { subscription_id: result.subscription_id })
           result = await rpc.call("events.subscribe", { project_id: discovered })
@@ -128,7 +133,9 @@ export function useWorkspace() {
   useEffect(() => {
     if (!hasNativeShell()) return
     void (async () => {
-      const path = rememberedSocket() ?? (await defaultSocketPath().catch(() => ""))
+      // Siempre el daemon por defecto (o KEEL_SOCKET): el último socket usado sólo
+      // rellena el formulario. Reusarlo conectaba a un daemon que ya no era el tuyo.
+      const path = await defaultSocketPath().catch(() => "")
       if (!path) return
       setSocketPath(path)
       await connect(path, "")

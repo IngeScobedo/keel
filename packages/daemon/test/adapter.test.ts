@@ -226,6 +226,22 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
     s.done()
   })
 
+  test("el evento de aprobación lleva el comando que se pide, redactado", async () => {
+    const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
+    const s = setup(
+      askingQuery({ command: `curl -H "x-api-key: ${secret}" https://x` }),
+      async () => "approved" as const,
+    )
+    await s.adapter.execute(s.ctx, "borra", { ...DEFAULT_PROFILE, cwd: s.dir })
+    const req = s.published.find((n) => n.kind === "approval.requested")?.payload as {
+      input: { command: string }
+    }
+    expect(req.input.command).toStartWith("curl -H")
+    expect(JSON.stringify(req)).not.toContain(secret)
+    s.store.db.close()
+    s.done()
+  })
+
   test("subscription_session sin binario instalado falla antes de arrancar, sin fallback a API key", async () => {
     const s = setup(replayQuery())
     const adapter = new ClaudeAdapter({ queryFn: replayQuery(), binary: null })

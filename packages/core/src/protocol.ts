@@ -401,6 +401,8 @@ export const Methods = {
         })
         .optional(),
       spent_today_micro_usd: z.number().int().optional(),
+      /** A qué proyecto y carpeta sirve este daemon: el cliente lo muestra para no confundir daemons. */
+      project: z.object({ id: z.string(), root_path: z.string() }).optional(),
     }),
   },
 } as const
