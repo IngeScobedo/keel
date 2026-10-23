@@ -83,6 +83,17 @@ export type ProviderCapabilities = {
   subagents: boolean
   /** El SDK pregunta antes de usar una herramienta no aprobada. */
   tool_approval: boolean
+  /**
+   * Qué acciones puede interceptar el gate de Keel, verificado por prueba
+   * (ADR-0008 §3): `any_tool`, `command`, `file_change`, `permissions`, `mcp_tool`.
+   */
+  approval_kinds: readonly string[]
+  /** `owned`: Keel lanza el proceso y conoce su pid; `indirect`: el SDK lo lanza (ADR-0008 §5). */
+  process_control: "owned" | "indirect"
+  /** En qué se mide el presupuesto del run (ADR-0008 §7). */
+  budget_unit: "usd" | "tokens"
+  /** `process`: cancelar termina el proceso; `turn`: sólo el turno, un comando en curso puede seguir. */
+  cancel_scope: "process" | "turn"
   /** Qué tipo de costo reporta (ADR-0002 regla 4). */
   cost_kind: CostKind
   /** Si tras cancelar el SDK emite un mensaje final; si no, el daemon lo sintetiza. */

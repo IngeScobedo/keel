@@ -23,7 +23,13 @@ import {
   DEFAULT_PROFILE,
   SOURCE,
 } from "./adapters/claude.js"
-import type { ProviderAdapter } from "./adapters/provider.js"
+import {
+  CODEX_SOURCE,
+  CodexAdapter,
+  type CodexAdapterDeps,
+  type CodexProfile,
+  DEFAULT_CODEX_PROFILE,
+} from "./adapters/codex.js"
 import { AgentTokens } from "./agent-tokens.js"
 import { ApprovalGate } from "./approvals.js"
 import { EventBus } from "./bus.js"
@@ -57,6 +63,9 @@ export type DaemonOptions = {
   rootPath: string
   profile?: Partial<ClaudeProfile>
   adapterDeps?: ClaudeAdapterDeps
+  /** Perfil de Codex (ADR-0008); el modo suscripción necesita `subscription_enabled`. */
+  codex?: Partial<CodexProfile>
+  codexDeps?: CodexAdapterDeps
   /** Raíz de los worktrees de runs; por defecto `$XDG_STATE_HOME/keel/worktrees`. */
   worktreesDir?: string
   /** Snapshots del modo sin VCS (ADR-0010); por defecto `$XDG_STATE_HOME/keel/snapshots`. */
@@ -83,6 +92,9 @@ export class Daemon {
   readonly server: IpcServer
   /** Hoy el único proveedor; el daemon sólo lo usa por la interfaz `ProviderAdapter`. */
   readonly claude: ClaudeAdapter
+  /** Segundo proveedor (ADR-0008): se elige con `runs.start` `profile: "codex"`. */
+  readonly codex: CodexAdapter
+  readonly codexProfile: CodexProfile
   readonly toolGate: ApprovalGate
   /** Driver de proyectos con git (worktree por run). */
   readonly workspaces: GitWorktreeDriver
@@ -114,6 +126,8 @@ export class Daemon {
     this.processes = opts.processes ?? defaultProcessTable()
     this.limits = { ...DEFAULT_LIMITS, ...opts.limits }
     this.claude = new ClaudeAdapter({ processes: this.processes, ...opts.adapterDeps })
+    this.codex = new CodexAdapter(opts.codexDeps)
+    this.codexProfile = { ...DEFAULT_CODEX_PROFILE, cwd: opts.rootPath, ...opts.codex }
     this.outbox = new Outbox(this.repo)
     this.outbox.on(RUN_DISPATCH, (m) => this.onRunDispatch(m.payload as RunDispatch))
     this.outbox.on(WORKTREE_RELEASE, (m) =>
@@ -507,12 +521,19 @@ export class Daemon {
             { limit: lim.limit, ...lim.details },
             lim.retryable,
           )
+        const provider = p.profile ?? "claude"
+        if (provider !== "claude" && provider !== "codex")
+          throw rpcError(
+            ErrorCode.invalidParams,
+            `perfil desconocido: ${provider} (claude | codex)`,
+          )
         const run = repo.createRun({
           project_id: project.project_id,
           work_item_id: w.id,
           purpose: p.purpose,
-          // Va en el manifest para que el despacho, aunque llegue tras una caída, use el mismo tope.
-          manifest: { budget_micro_usd: lim.runBudgetMicroUsd },
+          // Va en el manifest para que el despacho, aunque llegue tras una caída, use el
+          // mismo tope y el mismo proveedor.
+          manifest: { budget_micro_usd: lim.runBudgetMicroUsd, provider },
         })
         if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
         const view = repo.runView(run)
@@ -543,7 +564,11 @@ export class Daemon {
           this.settleInTransaction(uow, cancelled, "cancel")
           return repo.runView(cancelled)
         }
-        uow.afterCommit(() => this.claude.cancel(run.id, p.reason ?? null))
+        uow.afterCommit(
+          () =>
+            this.claude.cancel(run.id, p.reason ?? null) ||
+            this.codex.cancel(run.id, p.reason ?? null),
+        )
         return repo.runView(run)
       }),
       "projects.set_vcs": this.mutation<Params<"projects.set_vcs">>(
@@ -622,13 +647,18 @@ export class Daemon {
    * termina el run en `failed` con su evento (K-08).
    */
   private async dispatchRun(run: RunRow, item: WorkItemRow, prompt: string): Promise<void> {
-    const provider: ProviderAdapter<ClaudeProfile> = this.claude
+    const manifest = JSON.parse(run.context_manifest_json) as {
+      budget_micro_usd?: number
+      provider?: string
+    }
+    const useCodex = manifest.provider === "codex"
+    const provider = useCodex ? this.codex : this.claude
     const ctx = createRunContext({
       repo: this.repo,
       bus: this.bus,
       run,
       gate: this.toolGate,
-      source: SOURCE,
+      source: useCodex ? CODEX_SOURCE : SOURCE,
       adapterVersion: provider.adapterVersion,
     })
     let final: RunRow
@@ -652,12 +682,20 @@ export class Daemon {
           const budget = (
             JSON.parse(current.context_manifest_json) as { budget_micro_usd?: number }
           ).budget_micro_usd
-          final = await provider.execute(ctx, prompt, {
-            ...this.profile,
-            cwd: ws.cwd,
-            max_budget_usd: budget === undefined ? null : budget / 1_000_000,
-            mcp_servers: this.keelMcpServer(current),
-          })
+          const mcp_servers = this.keelMcpServer(current)
+          // ADR-0008 §7: el presupuesto en USD no aplica a Codex (sólo reporta tokens).
+          final = useCodex
+            ? await this.codex.execute(ctx, prompt, {
+                ...this.codexProfile,
+                cwd: ws.cwd,
+                mcp_servers,
+              })
+            : await this.claude.execute(ctx, prompt, {
+                ...this.profile,
+                cwd: ws.cwd,
+                max_budget_usd: budget === undefined ? null : budget / 1_000_000,
+                mcp_servers,
+              })
         }
       }
     } catch (e) {

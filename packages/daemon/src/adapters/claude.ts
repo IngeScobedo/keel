@@ -148,6 +148,10 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     auth_modes: ["subscription_session", "api_key", "bedrock", "vertex"],
     subagents: true,
     tool_approval: true,
+    approval_kinds: ["any_tool"],
+    process_control: "owned",
+    budget_unit: "usd",
+    cancel_scope: "process",
     // El SDK estima a precio de lista incluso con suscripción: nunca `observed`.
     cost_kind: "estimated",
     // Tras abortar no llega `result` (FINDINGS §1): el daemon sintetiza `cancelled`.

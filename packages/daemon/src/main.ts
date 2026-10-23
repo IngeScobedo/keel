@@ -6,6 +6,10 @@
  * Límites (ADR-0002 regla 3; defaults bajos en limits.ts). Subirlos es explícito:
  *   --max-concurrent-runs N   --run-budget-usd X   --daily-budget-usd Y
  *
+ * Codex (ADR-0008): los runs con `profile: "codex"` usan la sesión de `codex`
+ * del usuario sólo si se habilita aquí, explícitamente:
+ *   --codex-subscription      [--codex-model nombre]
+ *
  * Mantenimiento del store (SDD 03 §7), seguro con el daemon en marcha:
  *   main.ts backup  [--db ruta] --out dir             → manifest con sha256
  *   main.ts restore --manifest ruta --db ruta-nueva   → nunca pisa una base existente
@@ -83,6 +87,10 @@ if (import.meta.main && process.argv[2] === "mcp") {
     socketPath: arg("--socket") ?? d.socketPath,
     rootPath: arg("--root") ?? process.cwd(),
     limits: limitsFromArgs(),
+    codex: {
+      subscription_enabled: process.argv.includes("--codex-subscription"),
+      ...(arg("--codex-model") ? { model: arg("--codex-model") as string } : {}),
+    },
   })
   // start() reconcilia una sola vez y libera los worktrees de lo interrumpido.
   const rec = daemon.start()
