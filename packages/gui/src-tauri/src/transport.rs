@@ -13,12 +13,46 @@ pub struct Session {
     reader: Mutex<Option<JoinHandle<()>>>,
 }
 
+/// Windows: socket AF_UNIX en %LOCALAPPDATA%\keel\keel.sock (ADR-0005 §1, revisión del
+/// 2026-10-23; el Named Pipe de Bun daba lectura a Todos). tokio sólo tiene UnixStream en
+/// Unix: el socket bloqueante de `uds_windows` se puentea a un DuplexStream con dos hilos.
+/// Sin compilar todavía: no hay toolchain de Rust en el entorno donde se escribió.
+#[cfg(windows)]
+fn connect_af_unix(path: &str) -> Result<tokio::io::DuplexStream, String> {
+    use std::io::{Read, Write};
+    use tokio::io::AsyncReadExt;
+    let socket = uds_windows::UnixStream::connect(path).map_err(|e| e.to_string())?;
+    let mut from_daemon = socket.try_clone().map_err(|e| e.to_string())?;
+    let mut to_daemon = socket;
+    let (local, bridge) = tokio::io::duplex(1 << 20);
+    let (mut bridge_rd, mut bridge_wr) = tokio::io::split(bridge);
+    let rt = tokio::runtime::Handle::current();
+    let rt_in = rt.clone();
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = match from_daemon.read(&mut buf) { Ok(0) | Err(_) => break, Ok(n) => n };
+            if rt_in.block_on(bridge_wr.write_all(&buf[..n])).is_err() { break; }
+        }
+        let _ = rt_in.block_on(bridge_wr.shutdown());
+    });
+    std::thread::spawn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = match rt.block_on(bridge_rd.read(&mut buf)) { Ok(0) | Err(_) => break, Ok(n) => n };
+            if to_daemon.write_all(&buf[..n]).is_err() { break; }
+        }
+        let _ = to_daemon.shutdown(std::net::Shutdown::Both);
+    });
+    Ok(local)
+}
+
 impl Session {
     pub async fn connect(path: &str, notify: Arc<dyn Fn(Value) + Send + Sync>) -> Result<Arc<Self>, String> {
         #[cfg(unix)]
         let stream = tokio::net::UnixStream::connect(path).await.map_err(|e| e.to_string())?;
         #[cfg(windows)]
-        let stream = tokio::net::windows::named_pipe::ClientOptions::new().open(path).map_err(|e| e.to_string())?;
+        let stream = connect_af_unix(path)?;
         #[cfg(not(any(unix, windows)))]
         return Err("Plataforma de socket no soportada".into());
         let (reader, writer) = tokio::io::split(stream);

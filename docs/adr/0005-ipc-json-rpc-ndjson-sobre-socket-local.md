@@ -66,11 +66,12 @@ Medido en Windows 11 (10.0.26200) con Bun 1.4.4 y el daemon real:
 Decisión del humano (2026-10-23): en Windows, socket AF_UNIX en
 `%LOCALAPPDATA%\keel\` en lugar del Named Pipe. El resto del punto 1 no cambia.
 Consecuencia: el shell de Tauri necesita un cliente AF_UNIX para Windows, porque
-`tokio::net::UnixStream` sólo existe en Unix; hoy usa el cliente de Named Pipe.
-La alternativa que conserva el pipe exige crearlo con `SECURITY_ATTRIBUTES`
-propios fuera de Bun (FFI o un binario nativo) y que el daemon lo integre en su
-bucle. El estado del ADR sigue en Propuesto: la aceptación del conjunto es del
-humano.
+`tokio::net::UnixStream` sólo existe en Unix. `transport.rs` usa `uds_windows`
+puenteado a tokio; aún no está compilado, porque no hay toolchain de Rust en el
+entorno de desarrollo. La alternativa que conserva el pipe exige crearlo con
+`SECURITY_ATTRIBUTES` propios fuera de Bun (FFI o un binario nativo) y que el
+daemon lo integre en su bucle. El estado del ADR sigue en Propuesto: la
+aceptación del conjunto es del humano.
 
 ## Consecuencias
 

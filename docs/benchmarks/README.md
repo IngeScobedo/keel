@@ -69,10 +69,11 @@ Lectura: el transporte no cambia la latencia. Git en Windows cuesta del orden de
 s de git entre crear y liberar.
 
 **ACL del endpoint.** El Named Pipe por defecto de Bun da lectura a Todos y a
-ANONYMOUS LOGON; un socket AF_UNIX en `%LOCALAPPDATA%` sólo a SYSTEM,
-Administradores y el usuario. El detalle y la propuesta de cambio están en
-[ADR-0005](../adr/0005-ipc-json-rpc-ndjson-sobre-socket-local.md), pendientes de
-decisión.
+ANONYMOUS LOGON. Por decisión del humano, el daemon usa en Windows un socket
+AF_UNIX en `%LOCALAPPDATA%\keel\keel.sock`
+([ADR-0005](../adr/0005-ipc-json-rpc-ndjson-sobre-socket-local.md)). Verificado
+con el daemon real: hereda una ACL sólo para SYSTEM, Administradores y el
+usuario.
 
 Defectos que esta prueba encontró y ya están corregidos:
 
@@ -83,6 +84,15 @@ Defectos que esta prueba encontró y ya están corregidos:
 - Faltaba `.gitattributes`: con `core.autocrlf`, el checksum de las migraciones
   dependía de la plataforma.
 
-Sigue pendiente en Windows: la reconciliación de procesos lee `/proc`, así que
-no encuentra ni termina procesos huérfanos (ADR-0003 §9), y la detección del
-binario `claude` sólo busca rutas POSIX.
+Resuelto después en Windows y probado con procesos reales en las dos
+plataformas:
+
+- **Reconciliación de procesos.** La identidad es pid más instante de arranque,
+  leída de `/proc` en Linux y de CIM en Windows. El adaptador lanza `claude` él
+  mismo para registrarla en el instante del spawn.
+- **Detección del binario.** Encuentra
+  `C:\Users\<usuario>\.local\bin\claude.exe` (Claude Code 2.1.302, comprobado
+  con `--version`).
+
+Pendiente: el cliente AF_UNIX del shell de Tauri para Windows está escrito
+(`uds_windows`), pero no compilado, porque no hay toolchain de Rust.
