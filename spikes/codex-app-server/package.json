@@ -1,0 +1,14 @@
+{
+  "name": "@keel/spike-codex-app-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike de ADR-0008: transporte app_server (codex app-server por stdio) frente al Codex SDK.",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -b",
+    "probe": "bun src/probe.ts"
+  },
+  "dependencies": {
+    "@openai/codex-sdk": "^0.162.0"
+  }
+}

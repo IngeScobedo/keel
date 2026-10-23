@@ -18,3 +18,4 @@ packages/gui/test-results/
 packages/gui/playwright-report/
 packages/gui/src-tauri/target/
 packages/gui/src-tauri/gen/
+spikes/codex-app-server/captures/
