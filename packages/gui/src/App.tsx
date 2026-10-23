@@ -28,6 +28,7 @@ import { hasNativeShell } from "./client.js"
 import { demoDetails } from "./fixtures.js"
 import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
+import { LiveConnections } from "./LiveConnections.js"
 import { LiveInbox } from "./LiveInbox.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
 import { Permissions } from "./Permissions.js"
@@ -472,7 +473,12 @@ export function App() {
             </div>
           ))}
         {page === "agents" && <ControlPlane demo={demo} />}
-        {page === "connections" && <Connections demo={demo} />}
+        {page === "connections" &&
+          (workspace.mode === "live" ? (
+            <LiveConnections call={workspace.call} tick={workspace.inboxTick} />
+          ) : (
+            <Connections demo={demo} />
+          ))}
         {page === "workbench" && <Workbench demo={demo} />}
         {page === "design" && <DesignStudio />}
         {page === "settings" && (

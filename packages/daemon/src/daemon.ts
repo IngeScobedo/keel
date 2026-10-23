@@ -22,6 +22,7 @@ import {
   type PermissionMode,
   patternFor,
   RUN_START_RULES,
+  redact,
   type TransitionAuthority,
 } from "@keel/core"
 import {
@@ -83,6 +84,7 @@ import {
   type RecordedProcess,
   sameProcess,
 } from "./processes.js"
+import { BrokerError, ResourceBroker } from "./resources/broker.js"
 import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
 import { SemanticProjector } from "./semantic.js"
@@ -149,6 +151,7 @@ export class Daemon {
   readonly bus = new EventBus()
   readonly artifacts: ArtifactStore
   readonly semantic: SemanticProjector
+  readonly broker: ResourceBroker
   readonly server: IpcServer
   /** Puerta de agentes (ADR-0018 §2): nada que entre por ella es humano. */
   readonly agentServer: IpcServer
@@ -201,6 +204,26 @@ export class Daemon {
     this.bus.subscribe((n) => {
       const row = this.repo.eventBySeq(n.event_seq)
       if (row) this.semantic.onEvent(row)
+    })
+    // ADR-0013: el intermediario ejecuta con la credencial; el agente sólo ve el resultado.
+    this.broker = new ResourceBroker({
+      db: this.store.db,
+      artifacts: this.artifacts,
+      plansDir: join(dirname(opts.dbPath), "plans"),
+      emit: (projectId, runId, kind, payload) =>
+        runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+          uow.emit(kind, runId, payload),
+        ),
+      addEvidence: (e) => {
+        let id = ""
+        runUnitOfWork(this.uowDeps(), this.systemScope(e.project_id), (uow) => {
+          const row = this.repo.addEvidence({ ...e, supersedes_id: null })
+          id = row.id
+          uow.emit("evidence.attached", e.run_id, this.evidenceView(row))
+        })
+        return id
+      },
+      ask: (ctx, op) => this.askHuman(ctx.projectId, ctx.runId as string, op),
     })
     const root = opts.rootPath ?? this.repo.listProjects()[0]?.root_path ?? process.cwd()
     this.rootPath = root
@@ -1140,6 +1163,77 @@ export class Daemon {
         const root = repo.projectRoot(pid) ?? this.rootPath
         return { root, ...projectContext(root) }
       },
+      "connections.list": (_params, ctx) => {
+        requireHuman(ctx, "ver las conexiones")
+        const pid = this.scopeOf(ctx)
+        return { connections: this.broker.connections(pid).map((c) => this.broker.view(c)) }
+      },
+      "connections.add": this.mutation<Params<"connections.add">>(
+        "connections.add",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "dar de alta una conexión")
+          const c = brokerCall(() =>
+            this.broker.add({
+              project_id: uow.projectId,
+              name: p.name,
+              type: p.type,
+              environment: p.environment,
+              config: p.config,
+              secret_ref: p.secret_ref,
+              secret_ref_ro: p.secret_ref_ro,
+              server_guarantee: p.server_guarantee,
+            }),
+          )
+          const view = this.broker.view(c)
+          uow.emit("connection.added", null, view)
+          return view
+        },
+      ),
+      "connections.archive": this.mutation<Params<"connections.archive">>(
+        "connections.archive",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "archivar una conexión")
+          brokerCall(() => this.broker.archive(uow.projectId, p.connection_id))
+          uow.emit("connection.archived", null, { connection_id: p.connection_id })
+          return { connection_id: p.connection_id, archived: true as const }
+        },
+      ),
+      "grants.set": this.mutation<Params<"grants.set">>("grants.set", (p, uow, ctx) => {
+        requireHuman(ctx, "cambiar los permisos de una conexión")
+        const conn = brokerCall(() => this.broker.find(uow.projectId, p.connection_id))
+        brokerCall(() =>
+          this.broker.setGrant(conn, p.operation, p.policy, uow.actorId, p.expires_at ?? null),
+        )
+        const view = this.broker.view(conn)
+        uow.emit("grant.set", null, {
+          connection_id: conn.id,
+          operation: p.operation,
+          policy: p.policy,
+        })
+        return view
+      }),
+      "resources.list": (_params, ctx) => {
+        const pid = this.scopeOf(ctx)
+        return { connections: this.broker.connections(pid).map((c) => this.broker.view(c)) }
+      },
+      "resources.execute": async (params, ctx) => {
+        const p = params as Params<"resources.execute">
+        const actor = ctx.actor
+        const agent = actor.kind === "agent" ? actor : null
+        try {
+          return await this.broker.execute(
+            {
+              projectId: this.scopeOf(ctx),
+              runId: agent ? agent.run_id : null,
+              workItemId: agent ? agent.work_item_id : null,
+              actor: actorOf(ctx),
+            },
+            p,
+          )
+        } catch (e) {
+          throw brokerFailure(e)
+        }
+      },
       "permissions.rules_list": (params, ctx) => {
         requireHuman(ctx, "revisar las reglas de permiso")
         const p = params as Params<"permissions.rules_list">
@@ -1194,6 +1288,16 @@ export class Daemon {
           // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
           const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
           if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
+          // Una operación de recurso se aprueba una vez: los permisos duraderos son grants.
+          if (
+            op.tool?.startsWith("resource.") &&
+            p.decision !== "approve_once" &&
+            p.decision !== "deny"
+          )
+            throw rpcError(
+              ErrorCode.invalidParams,
+              "una operación de recurso se aprueba una vez; para permitirla siempre, usa un grant de la conexión",
+            )
           const decision =
             p.decision === "approve_once" ||
             p.decision === "approve_session" ||
@@ -1705,6 +1809,44 @@ export class Daemon {
     }
   }
 
+  /**
+   * Una operación que necesita al humano (ADR-0013): aprobación con el hash de
+   * la operación exacta, en el inbox y en el chat del run, con deny-on-timeout.
+   */
+  private async askHuman(
+    projectId: string,
+    runId: string,
+    op: { tool: string; input: unknown },
+  ): Promise<"approved" | "denied" | "expired"> {
+    const hash = await sha256Hex(canonicalJson({ ...op, run_id: runId }))
+    const timeout = this.profile.approval_timeout_ms
+    const expires = new Date(Date.now() + timeout).toISOString()
+    const saved = redact({ ...op, run_id: runId }).value as { input?: unknown }
+    const approvalId = this.repo.createApproval({
+      project_id: projectId,
+      run_id: runId,
+      operation_hash: hash,
+      operation: saved,
+      expires_at: expires,
+    })
+    runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+      uow.emit("approval.requested", runId, {
+        approval_id: approvalId,
+        operation_hash: hash,
+        tool: op.tool,
+        input: saved.input,
+        expires_at: expires,
+      }),
+    )
+    const decision = await this.waitApproval(approvalId, timeout)
+    if (decision === "expired") this.repo.setApproval(approvalId, "expired", null)
+    else if (decision === "approved") this.repo.setApproval(approvalId, "consumed", null)
+    runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+      uow.emit("approval.resolved", runId, { approval_id: approvalId, decision }),
+    )
+    return decision
+  }
+
   private gitPlanDeps(): GitPlansDeps {
     return {
       artifacts: this.artifacts,
@@ -2065,6 +2207,31 @@ export function promptHeader(item: WorkItemRow): string {
     "Su especificación, notas y evidencia están en el recurso keel://task/current;",
     "el contexto del proyecto, en keel://project/context; busca lo demás con la tool context_search.",
   ].join(" ")
+}
+
+/** Errores del intermediario → errores del protocolo. */
+function brokerFailure(e: unknown): RpcFailure {
+  if (e instanceof RpcFailure) return e
+  if (e instanceof BrokerError)
+    return rpcError(
+      e.code === "not_found"
+        ? ErrorCode.notFound
+        : e.code === "denied"
+          ? ErrorCode.unauthorized
+          : e.code === "invalid"
+            ? ErrorCode.invalidParams
+            : ErrorCode.internal,
+      e.message,
+    )
+  return rpcError(ErrorCode.internal, e instanceof Error ? e.message : String(e))
+}
+
+function brokerCall<T>(f: () => T): T {
+  try {
+    return f()
+  } catch (e) {
+    throw brokerFailure(e)
+  }
 }
 
 function ruleView(r: PermissionRuleRow) {

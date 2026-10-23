@@ -179,6 +179,77 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       (a) => client.call("context.search", a),
     ),
     tool(
+      "resources_list",
+      "Conexiones del proyecto (bases de datos, SSH, Terraform) con sus operaciones, su política (auto, ask, deny) y qué garantiza el servidor. Nunca credenciales.",
+      z.object({}),
+      () => client.call("resources.list", {}),
+    ),
+    tool(
+      "db_schema",
+      "Esquema de una base de datos del proyecto (tablas y columnas).",
+      z.object({ connection: z.string() }),
+      (a) =>
+        client.call("resources.execute", {
+          ...mutation(),
+          connection: a.connection,
+          operation: "schema.read",
+          input: {},
+        }),
+    ),
+    tool(
+      "db_query",
+      "Ejecuta SQL en una base del proyecto. Por defecto es lectura (transacción de sólo lectura, la base rechaza escribir); write: true pide la operación de escritura, que puede requerir aprobación. Keel ejecuta con la credencial y guarda el resultado como evidencia.",
+      z.object({
+        connection: z.string(),
+        sql: z.string().min(1),
+        params: z.array(z.unknown()).optional(),
+        write: z.boolean().optional(),
+      }),
+      (a) =>
+        client.call("resources.execute", {
+          ...mutation(),
+          connection: a.connection,
+          operation: a.write ? "query.write" : "query.read",
+          input: { sql: a.sql, ...(a.params ? { params: a.params } : {}) },
+        }),
+    ),
+    tool(
+      "ssh_run",
+      "Ejecuta un comando en un servidor del proyecto por SSH (con las llaves del usuario, nunca expuestas). Puede requerir aprobación.",
+      z.object({ connection: z.string(), command: z.string().min(1) }),
+      (a) =>
+        client.call("resources.execute", {
+          ...mutation(),
+          connection: a.connection,
+          operation: "command.run",
+          input: { command: a.command },
+        }),
+    ),
+    tool(
+      "iac_plan",
+      "Planea Terraform en una conexión del proyecto. Devuelve plan_sha256: sólo ese plan se podrá aplicar.",
+      z.object({ connection: z.string() }),
+      (a) =>
+        client.call("resources.execute", {
+          ...mutation(),
+          connection: a.connection,
+          operation: "iac.plan",
+          input: {},
+        }),
+    ),
+    tool(
+      "iac_apply",
+      "Aplica un plan de Terraform ya planeado, por su plan_sha256. Requiere aprobación; si el plan cambió, se rechaza.",
+      z.object({ connection: z.string(), plan_sha256: z.string() }),
+      (a) =>
+        client.call("resources.execute", {
+          ...mutation(),
+          connection: a.connection,
+          operation: "iac.apply",
+          input: { plan_sha256: a.plan_sha256 },
+        }),
+    ),
+    tool(
       "run_request",
       "Pide que Keel arranque un run sobre una tarea (plan, execute o triage_eval). No lo arranca: un humano lo aprueba.",
       z.object({

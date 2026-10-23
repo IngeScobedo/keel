@@ -236,7 +236,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(card).toHaveCount(0)
   expect(await external.call("session.pair_status")).toMatchObject({
     state: "approved",
-    scopes: ["tasks:read", "notes:write", "runs:request"],
+    scopes: ["tasks:read", "notes:write", "runs:request", "resources:use"],
   })
 
   // Lo que escribe el agente aparece como agente, nunca como el humano.
@@ -334,4 +334,19 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
     )
     .toBe("completed")
   human.sock.destroy()
+
+  // 7. Conexiones (ADR-0013): referencias, permiso por operación; en prod la escritura no es auto.
+  await page.getByRole("button", { name: "Connections", exact: true }).click()
+  await page.getByLabel("Nombre de la conexión").fill("conta")
+  await page.getByLabel("Entorno").selectOption("prod")
+  await page.getByLabel("Ruta del archivo").fill("/tmp/conta.db")
+  await page.getByRole("button", { name: "Añadir", exact: true }).click()
+  const conn = page.getByTestId("connection")
+  await expect(conn).toContainText("conta")
+  await expect(conn).toContainText("mode=ro")
+  await page.getByLabel("Política de query.read en conta").selectOption("auto")
+  await expect(page.getByLabel("Política de query.read en conta")).toHaveValue("auto")
+  await expect(
+    page.getByLabel("Política de query.write en conta").locator("option[value=auto]"),
+  ).toBeDisabled()
 })

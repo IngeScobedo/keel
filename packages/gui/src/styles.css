@@ -2155,3 +2155,26 @@ progress::-moz-progress-bar {
   white-space: nowrap;
   min-width: 0;
 }
+.connection {
+  margin-bottom: 16px;
+  border: 1px solid var(--color-border-subtle);
+  padding: 8px 12px;
+}
+.tag.env-prod {
+  color: var(--color-status-failed);
+}
+.tag.env-staging {
+  color: var(--color-status-waiting-human);
+}
+.connection-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.connection-form h3 {
+  flex-basis: 100%;
+}
+.connection-form input {
+  flex: 1 1 220px;
+}

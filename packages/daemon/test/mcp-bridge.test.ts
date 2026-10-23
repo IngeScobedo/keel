@@ -123,6 +123,12 @@ describe("ADR-0009: puente keel mcp", () => {
       "git_propose",
       "git_plan_status",
       "context_search",
+      "resources_list",
+      "db_schema",
+      "db_query",
+      "ssh_run",
+      "iac_plan",
+      "iac_apply",
       "run_request",
     ])
 

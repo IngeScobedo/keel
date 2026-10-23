@@ -108,6 +108,8 @@ export function touchesInbox(kind: string): boolean {
   return (
     kind.startsWith("approval.") ||
     kind.startsWith("permission.") ||
+    kind.startsWith("connection.") ||
+    kind === "grant.set" ||
     kind.startsWith("session.pairing") ||
     kind === "run.requested" ||
     kind === "run.request_resolved"

@@ -157,7 +157,14 @@ export const WorkItemViewSchema = z.object({
   ...projected,
 })
 /** Lo que un agente externo puede hacer, por grupos de métodos (ADR-0009 §4). */
-export const AgentScopeSchema = z.enum(["tasks:read", "tasks:write", "notes:write", "runs:request"])
+export const AgentScopeSchema = z.enum([
+  "tasks:read",
+  "tasks:write",
+  "notes:write",
+  "runs:request",
+  /** Usar conexiones del proyecto por el intermediario (ADR-0013). */
+  "resources:use",
+])
 export type AgentScope = z.infer<typeof AgentScopeSchema>
 export const AGENT_SCOPES: readonly AgentScope[] = AgentScopeSchema.options
 export const PairingViewSchema = z.object({
@@ -265,6 +272,32 @@ export const GitPlanSchema = z.object({
   ),
 })
 export type GitPlan = z.infer<typeof GitPlanSchema>
+/** ADR-0013: tipos de conexión y sus operaciones. */
+export const CONNECTION_OPERATIONS = {
+  postgres: ["schema.read", "query.read", "query.write"],
+  sqlite: ["schema.read", "query.read", "query.write"],
+  ssh: ["command.run"],
+  terraform: ["iac.plan", "iac.apply"],
+} as const
+export type ConnectionType = keyof typeof CONNECTION_OPERATIONS
+/** Operaciones que nunca son `auto` en producción (ADR-0013 §4). */
+export const WRITE_OPERATIONS = ["query.write", "command.run", "iac.apply"] as const
+export const GrantPolicySchema = z.enum(["auto", "ask", "deny"])
+export const ConnectionViewSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.enum(["postgres", "sqlite", "ssh", "terraform"]),
+  environment: z.enum(["dev", "staging", "prod"]),
+  /** Configuración sin secretos (host, base, ruta…). */
+  config: z.record(z.string(), z.unknown()),
+  has_secret: z.boolean(),
+  has_secret_ro: z.boolean(),
+  /** Qué garantiza el servidor y qué sólo Keel (ADR-0013 §5). */
+  guarantees: z.object({ server: z.string().nullable(), keel: z.string() }),
+  operations: z.array(
+    z.object({ operation: z.string(), policy: GrantPolicySchema, effective: GrantPolicySchema }),
+  ),
+})
 export const NoteViewSchema = z.object({
   id: z.string(),
   work_item_id: z.string(),
@@ -678,6 +711,63 @@ export const Methods = {
       adrs: z.array(z.object({ path: z.string(), title: z.string() })),
     }),
   },
+  "connections.list": {
+    params: z.object({}),
+    result: z.object({ connections: z.array(ConnectionViewSchema) }),
+  },
+  /** Alta de una conexión: referencias a secretos, nunca valores (ADR-0013 §1). */
+  "connections.add": {
+    params: MutationMeta.extend({
+      name: z.string().min(1).max(80),
+      type: z.enum(["postgres", "sqlite", "ssh", "terraform"]),
+      environment: z.enum(["dev", "staging", "prod"]),
+      config: z.record(z.string(), z.unknown()),
+      secret_ref: z.string().optional(),
+      secret_ref_ro: z.string().optional(),
+      server_guarantee: z.string().optional(),
+    }),
+    result: ConnectionViewSchema,
+  },
+  "connections.archive": {
+    params: MutationMeta.extend({ connection_id: z.string() }),
+    result: z.object({ connection_id: z.string(), archived: z.literal(true) }),
+  },
+  /** El permiso es por conexión y operación; en prod las escrituras nunca son auto. */
+  "grants.set": {
+    params: MutationMeta.extend({
+      connection_id: z.string(),
+      operation: z.string(),
+      policy: GrantPolicySchema,
+      expires_at: z.string().optional(),
+    }),
+    result: ConnectionViewSchema,
+  },
+  /** Lo que el agente ve: conexiones y operaciones permitidas, nunca credenciales. */
+  "resources.list": {
+    params: z.object({}),
+    result: z.object({ connections: z.array(ConnectionViewSchema) }),
+  },
+  /** Ejecuta una operación con la credencial; el agente ve el resultado, no el secreto. */
+  "resources.execute": {
+    params: MutationMeta.extend({
+      connection: z.string(),
+      operation: z.string(),
+      input: z.record(z.string(), z.unknown()),
+    }),
+    result: z.object({
+      operation: z.string(),
+      summary: z.string(),
+      columns: z.array(z.string()).optional(),
+      rows: z.array(z.array(z.unknown())).optional(),
+      row_count: z.number().int().optional(),
+      truncated: z.boolean().optional(),
+      output: z.string().optional(),
+      exit_code: z.number().int().nullable().optional(),
+      plan_sha256: z.string().optional(),
+      evidence_id: z.string().nullable(),
+      result_ref: z.string().nullable(),
+    }),
+  },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),
     result: z.object({ rules: z.array(PermissionRuleViewSchema) }),
@@ -782,6 +872,8 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "context.search",
   "context.project",
   "evidence.list",
+  "resources.list",
+  "resources.execute",
   "git.propose",
   "git.plan_status",
 ]
@@ -798,6 +890,8 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "context.search": "tasks:read",
   "context.project": "tasks:read",
   "evidence.list": "tasks:read",
+  "resources.list": "resources:use",
+  "resources.execute": "resources:use",
 }
 
 /**

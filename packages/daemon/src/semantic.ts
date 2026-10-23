@@ -402,6 +402,11 @@ export class SemanticProjector {
           typeof v === "string" && v.startsWith("$artifact:") ? null : v,
         ),
       )
+    // Lo que produce una conexión de producción es restricted (ADR-0011 §8, ADR-0013 §4).
+    const sensitivity =
+      (payload as { sensitivity?: unknown } | null)?.sensitivity === "restricted"
+        ? "restricted"
+        : "internal"
     const valid = validateSemantic(d.kind, payload)
     const run = e.run_id ? this.repo.getRun(e.run_id) : null
     const interpreter = `${it.name}@${it.version}`
@@ -410,7 +415,7 @@ export class SemanticProjector {
         `INSERT OR IGNORE INTO semantic_events(id, project_id, work_item_id, run_id, tool_use_id, kind,
            schema_version, coverage, sensitivity, interpreter, dedupe_key, source_event_ids_json,
            artifact_refs_json, payload_json, occurred_at)
-         VALUES (?,?,?,?,?,?,?,?,'internal',?,?,?,?,?,?)`,
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         // Id determinista: reconstruir da las mismas filas (ADR-0011 §1).
@@ -422,6 +427,7 @@ export class SemanticProjector {
         valid.kind,
         valid.schema_version,
         d.coverage,
+        sensitivity,
         interpreter,
         `${interpreter}:${d.key}`,
         JSON.stringify(d.source_event_ids),

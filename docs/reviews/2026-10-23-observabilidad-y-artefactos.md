@@ -43,3 +43,40 @@ explícita, dentro de su misma transacción.
   que envolver. Llega con las conexiones de ADR-0013 y ADR-0014.
 - **El exportador OTLP (§9).** No existe, así que no envía nada: el criterio se
   cumple sin él.
+
+## ADR-0013, intermediario de recursos
+
+**Cubierto** (`test/resources.test.ts`):
+
+- **Lectura sin credencial al agente.** `query.read` con grant `auto` en `dev`
+  devuelve las filas; queda evidencia con procedencia y el evento
+  `database.query.completed` como `instrumented`.
+- **La base rechaza escribir.** Un `query.read` que intenta escribir falla en la
+  propia base SQLite, abierta en `mode=ro`, aunque el texto engañe.
+- **Sin grant se pregunta.** Si se deniega, no corre; si se aprueba, corre una
+  vez.
+- **Producción.** Las escrituras nunca son `auto`, lo producido es `restricted`
+  y no aparece en la búsqueda.
+- **SSH.** Sólo pasan los comandos de la lista, y un encadenamiento no pasa.
+- **Terraform real.** `apply` sólo ejecuta el plan aprobado, y uno alterado se
+  rechaza. El secreto centinela no aparece en ninguna tabla de Keel, en los
+  artefactos ni en lo devuelto.
+
+**Distinto del texto del ADR:**
+
+- **El archivo de plan de Terraform no es un artefacto.** Lleva las variables,
+  secretos incluidos, en claro, y guardarlo en el almacén rompería el criterio
+  del secreto centinela. Vive en la carpeta privada de Keel (`plans/`, 0600) con
+  su hash, y la aprobación se ata a ese hash. El artefacto es la salida
+  redactada de `terraform show`.
+- **SSH usa las llaves y el agente del usuario.** Keel no maneja llaves.
+  `secret_ref` no aplica a SSH.
+
+**Pendiente:**
+
+- **PostgreSQL.** Está implementado con `Bun.SQL`: transacción `READ ONLY`,
+  `statement_timeout` y credencial de sólo lectura si existe. No se probó contra
+  un servidor real, porque aquí no hay ninguno instalado.
+- **El llavero de Windows** (Credential Manager).
+- **Las redes remotas y los secretos rotativos de Vault**, que el propio ADR
+  deja fuera.

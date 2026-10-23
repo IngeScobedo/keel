@@ -27,6 +27,33 @@ export const SEMANTIC_SCHEMAS = {
       error: z.string().nullable(),
     }),
   },
+  "ssh.command.completed": {
+    schema_version: 1,
+    schema: z.object({
+      server: z.string(),
+      command: z.string(),
+      exit_code: z.number().int().nullable(),
+      output_ref: z.string().nullable(),
+    }),
+  },
+  "iac.plan.created": {
+    schema_version: 1,
+    schema: z.object({
+      server: z.string(),
+      plan_sha256: z.string(),
+      summary: z.string().nullable(),
+      plan_ref: z.string().nullable(),
+    }),
+  },
+  "iac.apply.completed": {
+    schema_version: 1,
+    schema: z.object({
+      server: z.string(),
+      plan_sha256: z.string(),
+      exit_code: z.number().int().nullable(),
+      output_ref: z.string().nullable(),
+    }),
+  },
   "git.commit.created": {
     schema_version: 1,
     schema: z.object({

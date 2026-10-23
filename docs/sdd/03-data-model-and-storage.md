@@ -1127,3 +1127,27 @@ CREATE TRIGGER context_fts_evidence_delete AFTER DELETE ON evidence BEGIN
     DELETE FROM context_fts WHERE ref = 'keel://evidence/' || OLD.id;
 END;
 ```
+
+### 0008 · Intermediario de recursos (ADR-0013)
+
+`connections` gana su entorno (`dev`, `staging`, `prod`), qué garantiza el
+servidor y qué sólo Keel (`guarantees_json`), la referencia a la credencial de
+sólo lectura (`secret_ref_ro`) y su ciclo de vida. Keel guarda referencias,
+nunca valores. `permission_grants` gana `operation`: el permiso es por
+conexión, operación y entorno, y sin grant vigente se pregunta.
+
+```sql
+-- migración: 0008-intermediario-de-recursos
+ALTER TABLE connections ADD COLUMN environment TEXT NOT NULL DEFAULT 'dev'
+    CHECK (environment IN ('dev', 'staging', 'prod'));
+ALTER TABLE connections ADD COLUMN guarantees_json TEXT NOT NULL DEFAULT '{}'
+    CHECK (json_valid(guarantees_json));
+ALTER TABLE connections ADD COLUMN secret_ref_ro TEXT;
+ALTER TABLE connections ADD COLUMN created_at TEXT;
+ALTER TABLE connections ADD COLUMN archived_at TEXT;
+CREATE UNIQUE INDEX idx_connections_name ON connections(project_id, name)
+    WHERE archived_at IS NULL;
+ALTER TABLE permission_grants ADD COLUMN operation TEXT;
+CREATE INDEX idx_grants_connection ON permission_grants(connection_id, operation)
+    WHERE revoked_at IS NULL;
+```

@@ -24,6 +24,7 @@ const SCOPES: { id: Scope; label: string }[] = [
   { id: "tasks:write", label: "Crear tareas" },
   { id: "notes:write", label: "Escribir notas" },
   { id: "runs:request", label: "Pedir runs" },
+  { id: "resources:use", label: "Usar conexiones (BD, SSH, Terraform)" },
 ]
 
 /** Lo que el humano necesita ver para decidir: el comando, si lo hay; si no, la entrada. */
