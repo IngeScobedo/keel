@@ -146,7 +146,7 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       (`ProviderCapabilities`). Codex espera a ADR-0008.
 - [ ] Verificar qué modos de cuenta/suscripción admite cada integración; API
       facturada explícita. Claude según ADR-0002. Los términos de OpenAI para el
-      login de ChatGPT los verifica el humano (ADR-0008 §1).
+      login de ChatGPT los verifica el humano (ADR-0008 §2).
 - [x] Ingesta saneada, eventos desconocidos, labels y métricas de duración con
       procedencia. Redacción best-effort con reglas versionadas en el borde
       (`redaction.ts`, `RunContext.ingest`). Los `kind` desconocidos se guardan
