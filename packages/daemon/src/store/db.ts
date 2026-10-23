@@ -29,10 +29,16 @@ export function openStore(
   db.exec("PRAGMA foreign_keys = ON")
   db.exec("PRAGMA busy_timeout = 5000")
   const vector = tryLoadVector(db, opts.loadVector ?? true)
-  const migrations = migrate(db, loadMigrations(opts.migrationsDir ?? MIGRATIONS_DIR), {
-    vectorAvailable: vector.available,
-  })
-  return { db, path, vector, migrations }
+  try {
+    const migrations = migrate(db, loadMigrations(opts.migrationsDir ?? MIGRATIONS_DIR), {
+      vectorAvailable: vector.available,
+    })
+    return { db, path, vector, migrations }
+  } catch (e) {
+    // Una migración rechazada no deja la conexión abierta (en Windows bloquearía el archivo).
+    db.close()
+    throw e
+  }
 }
 
 function tryLoadVector(db: Database, enabled: boolean): Store["vector"] {
