@@ -1,7 +1,6 @@
 # ADR-0009: Acceso de agentes a Keel por MCP e identidad de ejecución
 
-- **Estado:** Propuesto (revisado con la investigación del humano del
-  2026-10-22)
+- **Estado:** Aceptado (por el humano, 2026-10-22)
 - **Fecha:** 2026-10-23
 - **Criticidad:** Máxima
 - **Relacionados:** ADR-0005 §7 (identidad desde la conexión), ADR-0007 §6

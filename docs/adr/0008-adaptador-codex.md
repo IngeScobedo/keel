@@ -1,9 +1,7 @@
 # ADR-0008: Adaptador de Codex
 
-- **Estado:** Propuesto (revisado con la investigación del humano; el transporte
-  App Server espera su spike). El humano confirmó el 2026-10-22 el límite del
-  login (§2), el uso local con su suscripción (§2) y el spike con su cuenta de
-  ChatGPT.
+- **Estado:** Aceptado (por el humano, 2026-10-22). El transporte App Server
+  entra según lo que mida su spike; si cambia la decisión, se supersede.
 - **Fecha:** 2026-10-23
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0002 (autenticación y costo), ADR-0003 §8 (la paridad de
