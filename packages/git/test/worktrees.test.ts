@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
+  canonical,
   captureChanges,
   createWorktree,
   GitError,
@@ -62,7 +63,8 @@ describe("@keel/git: worktrees por run con el estado en el propio repo (ADR-0007
     expect(sh(root, "rev-parse", `${RUN_REF_PREFIX}run-1`).trim()).toBe(head)
     expect(existsSync(join(wt("run-1"), "README.md"))).toBe(true)
     const [listed] = await reconcile(repo)
-    expect(listed).toMatchObject({ runId: "run-1", state: "active", path: wt("run-1") })
+    expect(listed).toMatchObject({ runId: "run-1", state: "active", path: canonical(wt("run-1")) })
+    expect(w.path).toBe(listed?.path ?? null)
     expect(listed?.meta).toMatchObject({
       version: 1,
       run_id: "run-1",

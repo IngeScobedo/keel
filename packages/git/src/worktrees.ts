@@ -13,7 +13,7 @@
  *   antes de cualquier limpieza. Nada se borra sin rescatar antes.
  */
 import { randomUUID } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
@@ -123,20 +123,22 @@ export async function createWorktree(
       await git(["update-ref", "-d", ref, baseSha], { cwd: repo.root }).catch(() => undefined)
       throw e
     }
+    // Ruta canónica, la misma que devolverá reconcile() (ver canonical()).
+    const path = canonical(opts.path)
     const meta: WorktreeMeta = {
       version: 1,
       run_id: opts.runId,
       base_sha: baseSha,
       branch,
-      path: opts.path,
+      path,
       created_at: new Date().toISOString(),
       owner: opts.owner ?? null,
     }
-    await writeFile(join(await worktreeGitDir(opts.path), META_FILE), JSON.stringify(meta, null, 2))
+    await writeFile(join(await worktreeGitDir(path), META_FILE), JSON.stringify(meta, null, 2))
     return {
       runId: opts.runId,
       state: "active",
-      path: opts.path,
+      path,
       branch,
       baseSha,
       headSha: baseSha,
@@ -320,9 +322,8 @@ async function listWorktrees(repo: GitRepo): Promise<ListedWorktree[]> {
     const sp = field.indexOf(" ")
     const key = sp === -1 ? field : field.slice(0, sp)
     const value = sp === -1 ? "" : field.slice(sp + 1)
-    // git en Windows lista `C:/…` aunque se haya creado con `C:\…`: se normaliza a la forma nativa.
     if (key === "worktree")
-      cur = { path: resolve(value), head: null, branch: null, prunable: false }
+      cur = { path: canonical(value), head: null, branch: null, prunable: false }
     else if (!cur) continue
     else if (key === "HEAD") cur.head = value
     else if (key === "branch") cur.branch = value
@@ -369,6 +370,21 @@ async function statusEntries(path: string): Promise<ChangedFile[]> {
     if (status[0] === "R" || status[0] === "C") i++
   }
   return out
+}
+
+/**
+ * Forma canónica de una ruta, para que las de git y las del llamador coincidan.
+ * En Windows git lista `C:/…` aunque se haya creado con `C:\…`, y el temporal del
+ * sistema puede venir en formato 8.3 (`RUNNER~1`) mientras git da el nombre largo
+ * (medido en el runner de GitHub, 2026-10-23). `realpath.native` resuelve las dos
+ * cosas; si la ruta ya no existe, queda `resolve`.
+ */
+export function canonical(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return resolve(path)
+  }
 }
 
 async function worktreeGitDir(path: string): Promise<string> {

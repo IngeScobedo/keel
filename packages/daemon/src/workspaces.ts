@@ -110,12 +110,13 @@ export class RunWorkspaces {
       run_id: run.id,
       project_repo_id: projectRepo.id,
       slot: "root",
-      worktree_path: path,
+      // La ruta canónica de @keel/git (en Windows puede diferir de la pedida: 8.3, C:/).
+      worktree_path: wt.path as string,
       base_sha: wt.baseSha as string,
       branch_name: wt.branch,
       access_mode: "write",
     })
-    return { ok: true, cwd: path, worktree: row }
+    return { ok: true, cwd: row.worktree_path, worktree: row }
   }
 
   /** Cambios de cada worktree del run respecto a su base; guarda el `head_sha`. */

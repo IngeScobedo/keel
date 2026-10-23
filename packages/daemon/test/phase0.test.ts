@@ -9,6 +9,7 @@ import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { canonical } from "@keel/git"
 import { Daemon, type DaemonOptions, IpcClient, type QueryFn } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
 import { hangingQuery, replayQuery } from "./replay.ts"
@@ -110,14 +111,8 @@ describe("Fase 0: tarea → worktree real → cambio git → liberación", () =>
     expect(daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("needs_review")
     const [wt] = daemon.repo.runWorktrees(run.id)
     expect(daemon.repo.runWorktrees(run.id)).toHaveLength(1)
-    const expectedPath = join(
-      dir,
-      "worktrees",
-      daemon.project.project_id,
-      "repo",
-      w.display_id,
-      run.id,
-      "root",
+    const expectedPath = canonical(
+      join(dir, "worktrees", daemon.project.project_id, "repo", w.display_id, run.id, "root"),
     )
     expect(wt).toMatchObject({
       branch_name: `keel/${w.display_id}/${run.id}/root`,
