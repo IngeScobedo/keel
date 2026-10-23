@@ -36,3 +36,12 @@ export function defaultEndpoint(e: EndpointEnv = {}): string {
     : join(e.home ?? homedir(), ".keel")
   return join(base, "keel.sock")
 }
+
+/**
+ * La puerta de agentes junto a la humana (ADR-0018 §2): `keel.sock` →
+ * `keel-agent.sock`; un Named Pipe explícito lleva el sufijo `-agent`.
+ */
+export function agentDoorPath(humanPath: string): string {
+  if (isNamedPipe(humanPath)) return `${humanPath}-agent`
+  return humanPath.endsWith(".sock") ? `${humanPath.slice(0, -5)}-agent.sock` : `${humanPath}-agent`
+}

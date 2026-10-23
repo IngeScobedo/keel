@@ -225,6 +225,12 @@ export const RunViewSchema = z.object({
     .nullable()
     .optional(),
   parent_run_id: z.string().nullable().optional(),
+  /**
+   * Aislamiento del agente (ADR-0018): `sandbox` (bubblewrap de Keel),
+   * `provider` (el sandbox propio del proveedor, sin verificar contra la puerta
+   * humana) o `none`. null mientras no arranca.
+   */
+  isolation: z.enum(["none", "sandbox", "provider", "os_user"]).nullable().optional(),
   ...projected,
 })
 export const NodeViewSchema = z.object({
@@ -563,6 +569,15 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
  * esto (ADR-0009 §2): ni actúa como humano ni como agente.
  */
 export const PENDING_METHODS: readonly MethodName[] = ["daemon.health", "session.pair_status"]
+/**
+ * Conexiones por la puerta de agentes que aún no se vincularon (ADR-0018 §2):
+ * sólo pueden vincularse con su token o pedir emparejamiento. Nunca son humanas.
+ */
+export const UNBOUND_METHODS: readonly MethodName[] = [
+  "daemon.health",
+  "session.bind_agent",
+  "session.pair",
+]
 export const ActorKindSchema = z.enum(["human", "agent", "system"])
 export type ActorKind = z.infer<typeof ActorKindSchema>
 export const METHOD_NAMES = Object.keys(Methods) as MethodName[]

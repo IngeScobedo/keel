@@ -4,6 +4,7 @@
  */
 import { randomBytes } from "node:crypto"
 import { existsSync, realpathSync, statSync } from "node:fs"
+import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import {
   AGENT_SCOPES,
@@ -21,7 +22,7 @@ import {
   RUN_START_RULES,
   type TransitionAuthority,
 } from "@keel/core"
-import { GitError, type RepoStatus, repoStatus } from "@keel/git"
+import { GitError, openRepo, type RepoStatus, repoStatus } from "@keel/git"
 import type { z } from "zod"
 import {
   ClaudeAdapter,
@@ -43,6 +44,7 @@ import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
 import { canonicalJson, nowIso, sha256Hex } from "./ids.js"
+import { agentDoorPath, isNamedPipe } from "./ipc/endpoint.js"
 import {
   type ClientState,
   type Handler,
@@ -60,6 +62,7 @@ import {
   sameProcess,
 } from "./processes.js"
 import { createRunContext } from "./run-context.js"
+import { bwrapPath, type SandboxSpec } from "./sandbox.js"
 import { openStore, type Store } from "./store/db.js"
 import {
   type NoteRow,
@@ -76,6 +79,13 @@ import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./work
 export type DaemonOptions = {
   dbPath: string
   socketPath: string
+  /** Puerta de agentes; por defecto `<socket>-agent` junto a la humana (ADR-0018 §2). */
+  agentSocketPath?: string
+  /**
+   * ADR-0018 §3: `auto` aísla con bubblewrap los runs `execute` de Claude donde
+   * exista (Linux, WSL2); `off` no aísla. Por defecto `auto`.
+   */
+  sandbox?: "auto" | "off"
   /**
    * Proyecto que se abre al arrancar (ADR-0019 §2). Sin él, el último abierto;
    * si nunca hubo uno, la carpeta actual.
@@ -110,6 +120,8 @@ export class Daemon {
   readonly repo: Repo
   readonly bus = new EventBus()
   readonly server: IpcServer
+  /** Puerta de agentes (ADR-0018 §2): nada que entre por ella es humano. */
+  readonly agentServer: IpcServer
   /** Hoy el único proveedor; el daemon sólo lo usa por la interfaz `ProviderAdapter`. */
   readonly claude: ClaudeAdapter
   /** Segundo proveedor (ADR-0008): se elige con `runs.start` `profile: "codex"`. */
@@ -182,19 +194,30 @@ export class Daemon {
       timeoutMs: this.profile.approval_timeout_ms,
       cwdOf: (runId) => this.runCwd.get(runId) ?? null,
     })
+    // El vínculo de una sesión externa dura lo que dura su conexión (ADR-0009 §4).
+    const onClose = (client: ClientState) => {
+      const actor = client.actor
+      if (actor && "pairing_id" in actor && actor.pairing_id) {
+        this.repo.closePairing(actor.pairing_id)
+        this.emitSystem("session.pairing_closed", null, { pairing_id: actor.pairing_id })
+      }
+    }
+    const handlers = this.handlers()
     this.server = new IpcServer({
       socketPath: opts.socketPath,
       repo: this.repo,
       bus: this.bus,
-      handlers: this.handlers(),
-      // El vínculo de una sesión externa dura lo que dura su conexión (ADR-0009 §4).
-      onClose: (client) => {
-        const actor = client.actor
-        if (actor && "pairing_id" in actor && actor.pairing_id) {
-          this.repo.closePairing(actor.pairing_id)
-          this.emitSystem("session.pairing_closed", null, { pairing_id: actor.pairing_id })
-        }
-      },
+      handlers,
+      onClose,
+    })
+    // ADR-0018 §2: la puerta de agentes. El sandbox del agente monta sólo ésta.
+    this.agentServer = new IpcServer({
+      socketPath: opts.agentSocketPath ?? agentDoorPath(opts.socketPath),
+      repo: this.repo,
+      bus: this.bus,
+      handlers,
+      onClose,
+      door: "agent",
     })
   }
 
@@ -204,6 +227,7 @@ export class Daemon {
     // Lo que quedó pendiente antes de una caída: despachos y liberaciones (DoD Fase 0).
     this.track(this.outbox.drain())
     this.server.start()
+    this.agentServer.start()
     let last = performance.now()
     this.lagTimer = setInterval(() => {
       const t = performance.now()
@@ -227,6 +251,7 @@ export class Daemon {
   stop(): void {
     if (this.lagTimer) clearInterval(this.lagTimer)
     this.server.stop()
+    this.agentServer.stop()
     this.store.db.close()
   }
 
@@ -696,7 +721,7 @@ export class Daemon {
         // Un `keel mcp` sin token pide entrar (ADR-0009 §4). Desde aquí la conexión no es
         // humana: sólo espera la decisión.
         const p = params as Params<"session.pair">
-        if (ctx.client.actor)
+        if (ctx.client.actor && ctx.client.actor.kind !== "unbound")
           throw rpcError(ErrorCode.conflict, "la conexión ya está vinculada o emparejándose")
         const pairing = repo.createPairing({
           code: pairingCode(),
@@ -1009,6 +1034,7 @@ export class Daemon {
           const mcp_servers = this.keelMcpServer(current)
           // ADR-0008 §7: el presupuesto en USD no aplica a Codex (sólo reporta tokens).
           this.runCwd.set(run.id, ws.cwd)
+          const sandbox = useCodex ? null : await this.sandboxFor(run, ws.cwd)
           final = useCodex
             ? await this.codex.execute(ctx, prompt, {
                 ...this.codexProfile,
@@ -1028,6 +1054,7 @@ export class Daemon {
                     }
                   : {}),
                 resume_session_id: this.resumeOf(run, ws.cwd),
+                sandbox,
                 env,
                 cwd: ws.cwd,
                 max_budget_usd: budget === undefined ? null : budget / 1_000_000,
@@ -1064,7 +1091,7 @@ export class Daemon {
       keel: {
         command: bridge.command,
         args: bridge.args,
-        env: { KEEL_RUN_TOKEN_FILE: file, KEEL_SOCKET: this.server.path },
+        env: { KEEL_RUN_TOKEN_FILE: file, KEEL_SOCKET: this.agentServer.path },
       },
     }
   }
@@ -1253,9 +1280,40 @@ export class Daemon {
     return id
   }
 
+  /**
+   * El sandbox de un run `execute` (ADR-0018 §3): sólo escribe en su worktree,
+   * en el `.git` común del repo (para commitear) y en el estado del proveedor;
+   * no ve la puerta humana ni el estado de Keel, salvo su token y la puerta de
+   * agentes. null si no hay bubblewrap o está apagado.
+   */
+  async sandboxFor(run: RunRow, cwd: string): Promise<{ bwrap: string; spec: SandboxSpec } | null> {
+    if (run.purpose !== "execute" || this.opts.sandbox === "off") return null
+    const bwrap = bwrapPath()
+    if (!bwrap) return null
+    const writable = [cwd]
+    try {
+      writable.push((await openRepo(cwd)).commonDir)
+    } catch {
+      // Sin git (modo sin VCS): sólo la carpeta del run.
+    }
+    const providerState = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude")
+    if (existsSync(providerState)) writable.push(providerState)
+    const humanDoor = this.server.path
+    const hidden = [dirname(this.opts.dbPath)]
+    if (!isNamedPipe(humanDoor)) hidden.push(dirname(humanDoor))
+    return {
+      bwrap,
+      spec: {
+        writable,
+        hidden: [...new Set(hidden)],
+        reopened: [this.agentServer.path, this.agentTokens.dirFor(run.id)],
+      },
+    }
+  }
+
   /** La conexión viva que pidió este emparejamiento, si sigue abierta. */
   private pairingClient(pairingId: string): ClientState | null {
-    for (const c of this.server.clients)
+    for (const c of [...this.server.clients, ...this.agentServer.clients])
       if (c.actor && "pairing_id" in c.actor && c.actor.pairing_id === pairingId && !c.closed)
         return c
     return null

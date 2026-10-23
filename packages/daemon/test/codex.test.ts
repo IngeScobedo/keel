@@ -270,7 +270,8 @@ describe("ADR-0008: adaptador de Codex, transporte sdk", () => {
     }
     const keel = config.mcp_servers.keel
     expect(keel?.env.KEEL_RUN_TOKEN_FILE).toEndWith(".token")
-    expect(keel?.env.KEEL_SOCKET).toBe(daemon.server.path)
+    // El puente entra por la puerta de agentes (ADR-0018 §2).
+    expect(keel?.env.KEEL_SOCKET).toBe(daemon.agentServer.path)
     expect(keel).toMatchObject({ default_tools_approval_mode: "approve" })
   })
 

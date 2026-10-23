@@ -34,6 +34,7 @@ import type { PermissionMode } from "@keel/core"
 import { nowIso, ulid } from "../ids.js"
 import { defaultProcessTable, type ProcessTable } from "../processes.js"
 import { RunProjector } from "../projector.js"
+import { type SandboxSpec, wrapCommand } from "../sandbox.js"
 import type { RunRow } from "../store/repo.js"
 import type { Preflight, ProviderAdapter, ProviderCapabilities, RunContext } from "./provider.js"
 
@@ -65,6 +66,8 @@ export type ClaudeProfile = {
   env: Record<string, string>
   /** Sesión del proveedor que retoma este run (continuar una conversación, ADR-0019 §3). */
   resume_session_id: string | null
+  /** Sandbox del proceso del agente (ADR-0018 §3); null = sin aislar. */
+  sandbox: { bwrap: string; spec: SandboxSpec } | null
 }
 
 /** Modo de Keel → modo del SDK. `bypass` exige además `allowDangerouslySkipPermissions`. */
@@ -89,6 +92,7 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   permission_mode: "ask",
   env: {},
   resume_session_id: null,
+  sandbox: null,
 }
 
 const HOOK_EVENTS = [
@@ -343,7 +347,10 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     // su identidad (pid + arranque + ejecutable) para reconciliar (ADR-0003 §9).
     const launched = this.processRecorder(ctx)
     const spawnClaudeCodeProcess = (o: SpawnOptions): SpawnedProcess => {
-      const child = spawn(o.command, o.args, {
+      const { command, args } = profile.sandbox
+        ? wrapCommand(profile.sandbox.bwrap, profile.sandbox.spec, o.command, o.args)
+        : { command: o.command, args: o.args }
+      const child = spawn(command, args, {
         cwd: o.cwd,
         env: o.env as NodeJS.ProcessEnv,
         signal: o.signal,
@@ -383,6 +390,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       model: profile.model,
       mcp_servers: Object.keys(profile.mcp_servers),
       cwd: profile.cwd,
+      isolation: profile.sandbox ? "sandbox" : "none",
       ...(profile.resume_session_id ? { resumed_session: profile.resume_session_id } : {}),
     })
     ctx.notifyRun()

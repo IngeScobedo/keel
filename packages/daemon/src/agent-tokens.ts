@@ -24,8 +24,8 @@ export class AgentTokens {
 
   /** Emite el token del run y devuelve la ruta del archivo que lo contiene. */
   issue(binding: AgentBinding): { file: string } {
-    mkdirSync(this.dir, { recursive: true, mode: 0o700 })
     this.revokeRun(binding.run_id)
+    mkdirSync(this.dirFor(binding.run_id), { recursive: true, mode: 0o700 })
     const token = randomBytes(32).toString("base64url")
     const file = this.fileFor(binding.run_id)
     writeFileSync(file, token, { mode: 0o600 })
@@ -45,11 +45,19 @@ export class AgentTokens {
   /** El run terminó: su token deja de servir y su archivo, si quedó, se borra. */
   revokeRun(runId: string): void {
     for (const [h, b] of this.byHash) if (b.run_id === runId) this.byHash.delete(h)
-    rmSync(this.fileFor(runId), { force: true })
+    rmSync(this.dirFor(runId), { recursive: true, force: true })
+  }
+
+  /**
+   * Una carpeta por run: el sandbox del agente monta sólo la suya, nunca los
+   * tokens de otros runs (ADR-0018 §3).
+   */
+  dirFor(runId: string): string {
+    return join(this.dir, runId)
   }
 
   private fileFor(runId: string): string {
-    return join(this.dir, `${runId}.token`)
+    return join(this.dirFor(runId), "run.token")
   }
 }
 

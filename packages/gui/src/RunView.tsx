@@ -9,6 +9,20 @@ import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"])
+const ISOLATION_LABEL = {
+  sandbox: "aislado",
+  provider: "sandbox del proveedor",
+  os_user: "usuario propio",
+  none: "sin aislar",
+} as const
+const ISOLATION_HINT = {
+  sandbox:
+    "Bubblewrap de Keel: sólo escribe en su worktree y no ve la puerta humana (ADR-0018 §3).",
+  provider:
+    "El sandbox propio del proveedor; que oculte la puerta humana no está verificado. La frontera es el gate.",
+  os_user: "Corre con un usuario del sistema propio (ADR-0018 §4).",
+  none: "Sin aislamiento: su shell puede hacer lo que tú. La frontera es el gate de aprobaciones.",
+} as const
 
 export function RunsList({
   runs,
@@ -120,6 +134,15 @@ export function RunView({
         <ChevronRight size={12} />
         <span className="mono">{run.id}</span>
         <Status state={run.visual_state} />
+        {run.isolation && (
+          <span
+            className={`mode-badge isolation-${run.isolation}`}
+            data-testid="isolation"
+            title={ISOLATION_HINT[run.isolation]}
+          >
+            {ISOLATION_LABEL[run.isolation]}
+          </span>
+        )}
         {run.options && (
           <span
             className={`mode-badge ${run.options.permission_mode}`}

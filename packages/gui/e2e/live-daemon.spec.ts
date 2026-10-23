@@ -200,7 +200,9 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await chatApproval.getByRole("button", { name: /Siempre: Bash\(touch x:\*\)/ }).click()
   await expect(chatApproval).toContainText("aprobado")
   await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
-  await expect(page.locator(".mode-badge")).toHaveText("ask")
+  await expect(page.locator(".mode-badge.ask")).toHaveText("ask")
+  // Codex corre en su propio sandbox, sin verificar contra la puerta humana (ADR-0018).
+  await expect(page.getByTestId("isolation")).toHaveText("sandbox del proveedor")
 
   // Permisos: la regla creada y la decisión, con quién la tomó; revocar la desactiva.
   await page.getByRole("button", { name: "Permisos", exact: true }).click()

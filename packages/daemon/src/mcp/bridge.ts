@@ -16,7 +16,7 @@ import { readFileSync, rmSync } from "node:fs"
 import { LifecycleSchema, RunPurposeSchema } from "@keel/core"
 import { z } from "zod"
 import { IpcClient } from "../ipc/client.js"
-import { defaultEndpoint } from "../ipc/endpoint.js"
+import { agentDoorPath, defaultEndpoint } from "../ipc/endpoint.js"
 import { type McpTool, serveMcp } from "./stdio-server.js"
 
 export const BRIDGE_VERSION = "0.2.0"
@@ -137,7 +137,8 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
 export async function runBridge(
   env: Record<string, string | undefined> = process.env,
 ): Promise<void> {
-  const client = await IpcClient.connect(env.KEEL_SOCKET ?? defaultEndpoint())
+  // Por defecto, la puerta de agentes (ADR-0018 §2): el puente nunca entra por la humana.
+  const client = await IpcClient.connect(env.KEEL_SOCKET ?? agentDoorPath(defaultEndpoint()))
   const tokenFile = env.KEEL_RUN_TOKEN_FILE
   if (tokenFile) {
     let token: string

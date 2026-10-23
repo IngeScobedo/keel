@@ -1157,6 +1157,7 @@ export class Repo {
       cost_kind: r.cost_kind,
       total_cost_micro_usd: r.total_cost_micro_usd,
       options: runOptionsOf(r),
+      isolation: isolationOf(r),
       parent_run_id: r.parent_run_id ?? null,
       revision: 0,
       visual_state: visualForRun(r.status, r.purpose),
@@ -1221,4 +1222,17 @@ function runOptionsOf(r: RunRow): {
     max_turns: o.max_turns ?? null,
     permission_mode: o.permission_mode as "ask" | "accept_edits" | "plan" | "bypass",
   }
+}
+
+/** Aislamiento del run según su manifest (ADR-0018). */
+function isolationOf(r: RunRow): "none" | "sandbox" | "provider" | "os_user" | null {
+  const m = JSON.parse(r.context_manifest_json) as {
+    isolation?: "none" | "sandbox" | "os_user"
+    provider?: string
+    sandbox?: string
+  }
+  if (m.isolation) return m.isolation
+  // Codex corre en su propio sandbox; que oculte la puerta humana no está medido.
+  if (m.provider === "codex" && m.sandbox) return "provider"
+  return null
 }

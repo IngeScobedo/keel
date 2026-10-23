@@ -26,6 +26,7 @@ import {
   PENDING_METHODS,
   type RpcError,
   success,
+  UNBOUND_METHODS,
   validateParams,
 } from "@keel/core"
 import type { Socket } from "bun"
@@ -53,6 +54,8 @@ export type Actor =
     }
   /** Pidió `session.pair` y espera al humano: sólo `PENDING_METHODS`. */
   | { actor_id: string; kind: "pending"; pairing_id: string }
+  /** Entró por la puerta de agentes y no se ha vinculado: sólo `UNBOUND_METHODS` (ADR-0018 §2). */
+  | { actor_id: string; kind: "unbound" }
 export type HandlerContext = { actor: Actor; client: ClientState }
 export type Handler = (params: unknown, ctx: HandlerContext) => Promise<unknown> | unknown
 export type Handlers = Partial<Record<MethodName, Handler>>
@@ -89,6 +92,11 @@ export type IpcServerOptions = {
   actorId?: string
   /** Al cerrarse una conexión (p. ej., para cerrar su emparejamiento). */
   onClose?: (state: ClientState) => void
+  /**
+   * `agent`: la puerta de agentes (ADR-0018 §2). Ninguna conexión que entra por
+   * ella es humana, ni siquiera antes de vincularse.
+   */
+  door?: "human" | "agent"
 }
 
 export class IpcServer {
@@ -126,6 +134,8 @@ export class IpcServer {
             subscriptions: new Map(),
             closed: false,
           }
+          if (this.opts.door === "agent")
+            state.actor = { actor_id: `agent-door:${state.id}`, kind: "unbound" }
           socket.data = state
           this.clients.add(state)
         },
@@ -269,6 +279,8 @@ export class IpcServer {
     const deny = (message: string) => {
       throw new RpcFailure({ code: ErrorCode.unauthorized, message, retryable: false })
     }
+    if (actor?.kind === "unbound" && !(UNBOUND_METHODS as readonly string[]).includes(method))
+      deny(`la puerta de agentes sólo admite vincularse o emparejarse; no ${method} (ADR-0018 §2)`)
     if (actor?.kind === "pending" && !(PENDING_METHODS as readonly string[]).includes(method))
       deny(`la sesión espera la aprobación del humano; no puede usar ${method} (ADR-0009 §4)`)
     if (actor?.kind !== "agent") return

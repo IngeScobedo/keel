@@ -2075,3 +2075,10 @@ progress::-moz-progress-bar {
   border-top: 1px dashed var(--color-border-subtle);
   padding-top: 6px;
 }
+.mode-badge.isolation-none {
+  color: var(--color-status-waiting-human);
+  border-color: var(--color-status-waiting-human-border);
+}
+.mode-badge.isolation-sandbox {
+  color: var(--color-status-succeeded, #3fb950);
+}
