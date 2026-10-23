@@ -5,6 +5,7 @@
  * `src-tauri/src/transport.rs`; la GUI no nota la diferencia.
  */
 import { type ChildProcess, spawn } from "node:child_process"
+import { writeFileSync } from "node:fs"
 import { createConnection, type Socket } from "node:net"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
@@ -310,4 +311,27 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
   if (process.env.KEEL_E2E_SHOTS)
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "chat.png") })
+
+  // 6. Plan de git (ADR-0015): se propone sobre el worktree del run y se aprueba en su tarjeta.
+  const runId = (await page.locator(".run-page .toolbar > span.mono").textContent()) as string
+  const human = await Line.open(daemon.socket)
+  const st = (await human.call("git.status", { run_id: runId })) as { worktree: string }
+  writeFileSync(join(st.worktree, "plan.txt"), "hola\n")
+  const plan = await human.call("git.propose", {
+    ...meta(),
+    run_id: runId,
+    message: "añade plan.txt",
+  })
+  const planCard = page.getByTestId("git-plan")
+  await expect(planCard).toContainText("añade plan.txt")
+  await expect(planCard).toContainText("plan.txt")
+  await planCard.getByRole("button", { name: "Aprobar plan" }).click()
+  await expect
+    .poll(
+      async () =>
+        ((await human.call("git.plan_status", { plan_id: plan.plan_id })) as { state: string })
+          .state,
+    )
+    .toBe("completed")
+  human.sock.destroy()
 })

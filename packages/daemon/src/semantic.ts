@@ -268,10 +268,34 @@ export class ShellInferred implements Interpreter {
   }
 }
 
+// --- 4. commits que no pasaron por un plan, vistos al cerrar el run (ADR-0015 §7) -------
+export class GitRefs implements Interpreter {
+  readonly name = "git-refs"
+  readonly version = 1
+  feed(e: SourceEvent): SemanticDraft[] {
+    if (e.kind !== "git.commits.detected") return []
+    const commits = (e.payload.commits as { sha: string; message: string; branch: string }[]) ?? []
+    return commits.map((c) => ({
+      key: `${e.id}:${c.sha}`,
+      kind: "git.commit.created",
+      coverage: "inferred" as const,
+      payload: {
+        sha: c.sha,
+        message: c.message,
+        files: null,
+        branch: c.branch,
+        worktree: str(e.payload.worktree),
+      },
+      source_event_ids: [e.id],
+    }))
+  }
+}
+
 export const defaultInterpreters = (): Interpreter[] => [
   new KeelIdentity(),
   new McpSql(),
   new ShellInferred(),
+  new GitRefs(),
 ]
 
 /** Aplica los intérpretes a los eventos de origen y guarda lo que producen. */

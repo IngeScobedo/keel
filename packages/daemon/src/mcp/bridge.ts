@@ -138,6 +138,37 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       (a) => client.call("evidence.attach", { ...mutation(), ...a }),
     ),
     tool(
+      "git_status",
+      "Estado del worktree de tu run: rama, HEAD y archivos cambiados con sus líneas.",
+      z.object({}),
+      () => client.call("git.status", {}),
+    ),
+    tool(
+      "git_diff",
+      "Diff de tu worktree respecto de HEAD, opcionalmente de algunos archivos.",
+      z.object({ paths: z.array(z.string()).optional() }),
+      (a) => client.call("git.diff", a),
+    ),
+    tool(
+      "git_propose",
+      "Propone confirmar cambios (y, si quieres, empujar la rama y abrir una PR) como un plan que el humano aprueba. No ejecuta nada: devuelve el plan_id; consúltalo con git_plan_status. Nunca empuja a una rama protegida ni con force.",
+      z.object({
+        message: z.string().min(1),
+        paths: z.array(z.string()).optional(),
+        push: z.object({ remote: z.string().optional(), branch: z.string().optional() }).optional(),
+        pr: z
+          .object({ base: z.string().optional(), title: z.string(), body: z.string().optional() })
+          .optional(),
+      }),
+      (a) => client.call("git.propose", { ...mutation(), ...a }),
+    ),
+    tool(
+      "git_plan_status",
+      "Estado de un plan de git: pendiente, ejecutándose, completado (con sha, push y PR) o caducado con su motivo.",
+      z.object({ plan_id: z.string() }),
+      (a) => client.call("git.plan_status", a),
+    ),
+    tool(
       "run_request",
       "Pide que Keel arranque un run sobre una tarea (plan, execute o triage_eval). No lo arranca: un humano lo aprueba.",
       z.object({

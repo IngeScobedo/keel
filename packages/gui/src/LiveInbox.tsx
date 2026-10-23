@@ -8,6 +8,7 @@ import { Check, Hand, Inbox as InboxIcon, Play, Plug, ShieldAlert } from "lucide
 import { useCallback, useEffect, useState } from "react"
 import { ApprovalActions } from "./ApprovalActions.js"
 import { mutationMeta } from "./client.js"
+import { GitPlanCard } from "./GitPlanCard.js"
 import { actorLabel, formatCost, type Run, type WorkItem } from "./model.js"
 import { Button, Empty, Hint, Modal, Status } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -177,18 +178,30 @@ export function LiveInbox({
                       <span className="mono muted">{left === null ? "" : `${left}s`}</span>
                     </div>
                     <div className="approval-body">
-                      <pre>{op.body}</pre>
-                      <p className="mono muted">
-                        run {approval.run_id} · hash {approval.operation_hash.slice(0, 12)}
-                      </p>
-                      <ApprovalActions
-                        approvalId={approval.id}
-                        operationHash={approval.operation_hash}
-                        tool={op.tool}
-                        input={(approval.operation as { input?: unknown } | null)?.input}
-                        call={call}
-                        onDone={() => void refresh()}
-                      />
+                      {op.tool === "git.plan" ? (
+                        <GitPlanCard
+                          input={(approval.operation as { input?: unknown } | null)?.input}
+                          approvalId={approval.id}
+                          operationHash={approval.operation_hash}
+                          call={call}
+                          pending
+                        />
+                      ) : (
+                        <>
+                          <pre>{op.body}</pre>
+                          <p className="mono muted">
+                            run {approval.run_id} · hash {approval.operation_hash.slice(0, 12)}
+                          </p>
+                          <ApprovalActions
+                            approvalId={approval.id}
+                            operationHash={approval.operation_hash}
+                            tool={op.tool}
+                            input={(approval.operation as { input?: unknown } | null)?.input}
+                            call={call}
+                            onDone={() => void refresh()}
+                          />
+                        </>
+                      )}
                     </div>
                   </article>
                 )

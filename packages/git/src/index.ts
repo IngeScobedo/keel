@@ -9,5 +9,6 @@
 
 export * from "./exec.js"
 export * from "./lock.js"
+export * from "./ops.js"
 export * from "./status.js"
 export * from "./worktrees.js"

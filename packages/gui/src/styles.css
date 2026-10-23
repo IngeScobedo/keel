@@ -2134,3 +2134,18 @@ progress::-moz-progress-bar {
 .tag.coverage-inferred {
   color: var(--color-status-waiting-human);
 }
+.git-plan {
+  flex-basis: 100%;
+  order: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.git-plan-message {
+  font-weight: 600;
+  margin: 0;
+}
+.git-plan-files {
+  margin: 4px 0;
+  padding-left: 16px;
+}

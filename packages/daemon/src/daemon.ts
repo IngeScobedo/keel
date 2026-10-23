@@ -13,6 +13,8 @@ import {
   checkTransition,
   describePattern,
   ErrorCode,
+  type GitPlan,
+  GitPlanSchema,
   type Lifecycle,
   type MethodName,
   type Methods,
@@ -22,7 +24,18 @@ import {
   RUN_START_RULES,
   type TransitionAuthority,
 } from "@keel/core"
-import { GitError, openRepo, type RepoStatus, repoStatus } from "@keel/git"
+import {
+  changedFiles,
+  currentBranch,
+  GitError,
+  git as gitExec,
+  headSha,
+  numstat,
+  openRepo,
+  type RepoStatus,
+  repoStatus,
+  unifiedDiff,
+} from "@keel/git"
 import type { z } from "zod"
 import {
   ClaudeAdapter,
@@ -44,6 +57,13 @@ import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
+import {
+  buildPlan,
+  DIFF_INLINE_MAX,
+  executePlan,
+  type GitPlansDeps,
+  PLAN_TTL_MS,
+} from "./git-plans.js"
 import { canonicalJson, nowIso, sha256Hex, ulid } from "./ids.js"
 import { agentDoorPath, isNamedPipe } from "./ipc/endpoint.js"
 import {
@@ -86,6 +106,8 @@ export type DaemonOptions = {
   agentSocketPath?: string
   /** Almacén de artefactos (ADR-0012); por defecto `artifacts/` junto a la base. */
   artifactsDir?: string
+  /** `gh` para las PR de ADR-0015; null = no crear PR. Por defecto, el del PATH. */
+  gh?: string | null
   /**
    * ADR-0018 §3: `auto` aísla con bubblewrap los runs `execute` de Claude donde
    * exista (Linux, WSL2); `off` no aísla. Por defecto `auto`.
@@ -1039,6 +1061,75 @@ export class Daemon {
           return this.purge(this.scopeOf(ctx, p.project_id), p, uow.actorId)
         },
       ),
+      "git.status": async (params, ctx) => {
+        const p = params as Params<"git.status">
+        const { runId, worktree } = this.worktreeFor(ctx, p.run_id)
+        const files = await numstat(worktree, await changedFiles(worktree))
+        return {
+          run_id: runId,
+          worktree,
+          branch: await currentBranch(worktree),
+          head: await headSha(worktree),
+          files,
+        }
+      },
+      "git.diff": async (params, ctx) => {
+        const p = params as Params<"git.diff">
+        const { worktree } = this.worktreeFor(ctx, p.run_id)
+        const all = await changedFiles(worktree)
+        const wanted = p.paths?.length ? all.filter((f) => p.paths?.includes(f.path)) : all
+        const diff = await unifiedDiff(worktree, wanted)
+        return {
+          diff: diff.slice(0, DIFF_INLINE_MAX),
+          truncated: diff.length > DIFF_INLINE_MAX,
+          files: await numstat(worktree, wanted),
+        }
+      },
+      "git.propose": async (params, ctx) => {
+        // El plan (diff, hashes, ramas protegidas) se arma fuera de la transacción;
+        // dentro sólo se registra la aprobación y sus eventos.
+        const p = params as Params<"git.propose">
+        const { runId, worktree } = this.worktreeFor(ctx, p.run_id)
+        const run = repo.getRun(runId) as RunRow
+        let built: Awaited<ReturnType<typeof buildPlan>>
+        try {
+          built = await buildPlan(this.gitPlanDeps(), run, worktree, p)
+        } catch (e) {
+          throw rpcError(ErrorCode.invalidParams, e instanceof Error ? e.message : String(e))
+        }
+        return this.mutation<Params<"git.propose">>("git.propose", (_p, uow) => {
+          const expires = new Date(Date.now() + PLAN_TTL_MS).toISOString()
+          const planId = repo.createApproval({
+            project_id: run.project_id,
+            run_id: run.id,
+            operation_hash: built.plan_hash,
+            operation: { tool: "git.plan", input: built.plan, run_id: run.id },
+            expires_at: expires,
+          })
+          uow.emit("approval.requested", run.id, {
+            approval_id: planId,
+            operation_hash: built.plan_hash,
+            tool: "git.plan",
+            input: built.plan,
+            expires_at: expires,
+          })
+          uow.emit("git.plan.proposed", run.id, {
+            plan_id: planId,
+            plan_hash: built.plan_hash,
+            operations: built.plan.operations.map((o) => o.op),
+          })
+          return { plan_id: planId, plan_hash: built.plan_hash, plan: built.plan }
+        })(params, ctx)
+      },
+      "git.plan_status": (params, ctx) => {
+        const p = params as Params<"git.plan_status">
+        const a = repo.getApproval(p.plan_id)
+        const op = a ? (JSON.parse(a.operation_json) as { tool?: string }) : null
+        if (!a || op?.tool !== "git.plan") throw rpcError(ErrorCode.notFound, "el plan no existe")
+        if (ctx.actor.kind === "agent" && ctx.actor.run_id !== a.run_id)
+          throw rpcError(ErrorCode.notFound, "el plan no existe")
+        return { plan_id: a.id, ...this.gitPlanState(a.id, a.state, a.expires_at) }
+      },
       "permissions.rules_list": (params, ctx) => {
         requireHuman(ctx, "revisar las reglas de permiso")
         const p = params as Params<"permissions.rules_list">
@@ -1090,6 +1181,9 @@ export class Daemon {
             )
           if (a.state !== "pending")
             throw rpcError(ErrorCode.invalidTransition, `la aprobación está ${a.state}`)
+          // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
+          const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
+          if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
           const decision =
             p.decision === "approve_once" ||
             p.decision === "approve_session" ||
@@ -1212,6 +1306,7 @@ export class Daemon {
     // La capacidad del agente caduca con el run (ADR-0009 §3).
     this.agentTokens.revokeRun(run.id)
     this.toolGate.forgetRun(run.id)
+    if (run.purpose === "execute") await this.detectCommits(run.id)
     this.runCwd.delete(run.id)
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
@@ -1557,6 +1652,168 @@ export class Daemon {
           }),
         )
     )
+  }
+
+  /**
+   * ADR-0015 §7: al cerrar el run, los commits de su rama que no pasaron por un
+   * plan aprobado se registran para que el intérprete los dé como `inferred`.
+   */
+  private async detectCommits(runId: string): Promise<void> {
+    const planned = new Set(
+      this.store.db
+        .query<{ sha: string }, [string]>(
+          `SELECT json_extract(payload_json, '$.sha') sha FROM events
+            WHERE run_id = ? AND kind = 'git.commit.created' AND json_extract(payload_json, '$.plan_id') IS NOT NULL`,
+        )
+        .all(runId)
+        .map((r) => r.sha),
+    )
+    for (const wt of this.repo.runWorktrees(runId)) {
+      if (!existsSync(wt.worktree_path)) continue
+      let log: string
+      try {
+        log = (
+          await gitExec(["log", "--format=%H%x00%s%x00%D", `${wt.base_sha}..HEAD`], {
+            cwd: wt.worktree_path,
+          })
+        ).stdout
+      } catch {
+        continue
+      }
+      const commits = log
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => {
+          const [sha, message] = l.split("\0")
+          return { sha: sha as string, message: message ?? "", branch: wt.branch_name }
+        })
+        .filter((c) => !planned.has(c.sha))
+      if (commits.length)
+        this.emitSystem("git.commits.detected", runId, { worktree: wt.worktree_path, commits })
+    }
+  }
+
+  private gitPlanDeps(): GitPlansDeps {
+    return {
+      artifacts: this.artifacts,
+      emit: (runId, kind, payload) => this.emitSystem(kind, runId, payload),
+      gh: this.opts.gh === undefined ? (Bun.which("gh") ?? null) : this.opts.gh,
+    }
+  }
+
+  /** El worktree del run: el del agente, o el que nombra el humano. */
+  private worktreeFor(ctx: HandlerContext, runId?: string): { runId: string; worktree: string } {
+    const agent = ctx.actor.kind === "agent" ? ctx.actor : null
+    if (agent && runId && runId !== agent.run_id)
+      throw rpcError(ErrorCode.unauthorized, "el agente sólo opera en el worktree de su run")
+    const id = agent ? agent.run_id : (runId ?? null)
+    if (!id)
+      throw rpcError(
+        ErrorCode.invalidParams,
+        "las tools de git necesitan un run de Keel con worktree (una sesión externa no tiene)",
+      )
+    const wt = this.repo
+      .runWorktrees(id)
+      .find((w) => w.slot === "root" && existsSync(w.worktree_path))
+    if (!wt) throw rpcError(ErrorCode.notFound, "el run no tiene worktree")
+    return { runId: id, worktree: wt.worktree_path }
+  }
+
+  private resolveGitPlan(
+    uow: UnitOfWork,
+    a: NonNullable<ReturnType<Repo["getApproval"]>>,
+    input: unknown,
+    decision: Params<"approvals.resolve">["decision"],
+  ) {
+    if (decision === "approve_session" || decision === "approve_always" || decision === "amend")
+      throw rpcError(ErrorCode.invalidParams, "un plan de git se aprueba una vez o se deniega")
+    if (a.expires_at && a.expires_at < nowIso()) {
+      this.repo.setApproval(a.id, "expired", null)
+      uow.emit("git.plan.expired", a.run_id, { plan_id: a.id, reason: "venció sin decisión" })
+      throw rpcError(ErrorCode.invalidTransition, "el plan caducó; hace falta proponer otro")
+    }
+    if (decision === "deny") {
+      this.repo.setApproval(a.id, "denied", uow.actorId)
+      uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "denied" })
+      return { approval_id: a.id, state: "denied" as const }
+    }
+    const plan = GitPlanSchema.parse(input)
+    this.repo.setApproval(a.id, "approved", uow.actorId)
+    uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "approved" })
+    uow.emit("git.plan.approved", a.run_id, { plan_id: a.id, plan_hash: a.operation_hash })
+    uow.afterCommit(() => this.track(this.runGitPlan(a.id, plan)))
+    return { approval_id: a.id, state: "approved" as const }
+  }
+
+  private async runGitPlan(planId: string, plan: GitPlan): Promise<void> {
+    const run = this.repo.getRun(plan.run_id)
+    const item = run ? this.repo.getWorkItem(run.work_item_id) : null
+    if (!run || !item) return
+    const manifest = JSON.parse(run.context_manifest_json) as { provider?: string }
+    const env = agentEnv(run, item, manifest.provider === "codex" ? "Codex" : "Claude")
+    const r = await executePlan(this.gitPlanDeps(), planId, plan, env)
+    this.repo.setApproval(planId, r.ok ? "consumed" : "expired", null)
+    // El diff aprobado queda como evidencia de la tarea (ADR-0015 §6, ADR-0012).
+    if (r.ok && plan.diff_ref) {
+      const sha = parseArtifactRef(plan.diff_ref) as string
+      runUnitOfWork(this.uowDeps(), this.systemScope(run.project_id), (uow) => {
+        const ev = this.repo.addEvidence({
+          project_id: run.project_id,
+          work_item_id: run.work_item_id,
+          run_id: run.id,
+          kind: "diff",
+          title: `Diff aprobado · ${plan.files.length} archivo(s)`,
+          artifact_ref: plan.diff_ref as string,
+          sha256: sha,
+          metadata: { plan_id: planId, files: plan.files },
+          provenance: {
+            actor: { id: "system:daemon", kind: "system" },
+            captured_at: nowIso(),
+            source: { git_plan: planId, branch: plan.branch, head: plan.expected_head_sha },
+            input_sha256: plan.content_hash,
+          },
+          created_by: "system:daemon",
+          supersedes_id: null,
+        })
+        uow.emit("evidence.attached", run.id, this.evidenceView(ev))
+      })
+    }
+  }
+
+  /** Estado del plan a partir de su aprobación y de sus eventos. */
+  private gitPlanState(planId: string, approvalState: string, expiresAt: string | null) {
+    const events = this.store.db
+      .query<{ kind: string; payload_json: string }, [string]>(
+        `SELECT kind, payload_json FROM events
+          WHERE kind LIKE 'git.%' AND json_extract(payload_json, '$.plan_id') = ? ORDER BY event_seq`,
+      )
+      .all(planId)
+    const last = events.at(-1)?.kind
+    const steps = events
+      .filter((e) => /^git\.(commit|push|pull_request)\./.test(e.kind))
+      .map((e) => ({
+        op: e.kind,
+        state: e.kind.endsWith(".pending") ? "skipped" : "done",
+        detail: JSON.parse(e.payload_json) as unknown,
+      }))
+    const state =
+      last === "git.plan.completed"
+        ? "completed"
+        : last === "git.plan.failed"
+          ? "failed"
+          : last === "git.plan.expired" || approvalState === "expired"
+            ? "expired"
+            : approvalState === "denied"
+              ? "denied"
+              : approvalState === "approved" || approvalState === "consumed"
+                ? "executing"
+                : expiresAt && expiresAt < nowIso()
+                  ? "expired"
+                  : "pending"
+    return {
+      state: state as "pending" | "denied" | "expired" | "executing" | "completed" | "failed",
+      steps,
+    }
   }
 
   evidenceView(e: EvidenceRow) {

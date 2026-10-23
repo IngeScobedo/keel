@@ -3,6 +3,7 @@ import { Bot, Check, ChevronDown, ChevronRight, CircleAlert, Send, User, X } fro
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ApprovalActions } from "./ApprovalActions.js"
 import { mutationMeta } from "./client.js"
+import { GitPlanCard } from "./GitPlanCard.js"
 import { buildChat, type ChatItem, type Run } from "./model.js"
 import { Empty } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -213,8 +214,18 @@ function ApprovalRow({
             : `${item.tool} pide permiso${left === null ? "" : ` · ${left}s`}`
           : `${item.tool}: ${item.decision === "approved" ? "aprobado" : item.decision === "expired" ? "venció, denegado" : "denegado"}`}
       </strong>
-      {item.input && <pre className="chat-approval-input">{item.input}</pre>}
-      {pending && !expired && call && (
+      {item.tool === "git.plan" ? (
+        <GitPlanCard
+          input={item.raw_input}
+          approvalId={item.approval_id}
+          operationHash={item.operation_hash}
+          pending={pending && !expired}
+          {...(call ? { call } : {})}
+        />
+      ) : (
+        item.input && <pre className="chat-approval-input">{item.input}</pre>
+      )}
+      {item.tool !== "git.plan" && pending && !expired && call && (
         <ApprovalActions
           approvalId={item.approval_id}
           operationHash={item.operation_hash}

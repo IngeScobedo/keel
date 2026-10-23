@@ -231,6 +231,40 @@ export const EvidenceViewSchema = z.object({
   supersedes_id: z.string().nullable(),
   created_at: z.string(),
 })
+/** Un archivo del plan de git con sus líneas (ADR-0015 §2). */
+export const GitPlanFileSchema = z.object({
+  path: z.string(),
+  status: z.enum(["M", "A", "D", "R"]),
+  additions: z.number().int(),
+  deletions: z.number().int(),
+})
+/** El plan que aprueba el humano: lo que se confirma, a dónde va y desde dónde. */
+export const GitPlanSchema = z.object({
+  version: z.literal(1),
+  run_id: z.string(),
+  work_item_id: z.string(),
+  repo_root: z.string(),
+  worktree: z.string(),
+  branch: z.string(),
+  expected_head_sha: z.string().nullable(),
+  content_hash: z.string(),
+  files: z.array(GitPlanFileSchema),
+  diff_ref: z.string().nullable(),
+  operations: z.array(
+    z.discriminatedUnion("op", [
+      z.object({ op: z.literal("commit"), message: z.string(), paths: z.array(z.string()) }),
+      z.object({ op: z.literal("push"), remote: z.string(), branch: z.string() }),
+      z.object({
+        op: z.literal("pr.create"),
+        base: z.string(),
+        head: z.string(),
+        title: z.string(),
+        body: z.string(),
+      }),
+    ]),
+  ),
+})
+export type GitPlan = z.infer<typeof GitPlanSchema>
 export const NoteViewSchema = z.object({
   id: z.string(),
   work_item_id: z.string(),
@@ -562,6 +596,53 @@ export const Methods = {
     params: MutationMeta.extend({ project_id: z.string().optional() }),
     result: z.object({ events: z.number().int() }),
   },
+  /** ADR-0015 §1: estado del worktree del run, sin aprobación. */
+  "git.status": {
+    params: z.object({ run_id: z.string().optional() }),
+    result: z.object({
+      run_id: z.string(),
+      worktree: z.string(),
+      branch: z.string().nullable(),
+      head: z.string().nullable(),
+      files: z.array(GitPlanFileSchema),
+    }),
+  },
+  "git.diff": {
+    params: z.object({ run_id: z.string().optional(), paths: z.array(z.string()).optional() }),
+    result: z.object({
+      diff: z.string(),
+      truncated: z.boolean(),
+      files: z.array(GitPlanFileSchema),
+    }),
+  },
+  /**
+   * ADR-0015 §2: propone commit, push y PR como un plan. No ejecuta: el plan
+   * entra al inbox con su hash y lo ejecuta el daemon al aprobarlo.
+   */
+  "git.propose": {
+    params: MutationMeta.extend({
+      run_id: z.string().optional(),
+      message: z.string().min(1).max(5000),
+      paths: z.array(z.string()).optional(),
+      push: z.object({ remote: z.string().optional(), branch: z.string().optional() }).optional(),
+      pr: z
+        .object({
+          base: z.string().optional(),
+          title: z.string().min(1),
+          body: z.string().optional(),
+        })
+        .optional(),
+    }),
+    result: z.object({ plan_id: z.string(), plan_hash: z.string(), plan: GitPlanSchema }),
+  },
+  "git.plan_status": {
+    params: z.object({ plan_id: z.string() }),
+    result: z.object({
+      plan_id: z.string(),
+      state: z.enum(["pending", "denied", "expired", "executing", "completed", "failed"]),
+      steps: z.array(z.object({ op: z.string(), state: z.string(), detail: z.unknown() })),
+    }),
+  },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),
     result: z.object({ rules: z.array(PermissionRuleViewSchema) }),
@@ -661,6 +742,10 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "runs.request",
   "session.pair_status",
   "evidence.attach",
+  "git.status",
+  "git.diff",
+  "git.propose",
+  "git.plan_status",
 ]
 
 /** El scope que exige cada método de agente; los demás no necesitan scope. */

@@ -13,6 +13,7 @@ import {
   matchesPattern,
   type PermissionPattern,
   redact,
+  shellCommand,
 } from "@keel/core"
 import type { RunContext, ToolDecision, ToolGate, ToolRequest } from "./adapters/provider.js"
 import { canonicalJson, sha256Hex, ulid } from "./ids.js"
@@ -30,6 +31,8 @@ export type ApprovalGateDeps = {
   /** Dónde trabaja el run: una regla nunca cubre archivos fuera de ahí (ADR-0019 §4). */
   cwdOf?: (runId: string) => string | null
 }
+
+const GIT_PUSH = /(?:^|[\s;&|(])git(?:\s+-C\s+\S+)?\s+push\b/
 
 /** «Aprobar para esta sesión»: dura el resto del run y como mucho 15 min (SDD 01 §10). */
 export const SESSION_GRANT_MS = 15 * 60_000
@@ -102,6 +105,28 @@ export class ApprovalGate implements ToolGate {
   async decide(ctx: RunContext, req: ToolRequest): Promise<ToolDecision> {
     const { repo, waitApproval, timeoutMs } = this.deps
     const run = ctx.run
+    // ADR-0015 §7: el perfil por defecto no empuja por shell; el plan aprobado sí.
+    // Es una comodidad, no una frontera: el texto se puede disfrazar.
+    const cmd = shellCommand(req.input)
+    if (cmd !== null && GIT_PUSH.test(cmd)) {
+      ctx.record(
+        "approval.auto",
+        `approval.auto:${run.id}:${ulid()}`,
+        {
+          tool: req.tool,
+          input: { command: cmd },
+          effect: "deny",
+          source: "profile:git_push",
+          label: "git push por shell",
+        },
+        null,
+      )
+      return {
+        behavior: "deny",
+        message:
+          "Keel: git push por shell está desactivado. Usa la tool git_propose: arma un plan con commit, push y PR que el humano aprueba.",
+      }
+    }
     const auto = this.automatic(ctx, req)
     if (auto) {
       ctx.record(
