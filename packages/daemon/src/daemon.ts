@@ -78,6 +78,7 @@ import {
 } from "./ipc/server.js"
 import { checkRunStart, DEFAULT_LIMITS, type Limits, startOfLocalDay } from "./limits.js"
 import { Outbox } from "./outbox.js"
+import { PluginHost } from "./plugins.js"
 import {
   defaultProcessTable,
   type ProcessTable,
@@ -152,6 +153,7 @@ export class Daemon {
   readonly artifacts: ArtifactStore
   readonly semantic: SemanticProjector
   readonly broker: ResourceBroker
+  readonly plugins: PluginHost
   readonly server: IpcServer
   /** Puerta de agentes (ADR-0018 §2): nada que entre por ella es humano. */
   readonly agentServer: IpcServer
@@ -201,9 +203,20 @@ export class Daemon {
       repo: this.repo,
       artifacts: this.artifacts,
     })
+    // ADR-0014: los plugins interpretan en su propio proceso, sin bloquear la ingesta.
+    this.plugins = new PluginHost({
+      db: this.store.db,
+      projector: this.semantic,
+      emit: (row, kind, payload) =>
+        runUnitOfWork(this.uowDeps(), this.systemScope(row.project_id), (uow) =>
+          uow.emit(kind, row.run_id, payload),
+        ),
+    })
     this.bus.subscribe((n) => {
       const row = this.repo.eventBySeq(n.event_seq)
-      if (row) this.semantic.onEvent(row)
+      if (!row) return
+      this.semantic.onEvent(row)
+      if (!row.kind.startsWith("plugin.")) this.track(this.plugins.onEvent(row))
     })
     // ADR-0013: el intermediario ejecuta con la credencial; el agente sólo ve el resultado.
     this.broker = new ResourceBroker({
@@ -318,6 +331,7 @@ export class Daemon {
 
   stop(): void {
     if (this.lagTimer) clearInterval(this.lagTimer)
+    this.plugins.stopAll()
     this.server.stop()
     this.agentServer.stop()
     this.store.db.close()
@@ -1234,6 +1248,39 @@ export class Daemon {
           throw brokerFailure(e)
         }
       },
+      "plugins.install": this.mutation<Params<"plugins.install">>(
+        "plugins.install",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "instalar un plugin")
+          let row: ReturnType<PluginHost["install"]>
+          try {
+            row = this.plugins.install(p.path, uow.actorId)
+          } catch (e) {
+            throw rpcError(ErrorCode.invalidParams, e instanceof Error ? e.message : String(e))
+          }
+          const view = this.plugins.view(row)
+          uow.emit("plugin.installed", null, {
+            id: view.id,
+            version: view.version,
+            sha256: view.sha256,
+          })
+          return view
+        },
+      ),
+      "plugins.list": (_params, ctx) => {
+        requireHuman(ctx, "ver los plugins")
+        return { plugins: this.plugins.installed().map((p) => this.plugins.view(p)) }
+      },
+      "plugins.uninstall": this.mutation<Params<"plugins.uninstall">>(
+        "plugins.uninstall",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "desinstalar un plugin")
+          if (!this.plugins.uninstall(p.id))
+            throw rpcError(ErrorCode.notFound, "el plugin no está instalado")
+          uow.emit("plugin.uninstalled", null, { id: p.id })
+          return { id: p.id, uninstalled: true as const }
+        },
+      ),
       "permissions.rules_list": (params, ctx) => {
         requireHuman(ctx, "revisar las reglas de permiso")
         const p = params as Params<"permissions.rules_list">

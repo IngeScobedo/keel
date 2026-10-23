@@ -30,6 +30,7 @@ import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
 import { LiveConnections } from "./LiveConnections.js"
 import { LiveInbox } from "./LiveInbox.js"
+import { LivePlugins } from "./LivePlugins.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
 import { Permissions } from "./Permissions.js"
 import { RunsList, RunView } from "./RunView.js"
@@ -482,14 +483,21 @@ export function App() {
         {page === "workbench" && <Workbench demo={demo} />}
         {page === "design" && <DesignStudio />}
         {page === "settings" && (
-          <Settings
-            mode={workspace.mode}
-            onConnect={() => setConnection(true)}
-            onDemo={() => {
-              void workspace.showDemo()
-              setPage("board")
-            }}
-          />
+          <>
+            <Settings
+              mode={workspace.mode}
+              onConnect={() => setConnection(true)}
+              onDemo={() => {
+                void workspace.showDemo()
+                setPage("board")
+              }}
+            />
+            {workspace.mode === "live" && (
+              <div className="padded">
+                <LivePlugins call={workspace.call} />
+              </div>
+            )}
+          </>
         )}
       </main>
       <footer className="status-bar">

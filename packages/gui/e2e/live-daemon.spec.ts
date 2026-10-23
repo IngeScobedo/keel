@@ -274,6 +274,28 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(ev).toContainText("resultado.txt")
   await ev.locator(".evidence-head").click()
   await expect(page.locator(".evidence-text")).toHaveText("12 pruebas en verde")
+  // Un resultado tabular se ve como tabla y se grafica sin código (ADR-0014 nivel 1).
+  await page.getByLabel("Archivo de evidencia").setInputFiles({
+    name: "ventas.json",
+    mimeType: "application/vnd.keel.table+json",
+    buffer: Buffer.from(
+      JSON.stringify({
+        columns: [{ name: "mes" }, { name: "monto" }],
+        rows: [
+          ["ago", 10],
+          ["sep", 30],
+        ],
+      }),
+    ),
+  })
+  await page
+    .getByTestId("evidence")
+    .filter({ hasText: "ventas.json" })
+    .locator(".evidence-head")
+    .click()
+  await expect(page.getByTestId("result-table")).toContainText("sep")
+  await page.getByRole("button", { name: "Graficar", exact: true }).click()
+  await expect(page.getByTestId("chart").locator("svg, canvas").first()).toBeVisible()
   await page.getByRole("tab", { name: "Activity", exact: true }).click()
   await page.getByLabel("Nota para la tarea").fill("revisado")
   await page.getByRole("button", { name: "Post", exact: true }).click()

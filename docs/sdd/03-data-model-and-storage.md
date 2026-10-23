@@ -1151,3 +1151,23 @@ ALTER TABLE permission_grants ADD COLUMN operation TEXT;
 CREATE INDEX idx_grants_connection ON permission_grants(connection_id, operation)
     WHERE revoked_at IS NULL;
 ```
+
+### 0009 · Plugins (ADR-0014)
+
+Un plugin se instala explícitamente, con su versión y el hash de su
+manifiesto y su punto de entrada. No se actualiza solo: si el hash cambia, no
+corre. Desinstalarlo no borra nada de lo que interpretó.
+
+```sql
+-- migración: 0009-plugins
+CREATE TABLE plugins (
+    id TEXT PRIMARY KEY NOT NULL,
+    version TEXT NOT NULL,
+    path TEXT NOT NULL,
+    manifest_json TEXT NOT NULL CHECK (json_valid(manifest_json)),
+    sha256 TEXT NOT NULL,
+    installed_by TEXT NOT NULL,
+    installed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    uninstalled_at TEXT
+);
+```

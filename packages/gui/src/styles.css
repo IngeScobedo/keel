@@ -2178,3 +2178,19 @@ progress::-moz-progress-bar {
 .connection-form input {
   flex: 1 1 220px;
 }
+.result-table {
+  font-size: 12px;
+  max-height: 320px;
+  overflow: auto;
+  display: block;
+}
+.chart-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 6px 0;
+}
+.chart {
+  width: 100%;
+  min-height: 240px;
+}

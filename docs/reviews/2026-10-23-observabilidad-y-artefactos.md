@@ -80,3 +80,33 @@ explícita, dentro de su misma transacción.
 - **El llavero de Windows** (Credential Manager).
 - **Las redes remotas y los secretos rotativos de Vault**, que el propio ADR
   deja fuera.
+
+## ADR-0014, integraciones, plugins y visualizadores
+
+**Cubierto:**
+
+- **Nivel 1.** Un resultado tabular de cualquier herramienta o servidor MCP se
+  ve como tabla y se grafica sin código. La gráfica es una especificación
+  Vega-Lite y se puede guardar como evidencia. Vega corre en su modo seguro para
+  CSP (intérprete de AST, sin `eval`) y se carga sólo al graficar.
+- **Plugins** (`test/plugins.test.ts`):
+  - Un manifiesto `keel-plugin.json` validado, instalado con versión y hash
+    fijos.
+  - El intérprete corre en su propio proceso por JSON-RPC sobre stdio, con plazo
+    límite y sin secretos en el entorno.
+  - Lo que devuelve se valida contra el esquema y los permisos declarados, y lo
+    que no valida se rechaza con constancia.
+  - Si el proceso cae, el daemon sigue y la vez siguiente lo relanza.
+  - Desinstalar no borra lo interpretado, y un plugin alterado en disco no
+    corre.
+- **Visualizadores declarativos.** Las primitivas son `kv`, `table` y `code`, y
+  no ejecutan código del plugin.
+
+**Pendiente:**
+
+- **MCP Apps** (§4, «después»).
+- **Limitar sistema de archivos y red del plugin por sistema operativo.** El ADR
+  pide medirlo antes de prometerlo; el sandbox de ADR-0018 es el candidato.
+- **Publicar `@keel/plugin-sdk`.** Espera al primer plugin externo, como dice el
+  ADR.
+- **Los visualizadores en la TUI**, que todavía no existe.

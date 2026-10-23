@@ -2,6 +2,7 @@ import type { EventNotification } from "@keel/core"
 import { Bot, Check, ChevronDown, ChevronRight, CircleAlert, Send, User, X } from "lucide-react"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ApprovalActions } from "./ApprovalActions.js"
+import { TableWithChart, tableFromOutput } from "./Chart.js"
 import { mutationMeta } from "./client.js"
 import { GitPlanCard } from "./GitPlanCard.js"
 import { buildChat, type ChatItem, type Run } from "./model.js"
@@ -156,7 +157,7 @@ function ChatRow({ item, call }: { item: ChatItem; call?: Call }) {
             <code className="tool-name">{item.name}</code>
             <span className="mono tool-input">{item.input}</span>
           </button>
-          {open && item.output !== null && <pre>{item.output || "(sin salida)"}</pre>}
+          {open && item.output !== null && <ToolOutput item={item} {...(call ? { call } : {})} />}
         </div>
       )
     case "approval":
@@ -181,6 +182,13 @@ function ChatRow({ item, call }: { item: ChatItem; call?: Call }) {
         </p>
       )
   }
+}
+
+/** La salida de una herramienta: si es tabular, tabla con «Graficar»; si no, texto. */
+function ToolOutput({ item, call }: { item: Extract<ChatItem, { kind: "tool" }>; call?: Call }) {
+  const table = item.raw_output === undefined ? null : tableFromOutput(item.raw_output)
+  if (table) return <TableWithChart table={table} {...(call ? { call } : {})} />
+  return <pre>{item.output || "(sin salida)"}</pre>
 }
 
 function ApprovalRow({

@@ -10,6 +10,7 @@
  * `z.infer`, nunca se escriben a mano.
  */
 import { z } from "zod"
+import { PluginManifestSchema } from "./plugins.js"
 import { SemanticEventViewSchema } from "./semantic.js"
 import { VISUAL_STATES } from "./visual-state.js"
 
@@ -297,6 +298,15 @@ export const ConnectionViewSchema = z.object({
   operations: z.array(
     z.object({ operation: z.string(), policy: GrantPolicySchema, effective: GrantPolicySchema }),
   ),
+})
+export const PluginViewSchema = z.object({
+  id: z.string(),
+  version: z.string(),
+  path: z.string(),
+  sha256: z.string(),
+  manifest: PluginManifestSchema,
+  /** `ok`, o por qué no corre (hash cambiado, proceso caído…). */
+  status: z.string(),
 })
 export const NoteViewSchema = z.object({
   id: z.string(),
@@ -767,6 +777,20 @@ export const Methods = {
       evidence_id: z.string().nullable(),
       result_ref: z.string().nullable(),
     }),
+  },
+  /** ADR-0014 §6: instalación explícita, con versión y hash fijos. */
+  "plugins.install": {
+    params: MutationMeta.extend({ path: z.string().min(1) }),
+    result: PluginViewSchema,
+  },
+  "plugins.list": {
+    params: z.object({}),
+    result: z.object({ plugins: z.array(PluginViewSchema) }),
+  },
+  /** Desinstalar no borra lo que interpretó (ADR-0014 §5). */
+  "plugins.uninstall": {
+    params: MutationMeta.extend({ id: z.string() }),
+    result: z.object({ id: z.string(), uninstalled: z.literal(true) }),
   },
   "permissions.rules_list": {
     params: z.object({ include_revoked: z.boolean().optional() }),

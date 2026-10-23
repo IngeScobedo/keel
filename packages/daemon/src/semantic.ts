@@ -37,7 +37,7 @@ export type SemanticDraft = {
 
 export interface Interpreter {
   readonly name: string
-  readonly version: number
+  readonly version: number | string
   feed(e: SourceEvent): SemanticDraft[]
 }
 
@@ -379,7 +379,31 @@ export class SemanticProjector {
     }
   }
 
-  private store(it: Interpreter, e: SourceEvent, d: SemanticDraft): boolean {
+  /**
+   * Lo que produjo un intérprete de fuera del daemon (un plugin, ADR-0014),
+   * ya validado contra su esquema: se guarda igual que lo de los internos.
+   */
+  storeExternal(
+    it: { name: string; version: string },
+    row: EventRow,
+    d: SemanticDraft,
+    schemaVersion: number,
+  ): boolean {
+    return this.store(it, this.source(row), d, schemaVersion)
+  }
+
+  /** El evento de origen con su cuerpo íntegro, para pasárselo a un plugin. */
+  sourceOf(row: EventRow): SourceEvent {
+    return this.source(row)
+  }
+
+  private store(
+    it: { name: string; version: number | string },
+    e: SourceEvent,
+    d: SemanticDraft,
+    /** Ya validado por quien lo produjo contra su propio esquema (plugins). */
+    schemaVersion?: number,
+  ): boolean {
     const refs: string[] = []
     let payload: unknown = d.payload
     if (d.artifacts?.length && this.artifacts) {
@@ -407,7 +431,10 @@ export class SemanticProjector {
       (payload as { sensitivity?: unknown } | null)?.sensitivity === "restricted"
         ? "restricted"
         : "internal"
-    const valid = validateSemantic(d.kind, payload)
+    const valid =
+      schemaVersion !== undefined
+        ? { kind: d.kind, schema_version: schemaVersion, payload }
+        : validateSemantic(d.kind, payload)
     const run = e.run_id ? this.repo.getRun(e.run_id) : null
     const interpreter = `${it.name}@${it.version}`
     const r = this.db

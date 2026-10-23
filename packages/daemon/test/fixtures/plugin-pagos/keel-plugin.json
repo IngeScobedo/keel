@@ -1,0 +1,27 @@
+{
+  "id": "pagos-demo",
+  "version": "1.0.0",
+  "keel_api": 1,
+  "entry": { "command": "bun", "args": ["interpreter.ts"] },
+  "recognizes": { "tools": ["mcp__pagos__*"] },
+  "emits": [
+    {
+      "kind": "payments.charges.listed",
+      "schema_version": 1,
+      "schema": {
+        "type": "object",
+        "required": ["count", "total", "currency"],
+        "additionalProperties": false,
+        "properties": {
+          "count": { "type": "integer" },
+          "total": { "type": "number" },
+          "currency": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "visualizers": [
+    { "kind": "payments.charges.listed", "primitive": "kv", "fields": ["count", "total", "currency"] }
+  ],
+  "permissions": ["events:emit"]
+}

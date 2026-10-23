@@ -176,6 +176,8 @@ export type ChatItem =
       name: string
       input: string
       output: string | null
+      /** La respuesta tal cual, para verla como tabla si lo es (ADR-0014 nivel 1). */
+      raw_output?: unknown
       failed: boolean
     }
   | {
@@ -289,6 +291,7 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         const t = typeof p.tool_use_id === "string" ? tools.get(p.tool_use_id) : undefined
         if (t) {
           t.output = toolOutput(p.tool_response ?? p.error ?? "")
+          t.raw_output = p.tool_response
           t.failed = e.kind === "hook.PostToolUseFailure"
         }
         break

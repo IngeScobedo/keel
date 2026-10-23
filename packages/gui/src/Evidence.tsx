@@ -1,6 +1,7 @@
 import type { EvidenceKindSchema, EvidenceViewSchema } from "@keel/core"
 import { FileText, Paperclip, ShieldAlert } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
+import { type KeelTable, TableWithChart } from "./Chart.js"
 import { mutationMeta } from "./client.js"
 import { actorLabel } from "./model.js"
 import { Empty, Hint } from "./ui.js"
@@ -41,13 +42,6 @@ async function readAll(
       return { bytes, media: r.media_type, ok: r.integrity === "ok" }
     }
   }
-}
-
-type Table = {
-  columns: { name: string; type?: string }[]
-  rows: unknown[][]
-  row_count_total?: number
-  truncated?: boolean
 }
 
 function Viewer({ call, item }: { call: Call; item: Evidence }) {
@@ -95,44 +89,13 @@ export function ArtifactView({
       </>
     )
   }
-  if (state.media === "application/vnd.keel.table+json") {
-    const t = JSON.parse(text()) as Table
+  if (state.media === "application/vnd.keel.table+json")
     return (
       <>
         {warn}
-        <table data-testid="evidence-table">
-          <thead>
-            <tr>
-              {t.columns.map((c) => (
-                <th key={c.name}>
-                  {c.name}
-                  {c.type ? <span className="muted"> · {c.type}</span> : null}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {t.rows.map((r, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: filas de un resultado sin id propio.
-              <tr key={i}>
-                {r.map((v, j) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: columnas posicionales.
-                  <td key={j} className="mono">
-                    {v === null ? "∅" : String(v)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {t.truncated && (
-          <Hint>
-            Recortado: {t.rows.length} de {t.row_count_total ?? "?"} filas. El corte queda marcado.
-          </Hint>
-        )}
+        <TableWithChart table={JSON.parse(text()) as KeelTable} call={call} />
       </>
     )
-  }
   if (
     state.media.startsWith("text/") ||
     state.media.includes("json") ||

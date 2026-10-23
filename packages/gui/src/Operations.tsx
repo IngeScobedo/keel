@@ -1,6 +1,7 @@
 import type { SemanticEventViewSchema } from "@keel/core"
 import { Database, GitCommitHorizontal, Upload } from "lucide-react"
-import { useEffect, useState } from "react"
+import { Fragment, useEffect, useState } from "react"
+import { TableView, tableFromOutput } from "./Chart.js"
 import { ArtifactView } from "./Evidence.js"
 import { Empty, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -19,6 +20,39 @@ const COVERAGE_HINT = {
  * commits, pushes. Cada fila dice cómo se supo; lo inferido nunca parece
  * observado.
  */
+type Visualizer = {
+  kind: string
+  primitive: "kv" | "table" | "code"
+  fields?: string[]
+  rows_field?: string
+  code_field?: string
+}
+
+/** Primitivas declarativas de un plugin (ADR-0014 §4): no ejecutan código. */
+function Declared({ v, payload }: { v: Visualizer; payload: Record<string, unknown> }) {
+  if (v.primitive === "code")
+    return <pre className="evidence-text">{String(payload[v.code_field ?? ""] ?? "")}</pre>
+  if (v.primitive === "table") {
+    const table = tableFromOutput(payload[v.rows_field ?? "rows"] ?? [])
+    return table ? <TableView table={table} /> : <Hint>Sin filas.</Hint>
+  }
+  const fields = v.fields ?? Object.keys(payload)
+  return (
+    <dl className="confirmation-scope" data-testid="kv">
+      {fields.map((f) => (
+        <Fragment key={f}>
+          <dt>{f}</dt>
+          <dd className="mono">
+            {typeof payload[f] === "object"
+              ? JSON.stringify(payload[f])
+              : String(payload[f] ?? "—")}
+          </dd>
+        </Fragment>
+      ))}
+    </dl>
+  )
+}
+
 export function Operations({
   call,
   runId,
@@ -29,6 +63,12 @@ export function Operations({
   version: number
 }) {
   const [items, setItems] = useState<Semantic[]>([])
+  const [visualizers, setVisualizers] = useState<Visualizer[]>([])
+  useEffect(() => {
+    call("plugins.list", {})
+      .then((r) => setVisualizers(r.plugins.flatMap((p) => p.manifest.visualizers as Visualizer[])))
+      .catch(() => setVisualizers([]))
+  }, [call])
   const [open, setOpen] = useState<string | null>(null)
   const [error, setError] = useState("")
   // biome-ignore lint/correctness/useExhaustiveDependencies: `version` sólo dispara la relectura.
@@ -78,6 +118,11 @@ export function Operations({
                 </p>
                 {typeof p.result_ref === "string" ? (
                   <ArtifactView call={call} artifactRef={p.result_ref} title="resultado" />
+                ) : visualizers.some((v) => v.kind === e.kind) ? (
+                  <Declared
+                    v={visualizers.find((v) => v.kind === e.kind) as Visualizer}
+                    payload={p}
+                  />
                 ) : (
                   <pre className="evidence-text">{JSON.stringify(p, null, 2)}</pre>
                 )}
