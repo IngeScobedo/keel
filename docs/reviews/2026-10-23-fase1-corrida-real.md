@@ -11,7 +11,7 @@ daemon y la CLI tal como están en `main`.
 - `bun packages/daemon/src/main.ts --db … --socket … --root <repo>` con
   `XDG_STATE_HOME` en un temporal. Límites por defecto: 1 run, 2 USD por run y
   10 USD por día, todo estimado.
-- `bun packages/daemon/src/cli.ts run "Lee README.md y src/calc.ts … No modifiques nada."`:
+- `cli.ts run` con la tarea «Lee README.md y src/calc.ts … No modifiques nada.»:
   crea la tarea, la pasa a `planned` y lanza un run `execute`.
 - Perfil por defecto: `subscription_session`, modelo `haiku`
   (`claude-haiku-5-5`), herramientas auto-aprobadas `Read`, `Glob` y `Grep`, y
