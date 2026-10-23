@@ -52,6 +52,11 @@ export type ClaudeProfile = {
   /** Tope de costo estimado del run (`maxBudgetUsd` del SDK); lo fija el daemon (limits.ts). */
   max_budget_usd: number | null
   cwd: string
+  /**
+   * Servidores MCP stdio del run; el daemon inyecta aquí `keel` (ADR-0009). Sus
+   * tools se autorizan en el daemon por operación, así que se auto-aprueban.
+   */
+  mcp_servers: Record<string, { command: string; args: string[]; env: Record<string, string> }>
 }
 
 export const DEFAULT_PROFILE: ClaudeProfile = {
@@ -64,6 +69,7 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   max_wall_ms: 30 * 60_000,
   max_budget_usd: null,
   cwd: process.cwd(),
+  mcp_servers: {},
 }
 
 const HOOK_EVENTS = [
@@ -258,7 +264,11 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       settingSources: [],
       maxTurns: profile.max_turns,
       ...(profile.max_budget_usd === null ? {} : { maxBudgetUsd: profile.max_budget_usd }),
-      allowedTools: profile.allowed_tools,
+      allowedTools: [
+        ...profile.allowed_tools,
+        ...Object.keys(profile.mcp_servers).map((name) => `mcp__${name}`),
+      ],
+      ...mcpOptions(profile.mcp_servers),
       permissionMode: "default",
       env,
       abortController: abort,
@@ -271,6 +281,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       auth_mode: profile.auth_mode,
       binary,
       model: profile.model,
+      mcp_servers: Object.keys(profile.mcp_servers),
     })
     ctx.notifyRun()
 
@@ -428,5 +439,28 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
           "subscription_session requiere el binario `claude` instalado por el usuario; no se encontró",
       }
     return { ok: true, env, binary }
+  }
+}
+
+/**
+ * Sólo los servidores que pasa Keel (`strictMcpConfig`: nada de `.mcp.json` ni
+ * de la configuración del usuario). `alwaysLoad` hace que el arranque espere a
+ * que el servidor conecte, de modo que el puente se vincula antes del primer
+ * turno (ADR-0009 §3); sin él, el SDK arranca los servidores MCP sin bloquear.
+ */
+function mcpOptions(servers: ClaudeProfile["mcp_servers"]): Partial<Options> {
+  const names = Object.keys(servers)
+  if (names.length === 0) return {}
+  return {
+    strictMcpConfig: true,
+    mcpServers: Object.fromEntries(
+      names.map((name) => {
+        const s = servers[name] as ClaudeProfile["mcp_servers"][string]
+        return [
+          name,
+          { type: "stdio", command: s.command, args: s.args, env: s.env, alwaysLoad: true },
+        ]
+      }),
+    ),
   }
 }

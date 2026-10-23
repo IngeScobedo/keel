@@ -20,6 +20,7 @@ import { realpathSync } from "node:fs"
 import { lstat, mkdir, readdir, readFile, readlink, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join, parse, relative, sep } from "node:path"
+import { defaultStateDir } from "./state-dir.js"
 import type { Repo, RunRow, RunSnapshotRow, WorkItemRow } from "./store/repo.js"
 import type {
   Provisioned,
@@ -55,10 +56,7 @@ export function defaultSnapshotsDir(
   platform: NodeJS.Platform = process.platform,
   env: Record<string, string | undefined> = process.env,
 ): string {
-  if (platform === "win32")
-    return join(env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "keel", "snapshots")
-  const state = env.XDG_STATE_HOME || join(homedir(), ".local", "state")
-  return join(state, "keel", "snapshots")
+  return join(defaultStateDir(platform, env), "snapshots")
 }
 
 export class DirectFsDriver implements WorkspaceDriver {

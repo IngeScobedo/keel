@@ -3,6 +3,7 @@
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
 import { existsSync } from "node:fs"
+import { dirname, join } from "node:path"
 import {
   allowedTransitions,
   checkTransition,
@@ -23,6 +24,7 @@ import {
   SOURCE,
 } from "./adapters/claude.js"
 import type { ProviderAdapter } from "./adapters/provider.js"
+import { AgentTokens } from "./agent-tokens.js"
 import { ApprovalGate } from "./approvals.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
@@ -45,7 +47,7 @@ import {
 } from "./processes.js"
 import { createRunContext } from "./run-context.js"
 import { openStore, type Store } from "./store/db.js"
-import { Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
+import { type NoteRow, Repo, type RunRow, type WorkItemRow } from "./store/repo.js"
 import type { WorkspaceDriver } from "./workspace-driver.js"
 import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
 
@@ -59,6 +61,13 @@ export type DaemonOptions = {
   worktreesDir?: string
   /** Snapshots del modo sin VCS (ADR-0010); por defecto `$XDG_STATE_HOME/keel/snapshots`. */
   snapshotsDir?: string
+  /** Tokens de un solo uso del puente MCP (ADR-0009); por defecto `run-tokens/` junto a la base. */
+  tokensDir?: string
+  /**
+   * Cómo lanza el proveedor el puente `keel mcp`; `false` no lo inyecta. Por
+   * defecto, este mismo runtime con `main.ts mcp`.
+   */
+  mcpBridge?: { command: string; args: string[] } | false
   /** Tabla de procesos para reconciliar; por defecto la de la plataforma (processes.ts). */
   processes?: ProcessTable
   /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
@@ -79,6 +88,7 @@ export class Daemon {
   readonly workspaces: GitWorktreeDriver
   /** Driver del modo sin VCS, confirmado por el humano (ADR-0010). */
   readonly directFs: DirectFsDriver
+  readonly agentTokens: AgentTokens
   readonly project: { workspace_id: string; project_id: string }
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
@@ -115,6 +125,8 @@ export class Daemon {
       rootPath: opts.rootPath,
       worktreesDir: opts.worktreesDir ?? defaultWorktreesDir(),
     })
+    // Junto a la base: el directorio privado del daemon (`~/.keel`, 0700).
+    this.agentTokens = new AgentTokens(opts.tokensDir ?? join(dirname(opts.dbPath), "run-tokens"))
     this.directFs = new DirectFsDriver({
       repo: this.repo,
       rootPath: opts.rootPath,
@@ -346,16 +358,106 @@ export class Daemon {
       }),
       "work_items.create": this.mutation<Params<"work_items.create">>(
         "work_items.create",
-        (p, uow) => {
+        (p, uow, ctx) => {
+          // Lo que crea un agente nace en triage con source = 'agent' (ADR-0009 §5).
+          const projectId = this.scopeOf(ctx, p.project_id)
           const w = repo.createWorkItem({
-            project_id: project.project_id,
+            project_id: projectId,
             title: p.title,
             kind: p.kind,
+            source: ctx.actor.kind === "agent" ? "agent" : "human",
             ...(p.spec_markdown === undefined ? {} : { spec_markdown: p.spec_markdown }),
           })
           const view = repo.workItemView(w)
-          uow.emit("work_item.created", null, view)
+          uow.emit("work_item.created", agentRun(ctx), { ...view, actor: actorOf(ctx) })
           return view
+        },
+      ),
+      "session.bind_agent": (params, ctx) => {
+        const p = params as Params<"session.bind_agent">
+        if (ctx.client.actor?.kind === "agent")
+          throw rpcError(ErrorCode.conflict, "la conexión ya está vinculada a un run")
+        const binding = this.agentTokens.consume(p.token)
+        if (!binding) throw rpcError(ErrorCode.unauthorized, "token inválido, ya usado o caducado")
+        const run = repo.getRun(binding.run_id)
+        if (!run || !ACTIVE_RUN_STATUSES.includes(run.status))
+          throw rpcError(ErrorCode.unauthorized, "el run del token ya terminó")
+        const actor = { actor_id: `agent:${binding.run_id}`, kind: "agent" as const, ...binding }
+        ctx.client.actor = actor
+        this.emitSystem("session.agent_bound", binding.run_id, {
+          actor_id: actor.actor_id,
+          client_id: ctx.client.id,
+        })
+        return { actor_id: actor.actor_id, ...binding }
+      },
+      "work_items.list": (params, ctx) => {
+        const p = params as Params<"work_items.list">
+        const projectId = this.scopeOf(ctx, p.project_id)
+        const items = repo
+          .listWorkItems(projectId)
+          .filter((w) => !p.lifecycle || p.lifecycle.includes(w.lifecycle))
+          .slice(0, p.limit ?? 200)
+          .map((w) => repo.workItemView(w))
+        return { items }
+      },
+      "work_items.get": (params, ctx) => {
+        const p = params as Params<"work_items.get">
+        const w = this.workItemIn(ctx, p.work_item_id)
+        return {
+          item: repo.workItemView(w),
+          spec_markdown: repo.workItemSpec(w.id),
+          notes: repo.listNotes(w.id).map(noteView),
+        }
+      },
+      "notes.add": this.mutation<Params<"notes.add">>("notes.add", (p, uow, ctx) => {
+        const w = this.workItemIn(ctx, p.work_item_id)
+        // Un agente sólo escribe en la tarea de su run (ADR-0009 §5).
+        if (ctx.actor.kind === "agent" && w.id !== ctx.actor.work_item_id)
+          throw rpcError(ErrorCode.unauthorized, "un agente sólo añade notas a la tarea de su run")
+        const note = noteView(
+          repo.addNote({
+            work_item_id: w.id,
+            author: ctx.actor.actor_id,
+            content_markdown: p.content_markdown,
+          }),
+        )
+        uow.emit("note.added", agentRun(ctx), { ...note, actor: actorOf(ctx) })
+        return note
+      }),
+      "handoffs.request": this.mutation<Params<"handoffs.request">>(
+        "handoffs.request",
+        (p, uow, ctx) => {
+          const actor = ctx.actor
+          if (actor.kind !== "agent")
+            throw rpcError(
+              ErrorCode.unauthorized,
+              "handoffs.request es para agentes; un humano crea la tarea directamente",
+            )
+          this.scopeOf(ctx)
+          const origin = this.workItemIn(ctx, actor.work_item_id)
+          const created = repo.createWorkItem({
+            project_id: actor.project_id,
+            title: p.title,
+            kind: p.kind ?? "chore",
+            source: "agent",
+            spec_markdown: `${p.summary_markdown}\n\n---\nHandoff desde ${origin.display_id} (run ${actor.run_id}).`,
+          })
+          const workItem = repo.workItemView(created)
+          const note = noteView(
+            repo.addNote({
+              work_item_id: origin.id,
+              author: actor.actor_id,
+              content_markdown: `Handoff pedido: ${created.display_id} · ${p.title}\n\n${p.summary_markdown}`,
+            }),
+          )
+          uow.emit("work_item.created", actor.run_id, { ...workItem, actor: actorOf(ctx) })
+          uow.emit("handoff.requested", actor.run_id, {
+            from_work_item_id: origin.id,
+            to_work_item_id: created.id,
+            note_id: note.id,
+            actor: actorOf(ctx),
+          })
+          return { note, work_item: workItem }
         },
       ),
       "work_items.transition": this.mutation<Params<"work_items.transition">>(
@@ -554,6 +656,7 @@ export class Daemon {
             ...this.profile,
             cwd: ws.cwd,
             max_budget_usd: budget === undefined ? null : budget / 1_000_000,
+            mcp_servers: this.keelMcpServer(current),
           })
         }
       }
@@ -562,8 +665,55 @@ export class Daemon {
     }
     // La tarea refleja el final sin esperar a git. Si el final libera, la liberación
     // (que captura antes) va encolada; si no, se capturan los cambios para la revisión.
+    // La capacidad del agente caduca con el run (ADR-0009 §3).
+    this.agentTokens.revokeRun(run.id)
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
+  }
+
+  /**
+   * El puente `keel mcp` del run: el proveedor lo lanza con la ruta del token de
+   * un solo uso, nunca con su valor (ADR-0009 §3).
+   */
+  private keelMcpServer(run: RunRow): ClaudeProfile["mcp_servers"] {
+    const bridge = this.opts.mcpBridge ?? defaultBridge()
+    if (bridge === false) return {}
+    const { file } = this.agentTokens.issue({
+      run_id: run.id,
+      project_id: run.project_id,
+      work_item_id: run.work_item_id,
+    })
+    return {
+      keel: {
+        command: bridge.command,
+        args: bridge.args,
+        env: { KEEL_RUN_TOKEN_FILE: file, KEEL_SOCKET: this.server.path },
+      },
+    }
+  }
+
+  /**
+   * Para un actor `agent`: su run debe seguir activo (si no, su capacidad
+   * caducó) y el proyecto pedido debe ser el suyo. Devuelve el proyecto en el
+   * que opera la conexión.
+   */
+  private scopeOf(ctx: HandlerContext, projectId?: string): string {
+    const actor = ctx.actor
+    if (actor.kind !== "agent") return projectId ?? this.project.project_id
+    const run = this.repo.getRun(actor.run_id)
+    if (!run || !ACTIVE_RUN_STATUSES.includes(run.status))
+      throw rpcError(ErrorCode.unauthorized, "el run del agente terminó; su capacidad caducó")
+    if (projectId !== undefined && projectId !== actor.project_id)
+      throw rpcError(ErrorCode.unauthorized, "el agente sólo opera en el proyecto de su run")
+    return actor.project_id
+  }
+
+  /** La tarea existe y es del proyecto de la conexión; si no, para un agente es como si no existiera. */
+  private workItemIn(ctx: HandlerContext, id: string): WorkItemRow {
+    const projectId = this.scopeOf(ctx)
+    const w = this.repo.getWorkItem(id)
+    if (!w || w.project_id !== projectId) throw rpcError(ErrorCode.notFound, "work item no existe")
+    return w
   }
 
   /** El driver de un run `execute` sale del proyecto; cada driver valida lo suyo. */
@@ -670,4 +820,39 @@ function requireHuman(ctx: HandlerContext, what: string): void {
       message: `${what} lo decide un humano`,
       retryable: false,
     })
+}
+
+/** Estados de un run en los que su agente conserva la capacidad. */
+const ACTIVE_RUN_STATUSES: readonly string[] = [
+  "queued",
+  "initializing",
+  "running",
+  "paused",
+  "waiting_human",
+]
+
+/** Quién hizo una mutación, para el evento (ADR-0009 §7). */
+function actorOf(ctx: HandlerContext): { id: string; kind: string } {
+  return { id: ctx.actor.actor_id, kind: ctx.actor.kind }
+}
+
+/** El run del agente, para correlacionar el evento; null para humanos. */
+function agentRun(ctx: HandlerContext): string | null {
+  return ctx.actor.kind === "agent" ? ctx.actor.run_id : null
+}
+
+function noteView(n: NoteRow) {
+  return {
+    id: n.id,
+    work_item_id: n.work_item_id,
+    author: n.author,
+    content_markdown: n.content_markdown,
+    created_at: n.created_at,
+  }
+}
+
+/** El puente por defecto: este mismo runtime ejecutando la entrada del daemon con `mcp`. */
+function defaultBridge(): { command: string; args: string[] } {
+  const main = new URL(import.meta.url.endsWith(".ts") ? "./main.ts" : "./main.js", import.meta.url)
+  return { command: process.execPath, args: [Bun.fileURLToPath(main), "mcp"] }
 }

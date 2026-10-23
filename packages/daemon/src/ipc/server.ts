@@ -11,6 +11,7 @@ import { chmodSync, existsSync, mkdirSync, unlinkSync } from "node:fs"
 import { userInfo } from "node:os"
 import { dirname } from "node:path"
 import {
+  AGENT_METHODS,
   decodeFrame,
   ErrorCode,
   type EventNotification,
@@ -30,7 +31,13 @@ import type { Repo } from "../store/repo.js"
 import { isNamedPipe } from "./endpoint.js"
 import { LineDecoder, LineWriter } from "./framing.js"
 
-export type Actor = { actor_id: string; kind: "human" | "system" }
+/**
+ * Quién habla por una conexión. Por defecto, el usuario local (ADR-0005 §7).
+ * `session.bind_agent` la convierte en `agent` hasta que se cierra (ADR-0009 §2).
+ */
+export type Actor =
+  | { actor_id: string; kind: "human" | "system" }
+  | { actor_id: string; kind: "agent"; run_id: string; project_id: string; work_item_id: string }
 export type HandlerContext = { actor: Actor; client: ClientState }
 export type Handler = (params: unknown, ctx: HandlerContext) => Promise<unknown> | unknown
 export type Handlers = Partial<Record<MethodName, Handler>>
@@ -50,6 +57,8 @@ export type ClientState = {
   writer: LineWriter
   subscriptions: Map<string, { project_id: string | null; unsubscribe: () => void }>
   closed: boolean
+  /** Fijado por `session.bind_agent`; sin él, la conexión es del actor del servidor. */
+  actor?: Actor
 }
 
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024
@@ -180,6 +189,8 @@ export class IpcServer {
       const frame = decoded.frame
       if (!("method" in frame)) return // respuestas de cliente: no se esperan
       id = "id" in frame ? frame.id : null
+      // La autoridad va antes que la validación: a un agente no se le describe lo que no puede usar.
+      this.authorize(frame.method, state)
       const v = validateParams(frame.method, frame.params)
       if (!v.ok) {
         if (id !== null) this.send(state, failure(id, v.error))
@@ -205,7 +216,7 @@ export class IpcServer {
     params: unknown,
     state: ClientState,
   ): Promise<unknown> {
-    const ctx: HandlerContext = { actor: this.actor, client: state }
+    const ctx: HandlerContext = { actor: state.actor ?? this.actor, client: state }
     if (method === "events.subscribe")
       return this.subscribe(params as { project_id?: string; after_event_seq: number }, state)
     if (method === "events.unsubscribe") {
@@ -222,6 +233,16 @@ export class IpcServer {
         retryable: false,
       })
     return h(params, ctx)
+  }
+
+  /** Un actor `agent` sólo usa `AGENT_METHODS` (ADR-0009 §5); el resto se comprueba en cada handler. */
+  private authorize(method: string, state: ClientState): void {
+    if (state.actor?.kind === "agent" && !(AGENT_METHODS as readonly string[]).includes(method))
+      throw new RpcFailure({
+        code: ErrorCode.unauthorized,
+        message: `un agente no puede usar ${method} (ADR-0009 §5)`,
+        retryable: false,
+      })
   }
 
   /** Snapshot + replay desde el cursor + stream en vivo (ADR-0005 §4). */

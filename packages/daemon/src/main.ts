@@ -9,6 +9,9 @@
  * Mantenimiento del store (SDD 03 §7), seguro con el daemon en marcha:
  *   main.ts backup  [--db ruta] --out dir             → manifest con sha256
  *   main.ts restore --manifest ruta --db ruta-nueva   → nunca pisa una base existente
+ *
+ * Puente MCP para agentes (ADR-0009); lo lanza el proveedor de cada run:
+ *   main.ts mcp    (lee KEEL_RUN_TOKEN_FILE y KEEL_SOCKET del entorno)
  */
 import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
@@ -16,6 +19,7 @@ import { join } from "node:path"
 import { Daemon } from "./daemon.js"
 import { defaultEndpoint } from "./ipc/endpoint.js"
 import type { Limits } from "./limits.js"
+import { runBridge } from "./mcp/bridge.js"
 import { backupStore, restoreStore } from "./store/backup.js"
 import { openStore } from "./store/db.js"
 
@@ -68,7 +72,9 @@ function maintenance(command: string): void {
   }
 }
 
-if (import.meta.main && (process.argv[2] === "backup" || process.argv[2] === "restore")) {
+if (import.meta.main && process.argv[2] === "mcp") {
+  await runBridge()
+} else if (import.meta.main && (process.argv[2] === "backup" || process.argv[2] === "restore")) {
   maintenance(process.argv[2])
 } else if (import.meta.main) {
   const d = defaultPaths()

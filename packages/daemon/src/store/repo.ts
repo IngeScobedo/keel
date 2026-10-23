@@ -107,6 +107,14 @@ export type RunWorktreeRow = {
   access_mode: "read" | "write"
 }
 
+export type NoteRow = {
+  id: string
+  work_item_id: string
+  author: string
+  content_markdown: string
+  created_at: string
+}
+
 export type RunSnapshotRow = {
   id: string
   project_id: string
@@ -467,6 +475,33 @@ export class Repo {
       )
       .run(id, p.project_id, display, p.title, p.spec_markdown ?? "", p.kind, p.source ?? "human")
     return this.getWorkItem(id) as WorkItemRow
+  }
+  workItemSpec(id: string): string {
+    return (
+      this.db
+        .query<{ spec_markdown: string }, [string]>(
+          "SELECT spec_markdown FROM work_items WHERE id = ?",
+        )
+        .get(id)?.spec_markdown ?? ""
+    )
+  }
+  addNote(p: { work_item_id: string; author: string; content_markdown: string }): NoteRow {
+    const id = ulid()
+    this.db
+      .query("INSERT INTO notes(id, work_item_id, author, content_markdown) VALUES (?,?,?,?)")
+      .run(id, p.work_item_id, p.author, p.content_markdown)
+    return this.db
+      .query<NoteRow, [string]>(
+        "SELECT id, work_item_id, author, content_markdown, created_at FROM notes WHERE id = ?",
+      )
+      .get(id) as NoteRow
+  }
+  listNotes(workItemId: string): NoteRow[] {
+    return this.db
+      .query<NoteRow, [string]>(
+        "SELECT id, work_item_id, author, content_markdown, created_at FROM notes WHERE work_item_id = ? ORDER BY created_at, id",
+      )
+      .all(workItemId)
   }
   getWorkItem(id: string): WorkItemRow | null {
     return this.db

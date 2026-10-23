@@ -58,12 +58,21 @@ protocolo; diagnósticos saneados van por stderr.
 | `approvals.resolve`                                             | Consume una aprobación contra el hash exacto de operación y alcance.   |
 | `events.subscribe`                                              | Reproduce eventos después de `event_seq`.                              |
 | `fs.read`, `diff.read`, `pty.attach`                            | Opera sobre target/repo/worktree autorizados.                          |
+| `session.bind_agent`                                            | Vincula la conexión a un run con su token de un solo uso (ADR-0009).   |
+| `work_items.list`, `work_items.get`, `notes.add`                | Lectura y notas; para un agente, sólo en el proyecto y tarea del run.  |
+| `handoffs.request`                                              | Un agente deja nota en su tarea y crea otra en `triage` (ADR-0009).    |
+| `projects.set_vcs`, `snapshots.restore`                         | Modo sin VCS confirmado y restauración, sólo humanos (ADR-0010).       |
 
 Los comandos de mutación llevan `request_id`, `idempotency_key` y revisión
 esperada cuando aplique. Identidad humana y permisos provienen de la conexión
 autenticada, no de un campo que un agente pueda elegir. Error estructurado con
 `code`, `message`, `retryable`, `details` y correlación. Reintentar una mutación
 no duplica sus efectos.
+
+Una conexión vinculada con `session.bind_agent` es del actor `agent` y sólo usa
+`AGENT_METHODS` de `@keel/core`; la autoridad se comprueba antes de validar los
+parámetros y otra vez por recurso en cada handler (ADR-0009 §5). Los esquemas
+Zod de los métodos viven en `packages/core/src/protocol.ts`.
 
 La transacción guarda cambio, Activity y mensaje en `outbox`. La entrega es al
 menos una vez; receptores deduplican por clave estable. Snapshot + cursor

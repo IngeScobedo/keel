@@ -19,7 +19,6 @@
  * daemon. Este módulo no publica eventos: devuelve lo que pasó y el daemon lo
  * emite.
  */
-import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import {
   BRANCH_PREFIX,
@@ -34,6 +33,7 @@ import {
   reconcile,
   removeWorktree,
 } from "@keel/git"
+import { defaultStateDir } from "./state-dir.js"
 import type { Repo, RunRow, RunWorktreeRow, WorkItemRow } from "./store/repo.js"
 import type {
   Provisioned,
@@ -46,10 +46,7 @@ export function defaultWorktreesDir(
   platform: NodeJS.Platform = process.platform,
   env: Record<string, string | undefined> = process.env,
 ): string {
-  if (platform === "win32")
-    return join(env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "keel", "worktrees")
-  const state = env.XDG_STATE_HOME || join(homedir(), ".local", "state")
-  return join(state, "keel", "worktrees")
+  return join(defaultStateDir(platform, env), "worktrees")
 }
 
 /** Run cuyo final libera el worktree en cuanto termina; `completed` espera a la revisión. */

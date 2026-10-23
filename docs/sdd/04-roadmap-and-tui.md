@@ -168,6 +168,16 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       modo sin VCS confirmado por el humano (`projects.set_vcs`) y la
       migración 0002. Falta: las tools de `@keel/git` para el agente, que van
       por el puente MCP de ADR-0009.
+- [ ] Tools de Keel para agentes por MCP (ADR-0009, aceptado). Hecho: el puente
+      `keel mcp` (servidor MCP stdio propio, sin dependencia nueva), el actor
+      `agent` por conexión, el token de un solo uso entregado por archivo y
+      revocado al terminar el run, `AGENT_METHODS` con autoridad antes de la
+      validación, y las tools `task_current`, `tasks_list`, `task_get`,
+      `task_create`, `note_add` y `handoff_request`. El adaptador de Claude
+      inyecta el puente con `strictMcpConfig` y `alwaysLoad` (sin `alwaysLoad`
+      el SDK arranca los servidores MCP sin bloquear). Falta: `runs.request`, el
+      emparejamiento de sesiones externas y una corrida real que confirme el
+      orden de arranque.
 
 **DoD:** un agente autorizado consulta archivos reales de un worktree y emite
 eventos correlacionados. Fixtures redactados producen el oráculo esperado. Auth

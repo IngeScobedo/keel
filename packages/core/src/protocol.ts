@@ -128,6 +128,13 @@ export const WorkItemViewSchema = z.object({
   board_status: z.string(),
   ...projected,
 })
+export const NoteViewSchema = z.object({
+  id: z.string(),
+  work_item_id: z.string(),
+  author: z.string(),
+  content_markdown: z.string(),
+  created_at: z.string(),
+})
 export const RunViewSchema = z.object({
   id: z.string(),
   work_item_id: z.string(),
@@ -166,6 +173,43 @@ export const Methods = {
       reason: z.string().optional(),
     }),
     result: WorkItemViewSchema,
+  },
+  "session.bind_agent": {
+    params: z.object({ token: z.string().min(16) }),
+    result: z.object({
+      actor_id: z.string(),
+      run_id: z.string(),
+      project_id: z.string(),
+      work_item_id: z.string(),
+    }),
+  },
+  "work_items.list": {
+    params: z.object({
+      project_id: z.string().optional(),
+      lifecycle: z.array(LifecycleSchema).optional(),
+      limit: z.number().int().positive().max(500).optional(),
+    }),
+    result: z.object({ items: z.array(WorkItemViewSchema) }),
+  },
+  "work_items.get": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({
+      item: WorkItemViewSchema,
+      spec_markdown: z.string(),
+      notes: z.array(NoteViewSchema),
+    }),
+  },
+  "notes.add": {
+    params: MutationMeta.extend({ work_item_id: z.string(), content_markdown: z.string().min(1) }),
+    result: NoteViewSchema,
+  },
+  "handoffs.request": {
+    params: MutationMeta.extend({
+      title: z.string().min(1),
+      summary_markdown: z.string().min(1),
+      kind: z.string().optional(),
+    }),
+    result: z.object({ note: NoteViewSchema, work_item: WorkItemViewSchema }),
   },
   "projects.set_vcs": {
     params: MutationMeta.extend({
@@ -276,6 +320,23 @@ export const Methods = {
   },
 } as const
 export type MethodName = keyof typeof Methods
+
+/**
+ * Lo único que puede pedir una conexión vinculada como actor `agent`
+ * (ADR-0009 §5). El daemon además comprueba en cada operación que el recurso
+ * pertenezca a la capacidad del agente: conocer un id no autoriza nada.
+ */
+export const AGENT_METHODS: readonly MethodName[] = [
+  "daemon.health",
+  "session.bind_agent",
+  "work_items.list",
+  "work_items.get",
+  "work_items.create",
+  "notes.add",
+  "handoffs.request",
+]
+export const ActorKindSchema = z.enum(["human", "agent", "system"])
+export type ActorKind = z.infer<typeof ActorKindSchema>
 export const METHOD_NAMES = Object.keys(Methods) as MethodName[]
 
 /** Notificaciones que emite el daemon. */

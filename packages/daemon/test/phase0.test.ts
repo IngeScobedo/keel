@@ -220,7 +220,8 @@ describe("Fase 0: tarea → worktree real → cambio git → liberación", () =>
     expect(calls.cwd).toEqual([])
     expect(daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("planned")
     expect(stored(daemon, "worktree.released")).toHaveLength(1)
-  })
+    // git real: en el runner de Windows, rescatar y quitar el worktree pasa de 5 s.
+  }, 30_000)
 
   test("un daemon que arranca tras un crash libera el worktree del run interrumpido, rescatando su trabajo", async () => {
     const { dir, daemon, root } = await boot()
