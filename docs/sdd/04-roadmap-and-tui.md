@@ -95,9 +95,10 @@ flowchart LR
 
 ### Fase 0 · Core daemon e IPC — semanas 1–2
 
-- [ ] Resolver mediante ADR la convivencia/transición Mirador–Keel antes de
-      cambiar paquetes existentes. Lo cubre ADR-0001 (repo nuevo, nada se
-      importa de Mirador). Falta que el humano lo pase a Aceptado.
+- [x] Resolver mediante ADR la convivencia/transición Mirador–Keel antes de
+      cambiar paquetes existentes. Resuelto por ADR-0001: Keel es un repo y un
+      producto nuevos, Mirador queda como archivo y donante de fixtures, y se
+      heredan reglas, no paquetes. Confirmado por el humano el 2026-10-23.
 - [x] Daemon TypeScript sobre Bun (ADR-0003; Rust se reabre sólo con sus
       disparadores medidos), migraciones SQLite WAL, eventos, outbox y comandos
       idempotentes. Evidencia: `packages/daemon/test/commands.test.ts` y
