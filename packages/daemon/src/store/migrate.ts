@@ -9,7 +9,7 @@
  *   se reescribe, se añade otra migración.
  */
 
-import type { Database } from "bun:sqlite"
+import type { Database, Statement } from "bun:sqlite"
 import { createHash } from "node:crypto"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
@@ -81,13 +81,30 @@ export function migrate(
   opts: { vectorAvailable: boolean },
 ): MigrationStatus[] {
   ensureSchemaTable(db)
-  const out: MigrationStatus[] = []
   const select = db.prepare<{ checksum: string; status: string }, [string]>(
     "SELECT checksum, status FROM schema_migrations WHERE id = ?",
   )
   const insert = db.prepare(
     "INSERT INTO schema_migrations(id, kind, checksum, status) VALUES (?, ?, ?, ?)",
   )
+  // Una sentencia de `prepare` sin finalizar difiere el cierre de la base: en
+  // Windows el archivo queda bloqueado tras `close()` (medido con Bun 1.4.4).
+  try {
+    return applyAll(db, migrations, opts, select, insert)
+  } finally {
+    select.finalize()
+    insert.finalize()
+  }
+}
+
+function applyAll(
+  db: Database,
+  migrations: Migration[],
+  opts: { vectorAvailable: boolean },
+  select: Statement<{ checksum: string; status: string }, [string]>,
+  insert: Statement,
+): MigrationStatus[] {
+  const out: MigrationStatus[] = []
   for (const m of migrations) {
     const row = select.get(m.id)
     if (row) {
@@ -96,7 +113,7 @@ export function migrate(
       if (row.status === "skipped" && m.kind === "vector" && opts.vectorAvailable) {
         db.transaction(() => {
           db.exec(stripConnectionPragmas(m.sql))
-          db.prepare(
+          db.query(
             "UPDATE schema_migrations SET status='applied', applied_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
           ).run(m.id)
         })()
