@@ -172,6 +172,17 @@ expirada, proveedor sin capacidad, sidecar muerto y stream incompleto tienen
 salidas explícitas; no hay fallback de facturación silencioso ni tokens de login
 en los artefactos de prueba.
 
+**Estado del DoD (2026-10-23).**
+
+- Una corrida real de Claude leyó archivos de su worktree y emitió eventos
+  correlacionados ([evidencia](../reviews/2026-10-23-fase1-corrida-real.md)).
+- Auth expirada, proveedor sin capacidad, proceso muerto y stream incompleto
+  tienen salidas explícitas (`outcomes.test.ts`).
+- La redacción impide credenciales en los eventos (`redaction.test.ts` y el grep
+  de CI).
+- Falta el adaptador de Codex (ADR-0008) para la parte de «proveedor sin
+  capacidad» en un segundo proveedor.
+
 ### Fase 2 · Reasoner, complexity gate y lanes — semanas 5–6
 
 - [ ] DAG validado y versionado, estimaciones, C1–C5, roles y scopes por repo.
