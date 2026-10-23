@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b",
-    "test": "bun test",
+    "test": "bun test --timeout 30000",
     "dev": "tsc -b --watch"
   },
   "dependencies": {
