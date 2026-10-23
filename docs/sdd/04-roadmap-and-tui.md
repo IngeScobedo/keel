@@ -104,8 +104,8 @@ flowchart LR
       idempotentes. Evidencia: `packages/daemon/test/commands.test.ts` y
       `outbox.test.ts`.
 - [ ] JSON-RPC por UDS/Named Pipes, permisos de endpoint, snapshot y cursor de
-      reconexión. Hecho sobre UDS (`ipc.test.ts`); falta el Named Pipe de
-      Windows.
+      reconexión. Hecho sobre UDS (`ipc.test.ts`) y sobre Named Pipe en Windows.
+      Falta la ACL de usuario en Windows (propuesta en ADR-0005).
 - [x] Git engine con worktrees aislados, base SHA, cleanup recuperable y
       preservación de cambios. `@keel/git` más
       `packages/daemon/src/workspaces.ts`; evidencia en
