@@ -96,25 +96,36 @@ flowchart LR
 ### Fase 0 · Core daemon e IPC — semanas 1–2
 
 - [ ] Resolver mediante ADR la convivencia/transición Mirador–Keel antes de
-      cambiar paquetes existentes.
-- [ ] Daemon TypeScript sobre Bun (ADR-0003; Rust se reabre sólo con sus
+      cambiar paquetes existentes. Lo cubre ADR-0001 (repo nuevo, nada se
+      importa de Mirador). Falta que el humano lo pase a Aceptado.
+- [x] Daemon TypeScript sobre Bun (ADR-0003; Rust se reabre sólo con sus
       disparadores medidos), migraciones SQLite WAL, eventos, outbox y comandos
-      idempotentes.
+      idempotentes. Evidencia: `packages/daemon/test/commands.test.ts` y
+      `outbox.test.ts`.
 - [ ] JSON-RPC por UDS/Named Pipes, permisos de endpoint, snapshot y cursor de
-      reconexión.
+      reconexión. Hecho sobre UDS (`ipc.test.ts`); falta el Named Pipe de
+      Windows.
 - [x] Git engine con worktrees aislados, base SHA, cleanup recuperable y
       preservación de cambios. `@keel/git` más
       `packages/daemon/src/workspaces.ts`; evidencia en
       `packages/daemon/test/phase0.test.ts`, que cubre la tarea, el worktree
       real, el cambio, el reintento idempotente, la liberación,
       `foreign_key_check` y el crash.
-- [ ] Esquema preparado para múltiples repos aunque el primer recorrido use uno.
+- [x] Esquema preparado para múltiples repos aunque el primer recorrido use uno:
+      `project_repos` y `run_worktrees` (SDD 03), con el repo primario
+      registrado al primer run.
 
 **DoD:** una integración crea workspace/proyecto/tarea, aprovisiona un worktree
 real, registra un cambio Git y libera recursos. Reintentar el comando devuelve
 el mismo resultado; reiniciar entre commit y entrega de outbox conserva el
 evento. `foreign_key_check` y restore pasan. Registrar latencia y entorno de
 Windows y POSIX sin presuponer resultados submilisegundo.
+
+**Estado del DoD (2026-10-23).** Cumplido salvo Windows. La integración completa
+está en `phase0.test.ts`, la caída entre commit y entrega del outbox en
+`outbox.test.ts`, y el restore con `foreign_key_check` en `backup.test.ts`. Las
+latencias POSIX están en [docs/benchmarks](../benchmarks/README.md). La latencia
+de Windows espera al Named Pipe.
 
 ### Fase 1 · Sidecar, autenticación y telemetría — semanas 3–4
 
