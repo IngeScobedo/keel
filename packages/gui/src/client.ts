@@ -38,6 +38,11 @@ export class NativeWire implements Wire {
 }
 
 export const hasNativeShell = () => isTauri()
+
+/** Ruta del daemon por defecto, la misma que usa el daemon; sólo el shell nativo la conoce. */
+export function defaultSocketPath(): Promise<string> {
+  return invoke<string>("ipc_default_path")
+}
 export class KeelClient {
   private readonly wire: Wire
   constructor(wire: Wire) {

@@ -1,4 +1,4 @@
-import type { EventNotification } from "@keel/core"
+import type { EventNotification, Methods } from "@keel/core"
 import {
   ArrowLeft,
   Check,
@@ -9,10 +9,23 @@ import {
   MessageSquare,
   ShieldCheck,
 } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { mutationMeta } from "./client.js"
 import { demoActivity, demoDiff } from "./fixtures.js"
-import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
+import { LiveTaskActions } from "./LiveTaskActions.js"
+import {
+  actorLabel,
+  formatCost,
+  type Run,
+  summarizeEvent,
+  type TaskDetails,
+  type WorkItem,
+} from "./model.js"
 import { Button, Empty, Hint, Modal, Status, Tabs } from "./ui.js"
+import type { useWorkspace } from "./useWorkspace.js"
+
+type Call = ReturnType<typeof useWorkspace>["call"]
+type Detail = ReturnType<(typeof Methods)["work_items.get"]["result"]["parse"]>
 
 const taskTabs = ["Activity", "Plan", "Checklist", "Evidence", "Notes", "Diff"] as const
 export function Inspector({
@@ -26,6 +39,7 @@ export function Inspector({
   onUpdate,
   notes,
   onAddNote,
+  call,
 }: {
   task: WorkItem
   details?: TaskDetails
@@ -37,6 +51,8 @@ export function Inspector({
   onUpdate: (task: WorkItem) => void
   notes: { id: string; text: string }[]
   onAddNote: (text: string) => void
+  /** Sólo en modo live: lectura y acciones contra el daemon. */
+  call?: Call
 }) {
   const [tab, setTab] = useState<(typeof taskTabs)[number]>("Activity")
   const [draft, setDraft] = useState("")
@@ -48,12 +64,39 @@ export function Inspector({
   )
   const current = taskRuns[0]
   const canComplete = demo && task.lifecycle === "needs_review"
-  function post() {
-    if (draft.trim()) {
-      onAddNote(draft.trim())
+  const [detail, setDetail] = useState<Detail | null>(null)
+  const [liveError, setLiveError] = useState("")
+  // Se relee al llegar una nota o un cambio de esta tarea; el evento sólo avisa.
+  const touches = events.filter(
+    (e) =>
+      (e.kind === "note.added" &&
+        (e.payload as { work_item_id?: string } | null)?.work_item_id === task.id) ||
+      (e.kind.startsWith("work_item.") && (e.payload as { id?: string } | null)?.id === task.id),
+  ).length
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `touches` y la revisión sólo disparan la relectura.
+  useEffect(() => {
+    if (demo || !call) return
+    call("work_items.get", { work_item_id: task.id })
+      .then(setDetail)
+      .catch((e: unknown) => setLiveError(e instanceof Error ? e.message : String(e)))
+  }, [demo, call, task.id, task.revision, touches])
+  async function post() {
+    const text = draft.trim()
+    if (!text) return
+    if (demo || !call) {
+      onAddNote(text)
       setDraft("")
+      return
+    }
+    try {
+      await call("notes.add", { ...mutationMeta(), work_item_id: task.id, content_markdown: text })
+      setDraft("")
+      setLiveError("")
+    } catch (e) {
+      setLiveError(e instanceof Error ? e.message : String(e))
     }
   }
+  const daemonNotes = detail?.notes ?? []
   return (
     <div className="page inspector-page">
       <aside className="task-properties">
@@ -64,7 +107,7 @@ export function Inspector({
           <dt>Key</dt>
           <dd className="mono">{task.display_id}</dd>
           <dt>Kind</dt>
-          <dd>Feature</dd>
+          <dd>{demo ? "Feature" : "No disponible"}</dd>
           <dt>Status</dt>
           <dd>
             <Status state={task.visual_state} />
@@ -110,26 +153,30 @@ export function Inspector({
             <Hint>El protocolo aún no entrega el manifest de worktrees.</Hint>
           )}
         </section>
+        {!demo && call && <LiveTaskActions task={task} runs={taskRuns} call={call} onRun={onRun} />}
         <section>
           <h3>Human review</h3>
           <Button icon={ShieldCheck} disabled={!canComplete} onClick={() => setConfirmDone(true)}>
             Approve & close
           </Button>
-          {!demo && <Hint>El cierre humano aún no está disponible en el daemon.</Hint>}
+          {!demo && <Hint>El cierre humano (needs_review → done) aún no tiene comando.</Hint>}
         </section>
       </aside>
       <section className="task-main">
         <div className="breadcrumbs">
           <button type="button" onClick={onBack}>
-            keel-api
+            {demo ? "keel-api" : "Board"}
           </button>
           <ChevronRight size={12} />
           <span className="mono">{task.display_id}</span>
         </div>
         <h1>{task.title}</h1>
         <p className="task-spec">
-          {details?.spec ??
-            "El snapshot actual no incluye spec_markdown. El detalle se conectará cuando exista un método de lectura."}
+          {demo
+            ? (details?.spec ?? "")
+            : detail
+              ? detail.spec_markdown || "Sin especificación."
+              : "Cargando…"}
         </p>
         {task.lifecycle === "blocked" && (
           <div className="callout" data-state="blocked">
@@ -141,25 +188,46 @@ export function Inspector({
             {demo && <code>checkout_api v1 · draft → ready_for_mock</code>}
           </div>
         )}
+        {liveError && (
+          <p className="error-banner" role="alert">
+            {liveError}
+          </p>
+        )}
         <Tabs values={taskTabs} active={tab} onChange={setTab} />
         {tab === "Activity" && (
           <>
             <div className="comment-form">
               <span className="avatar">YO</span>
               <input
-                aria-label="Comentario local"
-                placeholder="Write a local note…"
+                aria-label={demo ? "Comentario local" : "Nota para la tarea"}
+                placeholder={demo ? "Write a local note…" : "Escribe una nota (queda a tu nombre)…"}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") post()
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void post()
                 }}
               />
-              <Button onClick={post} disabled={!draft.trim()}>
+              <Button onClick={() => void post()} disabled={!draft.trim()}>
                 Post
               </Button>
             </div>
-            <Hint>Notas de esta sesión · aún no se guardan en el daemon.</Hint>
+            {demo && <Hint>Notas de esta sesión · aún no se guardan en el daemon.</Hint>}
+            {!demo &&
+              daemonNotes.map((note) => {
+                const who = actorLabel(note.author)
+                return (
+                  <article className="activity-row" key={note.id} data-testid="note">
+                    <span className="role" data-actor={who.role}>
+                      {who.role === "human" ? "human" : who.role === "external" ? "ext" : "agent"}
+                    </span>
+                    <div>
+                      <strong title={note.author}>{who.label}</strong>
+                      <p>{note.content_markdown}</p>
+                    </div>
+                    <time>{new Date(note.created_at).toLocaleTimeString()}</time>
+                  </article>
+                )
+              })}
             {notes.map((note) => (
               <article className="activity-row" key={note.id}>
                 <span className="role">human</span>
@@ -170,33 +238,39 @@ export function Inspector({
                 <time>now</time>
               </article>
             ))}
-            {demo ? (
-              demoActivity.map((entry) => (
-                <article className="activity-row" key={entry.time + entry.actor}>
-                  <span className="role">{entry.role}</span>
-                  <div>
-                    <strong className={entry.role === "human" ? "" : "mono"}>{entry.actor}</strong>
-                    <p>{entry.text}</p>
-                  </div>
-                  <time>{entry.time}</time>
-                </article>
-              ))
-            ) : liveEvents.length ? (
-              liveEvents.map((event) => (
-                <article className="activity-row" key={event.event_seq}>
-                  <span className="mono muted">#{event.event_seq}</span>
-                  <div>
-                    <strong>{event.kind}</strong>
-                    <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-                  </div>
-                  <time>{new Date(event.received_at).toLocaleTimeString()}</time>
-                </article>
-              ))
-            ) : (
-              <Empty title="Sin actividad de ejecución">
-                Crea o ejecuta la tarea desde el CLI para recibir sus eventos.
-              </Empty>
-            )}
+            {demo
+              ? demoActivity.map((entry) => (
+                  <article className="activity-row" key={entry.time + entry.actor}>
+                    <span className="role">{entry.role}</span>
+                    <div>
+                      <strong className={entry.role === "human" ? "" : "mono"}>
+                        {entry.actor}
+                      </strong>
+                      <p>{entry.text}</p>
+                    </div>
+                    <time>{entry.time}</time>
+                  </article>
+                ))
+              : liveEvents.length
+                ? liveEvents.flatMap((event) => {
+                    const s = summarizeEvent(event)
+                    if (!s || event.kind === "note.added") return []
+                    return [
+                      <article className="activity-row" key={event.event_seq}>
+                        <span className="mono muted">#{event.event_seq}</span>
+                        <div>
+                          <strong>{s.title}</strong>
+                          {s.detail && <p className="mono text-block">{s.detail}</p>}
+                        </div>
+                        <time>{new Date(event.received_at).toLocaleTimeString()}</time>
+                      </article>,
+                    ]
+                  })
+                : daemonNotes.length === 0 && (
+                    <Empty title="Sin actividad de ejecución">
+                      Arranca un run desde el panel de la izquierda.
+                    </Empty>
+                  )}
           </>
         )}
         {tab === "Plan" &&
@@ -294,20 +368,25 @@ export function Inspector({
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder="Decisiones, preguntas y siguientes pasos…"
               />
-              <Button onClick={post} disabled={!draft.trim()}>
+              <Button onClick={() => void post()} disabled={!draft.trim()}>
                 Add note
               </Button>
             </div>
-            {notes.length ? (
-              notes.map((note) => (
+            {!demo &&
+              daemonNotes.map((note) => (
                 <p className="note" key={note.id}>
-                  {note.text}
+                  <strong title={note.author}>{actorLabel(note.author).label}: </strong>
+                  {note.content_markdown}
                 </p>
-              ))
-            ) : (
-              <Empty title="Sin notas de sesión" />
-            )}
-            <Hint>Las notas son locales y se reinician al recargar.</Hint>
+              ))}
+            {demo && notes.length
+              ? notes.map((note) => (
+                  <p className="note" key={note.id}>
+                    {note.text}
+                  </p>
+                ))
+              : (demo || daemonNotes.length === 0) && <Empty title="Sin notas" />}
+            {demo && <Hint>Las notas son locales y se reinician al recargar.</Hint>}
           </>
         )}
         {tab === "Diff" &&

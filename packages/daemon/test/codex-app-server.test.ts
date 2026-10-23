@@ -183,6 +183,16 @@ describe("ADR-0008: transporte app_server", () => {
     }
     expect(pending).toBeDefined()
     expect(daemon.repo.getRun(run.id)?.status).toBe("waiting_human")
+    // La lista durable da al humano lo mismo que verá al aprobar: operación redactada y hash.
+    const listed = (await client.call("approvals.list", {})) as {
+      approvals: { id: string; operation_hash: string; work_item_id: string; operation: unknown }[]
+    }
+    expect(listed.approvals).toHaveLength(1)
+    expect(listed.approvals[0]).toMatchObject({
+      id: pending?.id,
+      operation_hash: pending?.operation_hash,
+      operation: { tool: "Bash" },
+    })
     await client.call("approvals.resolve", {
       ...meta(),
       approval_id: pending?.id,

@@ -25,6 +25,7 @@ import { hasNativeShell } from "./client.js"
 import { demoDetails } from "./fixtures.js"
 import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
+import { LiveInbox } from "./LiveInbox.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
 import { RunsList, RunView } from "./RunView.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
@@ -64,7 +65,10 @@ export function App() {
   const [spec, setSpec] = useState("")
   const [submitError, setSubmitError] = useState("")
   const [busy, setBusy] = useState(false)
-  const [path, setPath] = useState("/tmp/keel.sock")
+  const [path, setPath] = useState(workspace.socketPath || "")
+  useEffect(() => {
+    if (workspace.socketPath) setPath(workspace.socketPath)
+  }, [workspace.socketPath])
   const [projectId, setProjectId] = useState("")
   const [localDetails, setLocalDetails] = useState<Record<string, TaskDetails>>({})
   const [switcher, setSwitcher] = useState(false)
@@ -250,9 +254,9 @@ export function App() {
           >
             <item.icon size={17} strokeWidth={1.5} />
             {item.id === "inbox" &&
-              workspace.work_items.some((t) => t.lifecycle === "waiting_human") && (
-                <span className="nav-count">!</span>
-              )}
+              workspace.work_items.some(
+                (t) => t.lifecycle === "waiting_human" || t.visual_state === "waiting_human",
+              ) && <span className="nav-count">!</span>}
           </button>
         ))}
         <div className="rail-spacer" />
@@ -296,6 +300,7 @@ export function App() {
               onRun={openRun}
               onUpdate={workspace.updateDemo}
               notes={sessionNotes[task.id] ?? []}
+              {...(workspace.mode === "live" ? { call: workspace.call } : {})}
               onAddNote={(text) =>
                 setSessionNotes((old) => ({
                   ...old,
@@ -324,13 +329,24 @@ export function App() {
               onTask={() => {
                 if (runTask) openTask(runTask)
               }}
+              {...(workspace.mode === "live" ? { call: workspace.call } : {})}
             />
           ) : (
             <div className="padded">
               <Button onClick={() => setPage("runs")}>Volver a runs</Button>
             </div>
           ))}
-        {page === "inbox" && (
+        {page === "inbox" && workspace.mode === "live" && (
+          <LiveInbox
+            call={workspace.call}
+            tick={workspace.inboxTick}
+            tasks={workspace.work_items}
+            runs={workspace.runs}
+            onTask={openTask}
+            onRun={openRun}
+          />
+        )}
+        {page === "inbox" && workspace.mode !== "live" && (
           <Inbox
             key={workspace.mode}
             demo={demo}
@@ -482,7 +498,7 @@ export function App() {
             <Hint>
               {hasNativeShell()
                 ? "El cascarón Tauri abre el socket; la GUI no lee SQLite. Usa la ruta que reporta el daemon al arrancar."
-                : "Estás en el preview del navegador. La conexión por socket requiere ejecutar el cliente Tauri dentro de WSL; el bridge hacia una ventana Windows está pendiente."}
+                : "Estás en el preview del navegador, que sólo muestra ejemplos. Para hablar con el daemon abre la ventana nativa con «bun run gui:desktop»."}
             </Hint>
             {workspace.mode === "live" && (
               <p className="added">

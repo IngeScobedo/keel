@@ -730,6 +730,18 @@ export class Daemon {
           return { run_id: p.run_id, queued: true }
         },
       ),
+      "approvals.list": (params, ctx) => {
+        requireHuman(ctx, "revisar las aprobaciones")
+        const p = params as Params<"approvals.list">
+        return {
+          approvals: repo
+            .listApprovals(project.project_id, p.state ?? "pending")
+            .map(({ operation_json, ...a }) => ({
+              ...a,
+              operation: JSON.parse(operation_json) as unknown,
+            })),
+        }
+      },
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
         "approvals.resolve",
         (p, uow) => {

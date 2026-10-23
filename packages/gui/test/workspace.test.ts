@@ -2,7 +2,15 @@ import { describe, expect, test } from "bun:test"
 import type { EventNotification } from "@keel/core"
 import { approvalCanResolve } from "../src/approvals.js"
 import { DEMO_PROJECT, demoRuns, demoTasks, makeDemoApprovals } from "../src/fixtures.js"
-import { applyEvent, filterTasks, formatCost, mergeReplay } from "../src/model.js"
+import {
+  actorLabel,
+  applyEvent,
+  filterTasks,
+  formatCost,
+  mergeReplay,
+  summarizeEvent,
+  touchesInbox,
+} from "../src/model.js"
 
 const task = demoTasks[0]
 if (!task) throw new Error("Fixture ausente")
@@ -48,5 +56,29 @@ describe("workspace GUI", () => {
     expect(approvalCanResolve({ ...approval, operation: null }, Date.now(), true)).toBe(false)
     expect(approvalCanResolve({ ...approval, state: "approved" }, Date.now(), true)).toBe(false)
     expect(approvalCanResolve(approval, Date.now(), false)).toBe(false)
+  })
+})
+
+describe("modo live: identidad y resumen de eventos", () => {
+  test("lo que firma un agente nunca se presenta como del humano", () => {
+    expect(actorLabel("agent:ext:01ABC")).toMatchObject({ role: "external" })
+    expect(actorLabel("agent:01RUN0000000000")).toMatchObject({ role: "agent" })
+    expect(actorLabel("human")).toMatchObject({ role: "human", label: "Tú" })
+  })
+  test("el Inbox se relee con aprobaciones, emparejamientos y peticiones de run", () => {
+    for (const k of ["approval.requested", "session.pairing_requested", "run.requested"])
+      expect(touchesInbox(k)).toBe(true)
+    expect(touchesInbox("run.updated")).toBe(false)
+  })
+  test("el timeline resume herramientas y esconde el ruido", () => {
+    const at = { event_seq: 1, project_id: "p", run_id: "r", received_at: "2026-10-23T00:00:00Z" }
+    expect(
+      summarizeEvent({
+        ...at,
+        kind: "hook.PreToolUse",
+        payload: { tool_name: "Bash", tool_input: { command: "ls" } },
+      }),
+    ).toEqual({ title: "Herramienta · Bash", detail: '{"command":"ls"}' })
+    expect(summarizeEvent({ ...at, kind: "projection.updated", payload: {} })).toBeNull()
   })
 })

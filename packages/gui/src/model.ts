@@ -90,3 +90,74 @@ export function applyEvent(
 export function mergeReplay(snapshot: Snapshot, events: EventNotification[], projectId: string) {
   return events.reduce((state, event) => applyEvent(state, event, projectId), snapshot)
 }
+
+/** Quién escribió algo, según el actor que registró el daemon (ADR-0009 §2). */
+export function actorLabel(actor: string): {
+  role: "human" | "agent" | "external" | "system"
+  label: string
+} {
+  if (actor.startsWith("agent:ext:")) return { role: "external", label: "Agente externo" }
+  if (actor.startsWith("agent:"))
+    return { role: "agent", label: `Agente · run ${actor.slice(6, 16)}…` }
+  if (actor === "system" || actor.startsWith("system")) return { role: "system", label: "Keel" }
+  return { role: "human", label: "Tú" }
+}
+
+/** Eventos que cambian lo que el Inbox debe pedir de nuevo al daemon. */
+export function touchesInbox(kind: string): boolean {
+  return (
+    kind.startsWith("approval.") ||
+    kind.startsWith("session.pairing") ||
+    kind === "run.requested" ||
+    kind === "run.request_resolved"
+  )
+}
+
+type Loose = Record<string, unknown>
+const text = (v: unknown, max = 160) => {
+  const s = typeof v === "string" ? v : JSON.stringify(v)
+  return s && s.length > max ? `${s.slice(0, max)}…` : (s ?? "")
+}
+
+/** Resumen legible de un evento del run; `null` si es ruido (proyecciones, deltas). */
+export function summarizeEvent(event: EventNotification): { title: string; detail: string } | null {
+  const p = (event.payload ?? {}) as Loose
+  switch (event.kind) {
+    case "hook.PreToolUse":
+      return { title: `Herramienta · ${String(p.tool_name)}`, detail: text(p.tool_input) }
+    case "approval.requested":
+      return { title: `Pide aprobación · ${String(p.tool)}`, detail: "Revisa el Inbox" }
+    case "approval.resolved":
+      return { title: `Aprobación ${String(p.decision)}`, detail: "" }
+    case "run.updated":
+      return {
+        title: `Estado · ${String(p.status)}`,
+        detail: p.end_reason ? String(p.end_reason) : "",
+      }
+    case "run.failed":
+    case "run.start_failed":
+    case "run.cancelled":
+      return { title: event.kind, detail: text(p.message ?? p) }
+    case "sdk.assistant": {
+      const content = ((p.message as Loose | undefined)?.content ?? []) as Loose[]
+      const said = content.filter((c) => c.type === "text").map((c) => String(c.text))
+      return said.length ? { title: "El agente dice", detail: text(said.join("\n"), 600) } : null
+    }
+    case "sdk.result":
+      return { title: "Resultado", detail: text(p.result ?? p.subtype, 1200) }
+    case "note.added":
+      return {
+        title: `Nota · ${actorLabel(String(p.author)).label}`,
+        detail: text(p.content_markdown, 300),
+      }
+    default:
+      if (event.kind === "codex.app.item/completed" || event.kind === "codex.item.completed") {
+        const item = (p.item ?? {}) as Loose
+        return {
+          title: `Codex · ${String(item.type)}`,
+          detail: text(item.command ?? item.text ?? ""),
+        }
+      }
+      return null
+  }
+}

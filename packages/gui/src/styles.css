@@ -1818,3 +1818,53 @@ progress::-moz-progress-bar {
   --state-bg: var(--color-status-budget-stop-bg);
   --state-border: var(--color-status-budget-stop-border);
 }
+
+/* Acciones contra el daemon (modo live). */
+.live-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.live-actions form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.live-actions label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.live-actions textarea {
+  width: 100%;
+  resize: vertical;
+}
+.scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+  border: 1px solid var(--color-border-subtle);
+  padding: 8px 12px;
+}
+.scope-list label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.raw-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0;
+  color: var(--color-text-secondary);
+}
+.role[data-actor="agent"],
+.role[data-actor="external"] {
+  color: var(--color-accent-default);
+}
+.text-block {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

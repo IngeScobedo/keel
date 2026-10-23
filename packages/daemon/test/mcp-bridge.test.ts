@@ -219,6 +219,7 @@ describe("ADR-0009: puente keel mcp", () => {
       ["work_items.transition", { ...meta(), work_item_id: other.id, to: "planned" }],
       ["runs.start", { ...meta(), work_item_id: other.id, purpose: "plan" }],
       ["approvals.resolve", { ...meta(), approval_id: "x", decision: "approved" }],
+      ["approvals.list", {}],
       ["projects.set_vcs", { ...meta(), vcs: "none" }],
       ["events.subscribe", { after_event_seq: 0 }],
     ] as const)

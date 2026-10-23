@@ -1,9 +1,13 @@
 import type { EventNotification, VisualState } from "@keel/core"
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, GitBranch, Search } from "lucide-react"
 import { useState } from "react"
+import { mutationMeta } from "./client.js"
 import { demoTools } from "./fixtures.js"
-import { formatCost, type Run, type WorkItem } from "./model.js"
+import { formatCost, type Run, summarizeEvent, type WorkItem } from "./model.js"
 import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
+import type { useWorkspace } from "./useWorkspace.js"
+
+const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"])
 
 export function RunsList({
   runs,
@@ -69,6 +73,7 @@ export function RunView({
   events,
   onBack,
   onTask,
+  call,
 }: {
   run: Run
   task?: WorkItem
@@ -76,8 +81,11 @@ export function RunView({
   events: EventNotification[]
   onBack: () => void
   onTask: () => void
+  call?: ReturnType<typeof useWorkspace>["call"]
 }) {
-  const [tab, setTab] = useState<(typeof runTabs)[number]>("Agents")
+  const [tab, setTab] = useState<(typeof runTabs)[number]>(demo ? "Agents" : "Timeline")
+  const [raw, setRaw] = useState(false)
+  const [stopError, setStopError] = useState("")
   const [query, setQuery] = useState("")
   const [expanded, setExpanded] = useState("tool-4")
   const [workersOpen, setWorkersOpen] = useState(true)
@@ -98,10 +106,29 @@ export function RunView({
         <span className="mono">{run.id}</span>
         <Status state={run.visual_state} />
         <div className="toolbar-spacer" />
-        <Button disabled title="El control del run se integra después de los fixes del daemon">
-          Stop run
-        </Button>
+        {demo || !call ? (
+          <Button disabled title="Sólo con el daemon conectado">
+            Stop run
+          </Button>
+        ) : (
+          <Button
+            variant="danger"
+            disabled={TERMINAL.has(run.status)}
+            onClick={() =>
+              call("runs.cancel", { ...mutationMeta(), run_id: run.id }).catch((e: unknown) =>
+                setStopError(e instanceof Error ? e.message : String(e)),
+              )
+            }
+          >
+            Stop run
+          </Button>
+        )}
       </div>
+      {stopError && (
+        <p className="error-banner" role="alert">
+          {stopError}
+        </p>
+      )}
       <div className="run-summary">
         <div>
           <small>RUN</small>
@@ -275,17 +302,32 @@ export function RunView({
                         <code>{tool.wall}</code>
                       </article>
                     ))
-                : runEvents
-                    .filter((event) => event.kind.toLowerCase().includes(query.toLowerCase()))
-                    .map((event) => (
-                      <article key={event.event_seq}>
+                : runEvents.flatMap((event) => {
+                    const s = summarizeEvent(event)
+                    if (!raw && !s) return []
+                    const title = s?.title ?? event.kind
+                    const detail = raw ? JSON.stringify(event.payload, null, 2) : (s?.detail ?? "")
+                    if (!`${title} ${detail}`.toLowerCase().includes(query.toLowerCase())) return []
+                    return [
+                      <article key={event.event_seq} data-testid="timeline-row">
                         <span className="mono muted">#{event.event_seq}</span>
                         <div>
-                          <strong>{event.kind}</strong>
-                          <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+                          <strong>{title}</strong>
+                          {detail &&
+                            (raw ? <pre>{detail}</pre> : <p className="text-block">{detail}</p>)}
                         </div>
-                      </article>
-                    ))}
+                        <time className="mono muted">
+                          {new Date(event.received_at).toLocaleTimeString()}
+                        </time>
+                      </article>,
+                    ]
+                  })}
+              {!demo && (
+                <label className="raw-toggle">
+                  <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} />
+                  Ver todos los eventos en crudo
+                </label>
+              )}
               {!demo && runEvents.length === 0 && (
                 <Empty title="Sin eventos recibidos para este run" />
               )}

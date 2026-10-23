@@ -155,6 +155,16 @@ export const RunRequestViewSchema = z.object({
   run_id: z.string().nullable(),
   created_at: z.string(),
 })
+export const ApprovalViewSchema = z.object({
+  id: z.string(),
+  run_id: z.string(),
+  work_item_id: z.string(),
+  operation_hash: z.string(),
+  /** La operación ya redactada (ADR-0002): herramienta y entrada. */
+  operation: z.unknown(),
+  state: z.enum(["pending", "approved", "denied", "expired", "consumed"]),
+  expires_at: z.string().nullable(),
+})
 export const NoteViewSchema = z.object({
   id: z.string(),
   work_item_id: z.string(),
@@ -326,6 +336,12 @@ export const Methods = {
       approval_id: z.string(),
       state: z.enum(["approved", "denied", "expired", "consumed"]),
     }),
+  },
+  "approvals.list": {
+    params: z.object({
+      state: z.enum(["pending", "approved", "denied", "expired", "consumed"]).optional(),
+    }),
+    result: z.object({ approvals: z.array(ApprovalViewSchema) }),
   },
   "events.subscribe": {
     params: z.object({

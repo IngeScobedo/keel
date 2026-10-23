@@ -12,11 +12,11 @@ bun install
 bun run gui:dev
 ```
 
-Abrir [localhost:5173](http://localhost:5173) en Windows o WSL. El preview usa ejemplos
-rotulados; sus acciones no ejecutan herramientas ni proveedores. Se puede crear
-una tarea local, buscar, inspeccionar runs, revisar diffs y confirmar
-aprobaciones de ejemplo. Preferencia de tema persistente; tareas, comentarios,
-checklist y borradores permanecen sólo durante la sesión.
+Abrir [localhost:5173](http://localhost:5173) en Windows o WSL. El preview usa
+ejemplos rotulados; sus acciones no ejecutan herramientas ni proveedores. Se
+puede crear una tarea local, buscar, inspeccionar runs, revisar diffs y
+confirmar aprobaciones de ejemplo. Preferencia de tema persistente; tareas,
+comentarios, checklist y borradores permanecen sólo durante la sesión.
 
 ```bash
 bun run gui:build
@@ -27,52 +27,57 @@ bunx playwright install chromium
 bun run gui:e2e
 ```
 
-## Ventana nativa
+## Ventana nativa, contra el daemon
+
+Así se prueba con datos reales. En dos terminales, desde la raíz:
 
 ```bash
-bun run gui:desktop
+bun packages/daemon/src/main.ts --root /ruta/a/tu/repo   # imprime el socket
+bun run gui:desktop                                      # abre la ventana
 ```
 
-Requiere los
-[prerrequisitos oficiales de Tauri](https://v2.tauri.app/start/prerequisites/):
-Rust/Cargo y las librerías GTK/WebKit del host Linux. En esta sesión no están
-instalados; el renderer se verificó en Chromium, **el shell Rust no se ha
-compilado ni ejecutado**. No se afirma soporte Windows/WSL remoto terminado.
+La ventana se conecta sola al socket por defecto del daemon (el mismo que
+calcula `ipc/endpoint.ts`) o al último que se usó. Para otro daemon:
+`KEEL_SOCKET=/ruta/al.sock bun run gui:desktop`, o **Project setup → Configurar
+conexión**.
 
-`src-tauri/` contiene el cascarón mínimo de ADR-0003/0005: abre socket Unix
-(POSIX/WSL) o Named Pipe (Windows), correlaciona requests y emite
-notificaciones. No contiene SQLite, SDKs, scheduler ni host de PTY. El daemon
-actual sólo ofrece socket Unix, por lo que la ruta utilizable es ejecutar ambos
-procesos dentro de WSL; el bridge a una GUI Windows sigue pendiente.
+- **Requisitos:** los
+  [prerrequisitos de Tauri](https://v2.tauri.app/start/prerequisites/), es
+  decir, Rust y las librerías GTK/WebKit en Linux.
+- **WSL2:** con WSLg compila y abre la ventana (2026-10-23).
+- **Windows:** compila y `cargo test` habla con el daemon real. Hay que correr
+  daemon y ventana en el mismo lado: un socket AF_UNIX no cruza de WSL2 a
+  Windows.
 
-Al ejecutar la ventana nativa, ir a **Project setup → Configurar conexión** y
-copiar socket y project ID del arranque del daemon. Si se omite project ID, se
-intenta descubrirlo en el primer evento, mientras no exista projects.list. La
-conexión reemplaza por completo los ejemplos por snapshot y eventos IPC.
+`src-tauri/` es un cascarón fino (ADR-0003/0005). Abre el socket, correlaciona
+peticiones, emite las notificaciones y sabe cuál es la ruta por defecto. No
+contiene SQLite, SDKs ni scheduler.
 
 ## Funciones y límites
 
-| Vista                 | Disponible en preview                                                             | Integración real                                                     |
-| --------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| Shell / Board         | Navegación, filtros, lista, palette, tema, creación local                         | Health, snapshot de tareas/runs, creación de tarea por IPC           |
-| Work Item             | Actividad, notas, plan, checklist, evidencia, diff, cierre humano de ejemplo      | Estados y runs; spec/evidencia/DAG/diff necesitan lectura del daemon |
-| Run                   | Árbol plegable, búsqueda de tool calls, timeline, tiempos y costo con procedencia | Timeline de eventos recibidos; lectura de nodos pendiente            |
-| Inbox                 | Dry run, target, scope, hash, TTL y confirmación única                            | Las aprobaciones sin detalle completo quedan deshabilitadas          |
-| Control Plane         | Perfiles, borrador local, workflow, simulador routing, gates y evals              | Endpoints todavía pendientes                                         |
-| Contract Hub          | Versiones v1/v2, dependencia y diff de ejemplo                                    | Versionado y scheduler de contratos pendientes                       |
-| Workbench             | Diff de ejemplo y estados no disponibles                                          | diff.read, PTY/editor/preview pendientes                             |
-| Design Studio / Setup | Estados y matriz de repos del diseño                                              | SDK OpenPencil y configuración federada pendientes                   |
+| Vista                                                 | Con el daemon conectado                                                                                                                                          | Pendiente                                                  |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Board                                                 | Tareas y runs en vivo; crear tarea                                                                                                                               | Repo, prioridad y responsable                              |
+| Tarea                                                 | Especificación y notas del daemon con su autor (Tú, Agente, Agente externo); transiciones humanas; arrancar `plan`/`execute` con Claude o Codex; cancelar un run | Cierre humano `needs_review → done`, diff, plan, evidencia |
+| Run                                                   | Timeline legible (herramientas, mensajes, aprobaciones, estados) y en crudo; detener                                                                             | Árbol de subagentes, base y rama                           |
+| Inbox                                                 | Aprobaciones del gate con comando, hash y vencimiento; sesiones externas (código, tarea, scopes); peticiones de run de agentes; tareas en revisión               | —                                                          |
+| Control Plane, Contract Hub, Workbench, Design Studio | Sólo ejemplos                                                                                                                                                    | Endpoints del daemon                                       |
 
-Los botones sin soporte están deshabilitados. No se implementan un endpoint HTTP
-alternativo, acceso directo al repositorio ni lectura de credenciales. Los
-requests/responses se validan con los esquemas Zod de `@keel/core`.
+Los botones sin soporte están deshabilitados. No hay un endpoint HTTP
+alternativo, la GUI no accede directamente al repositorio y no lee credenciales.
+Las peticiones y las respuestas se validan con los esquemas Zod de `@keel/core`.
+Sin el shell nativo (navegador), la GUI sólo muestra los ejemplos rotulados.
 
 ## Evidencia
 
-Las pruebas Playwright cubren filtros, creation, palette, tree/duration, TTL,
-revisión humana, perfiles, contratos, tema y viewport estrecho. Una prueba con
-el API Tauri simulado verifica el límite IPC y la separación de datos reales
-frente a ejemplos; **no sustituye la prueba de la ventana Tauri**.
+- **Prototipo.** Las pruebas de Playwright cubren filtros, creación, palette,
+  árbol y duración, TTL, revisión humana, perfiles, contratos, tema y viewport
+  estrecho.
+- **Ciclo real.** `e2e/live-daemon.spec.ts` recorre el ciclo contra un daemon
+  real (SQLite, git y socket reales, con proveedores dobles). Un puente
+  sustituye al shell de Tauri, abre el mismo socket y reenvía las mismas tramas.
+  La prueba real con Claude Code y la ventana nativa está en
+  [docs/reviews](../../docs/reviews/2026-10-23-emparejamiento-real.md).
 
 [Handoff de UI](../../docs/reviews/2026-10-14-ui-handoff.md) y
 [fixes del backend para Claude](../../docs/reviews/2026-10-14-backend-handoff.md).

@@ -49,21 +49,22 @@ contenido van escapados. Límite inicial propuesto de 8 MiB; cuerpos mayores usa
 artefactos con tamaño, hash y preview. stdout del sidecar es exclusivamente
 protocolo; diagnósticos saneados van por stderr.
 
-| Operación propuesta                                             | Efecto                                                                 |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `work_items.create`, `work_items.transition`                    | Valida identidad, proyecto, revisión esperada y transición.            |
-| `runs.start`, `runs.pause`, `runs.resume`, `runs.cancel`        | Encola intención durable; devuelve estado observado por el supervisor. |
-| `research.lookup`, `research.publish`, `findings.emit`          | Consulta, publica o vincula investigación y hallazgos.                 |
-| `contracts.publish`, `contracts.transition`, `contracts.depend` | Publica versiones, evidencia y dependencias fijadas.                   |
-| `approvals.resolve`                                             | Consume una aprobación contra el hash exacto de operación y alcance.   |
-| `events.subscribe`                                              | Reproduce eventos después de `event_seq`.                              |
-| `fs.read`, `diff.read`, `pty.attach`                            | Opera sobre target/repo/worktree autorizados.                          |
-| `session.bind_agent`                                            | Vincula la conexión a un run con su token de un solo uso (ADR-0009).   |
-| `work_items.list`, `work_items.get`, `notes.add`                | Lectura y notas; para un agente, sólo en el proyecto y tarea del run.  |
-| `handoffs.request`                                              | Un agente deja nota en su tarea y crea otra en `triage` (ADR-0009).    |
-| `runs.request`, `runs.requests_list`, `runs.request_resolve`    | El agente pide un run; el humano lo aprueba con las reglas de inicio.  |
-| `session.pair`, `session.pair_status`, `session.pair_resolve`   | Sesión externa: pide entrar, espera y el humano aprueba con scopes.    |
-| `projects.set_vcs`, `snapshots.restore`                         | Modo sin VCS confirmado y restauración, sólo humanos (ADR-0010).       |
+| Operación propuesta                                             | Efecto                                                                  |
+| --------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `work_items.create`, `work_items.transition`                    | Valida identidad, proyecto, revisión esperada y transición.             |
+| `runs.start`, `runs.pause`, `runs.resume`, `runs.cancel`        | Encola intención durable; devuelve estado observado por el supervisor.  |
+| `research.lookup`, `research.publish`, `findings.emit`          | Consulta, publica o vincula investigación y hallazgos.                  |
+| `contracts.publish`, `contracts.transition`, `contracts.depend` | Publica versiones, evidencia y dependencias fijadas.                    |
+| `approvals.resolve`                                             | Consume una aprobación contra el hash exacto de operación y alcance.    |
+| `approvals.list`                                                | Aprobaciones pendientes con la operación redactada, hash y vencimiento. |
+| `events.subscribe`                                              | Reproduce eventos después de `event_seq`.                               |
+| `fs.read`, `diff.read`, `pty.attach`                            | Opera sobre target/repo/worktree autorizados.                           |
+| `session.bind_agent`                                            | Vincula la conexión a un run con su token de un solo uso (ADR-0009).    |
+| `work_items.list`, `work_items.get`, `notes.add`                | Lectura y notas; para un agente, sólo en el proyecto y tarea del run.   |
+| `handoffs.request`                                              | Un agente deja nota en su tarea y crea otra en `triage` (ADR-0009).     |
+| `runs.request`, `runs.requests_list`, `runs.request_resolve`    | El agente pide un run; el humano lo aprueba con las reglas de inicio.   |
+| `session.pair`, `session.pair_status`, `session.pair_resolve`   | Sesión externa: pide entrar, espera y el humano aprueba con scopes.     |
+| `projects.set_vcs`, `snapshots.restore`                         | Modo sin VCS confirmado y restauración, sólo humanos (ADR-0010).        |
 
 Los comandos de mutación llevan `request_id`, `idempotency_key` y revisión
 esperada cuando aplique. Identidad humana y permisos provienen de la conexión

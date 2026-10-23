@@ -16,7 +16,7 @@ pub struct Session {
 /// Windows: socket AF_UNIX en %LOCALAPPDATA%\keel\keel.sock (ADR-0005 §1, revisión del
 /// 2026-10-23; el Named Pipe de Bun daba lectura a Todos). tokio sólo tiene UnixStream en
 /// Unix: el socket bloqueante de `uds_windows` se puentea a un DuplexStream con dos hilos.
-/// Sin compilar todavía: no hay toolchain de Rust en el entorno donde se escribió.
+/// Compilado y probado contra el daemon real en Windows con `cargo test` (2026-10-23).
 #[cfg(windows)]
 fn connect_af_unix(path: &str) -> Result<tokio::io::DuplexStream, String> {
     use std::io::{Read, Write};

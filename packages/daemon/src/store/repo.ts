@@ -954,6 +954,40 @@ export class Repo {
       >("SELECT * FROM approval_requests WHERE id = ?")
       .get(id)
   }
+  /** Pendientes: excluye las vencidas aunque el gate aún no las haya marcado. */
+  listApprovals(
+    projectId: string,
+    state: string,
+  ): {
+    id: string
+    run_id: string
+    work_item_id: string
+    operation_hash: string
+    operation_json: string
+    state: string
+    expires_at: string | null
+  }[] {
+    return this.db
+      .query<
+        {
+          id: string
+          run_id: string
+          work_item_id: string
+          operation_hash: string
+          operation_json: string
+          state: string
+          expires_at: string | null
+        },
+        [string, string, string, string]
+      >(
+        `SELECT a.id, a.run_id, r.work_item_id, a.operation_hash, a.operation_json, a.state, a.expires_at
+           FROM approval_requests a JOIN runs r ON r.id = a.run_id
+          WHERE a.project_id = ? AND a.state = ?
+            AND (? <> 'pending' OR a.expires_at IS NULL OR a.expires_at > ?)
+          ORDER BY a.id`,
+      )
+      .all(projectId, state, state, new Date().toISOString())
+  }
   setApproval(
     id: string,
     state: "approved" | "denied" | "expired" | "consumed",

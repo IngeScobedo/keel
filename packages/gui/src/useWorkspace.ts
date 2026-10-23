@@ -1,14 +1,32 @@
-import type { EventNotification } from "@keel/core"
+import type { EventNotification, MethodName, Methods } from "@keel/core"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { KeelClient, mutationMeta, NativeWire } from "./client.js"
+import {
+  defaultSocketPath,
+  hasNativeShell,
+  KeelClient,
+  mutationMeta,
+  NativeWire,
+} from "./client.js"
 import { DEMO_PROJECT, demoRuns, demoTasks } from "./fixtures.js"
-import { applyEvent, mergeReplay, type Snapshot, type WorkItem } from "./model.js"
+import { applyEvent, mergeReplay, type Snapshot, touchesInbox, type WorkItem } from "./model.js"
+
+const SOCKET_KEY = "keel-socket"
+function rememberedSocket(): string | null {
+  try {
+    return localStorage.getItem(SOCKET_KEY)
+  } catch {
+    return null
+  }
+}
 
 export function useWorkspace() {
   const [snapshot, setSnapshot] = useState<Snapshot>({ work_items: demoTasks, runs: demoRuns })
   const [mode, setMode] = useState<"demo" | "connecting" | "live" | "offline">("demo")
   const [events, setEvents] = useState<EventNotification[]>([])
   const [error, setError] = useState("")
+  /** Sube con cada evento que cambia aprobaciones, emparejamientos o peticiones de run. */
+  const [inboxTick, setInboxTick] = useState(0)
+  const [socketPath, setSocketPath] = useState(rememberedSocket() ?? "")
   const [health, setHealth] = useState<{ event_loop_lag_ms: number; rss_bytes: number } | null>(
     null,
   )
@@ -44,6 +62,7 @@ export function useWorkspace() {
         // Listener antes de subscribe: el servidor hace replay antes de responder.
         cleanup.current = await rpc.subscribe((event) => {
           if (generation.current !== currentGeneration) return
+          if (touchesInbox(event.kind)) setInboxTick((n) => n + 1)
           if (!ready) buffered.push(event)
           setEvents((old) =>
             [...old.filter((item) => item.event_seq !== event.event_seq), event].slice(-300),
@@ -66,6 +85,12 @@ export function useWorkspace() {
         setSnapshot(mergeReplay(result.snapshot, buffered, project.current))
         ready = true
         setMode("live")
+        setSocketPath(path)
+        try {
+          localStorage.setItem(SOCKET_KEY, path)
+        } catch {
+          /* Preferencia no crítica. */
+        }
       } catch (e) {
         if (generation.current !== currentGeneration) return
         setError(e instanceof Error ? e.message : "No se pudo conectar al daemon")
@@ -98,6 +123,28 @@ export function useWorkspace() {
       void disconnect()
     },
     [disconnect],
+  )
+  // En la ventana nativa se conecta solo al daemon por defecto (o al último usado).
+  useEffect(() => {
+    if (!hasNativeShell()) return
+    void (async () => {
+      const path = rememberedSocket() ?? (await defaultSocketPath().catch(() => ""))
+      if (!path) return
+      setSocketPath(path)
+      await connect(path, "")
+    })()
+  }, [connect])
+
+  /** Llamada al daemon en modo live; los errores del daemon llegan con su mensaje. */
+  const call = useCallback(
+    async <M extends MethodName>(
+      method: M,
+      params: unknown,
+    ): Promise<ReturnType<(typeof Methods)[M]["result"]["parse"]>> => {
+      if (mode !== "live" || !client.current) throw new Error("Conecta el daemon primero")
+      return client.current.call(method, params)
+    },
+    [mode],
   )
 
   async function create(title: string, spec: string): Promise<WorkItem> {
@@ -145,5 +192,18 @@ export function useWorkspace() {
     setError("")
     setMode("demo")
   }
-  return { ...snapshot, mode, error, health, events, connect, create, showDemo, updateDemo }
+  return {
+    ...snapshot,
+    mode,
+    error,
+    health,
+    events,
+    inboxTick,
+    socketPath,
+    connect,
+    create,
+    showDemo,
+    updateDemo,
+    call,
+  }
 }

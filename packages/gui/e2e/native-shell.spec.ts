@@ -77,6 +77,22 @@ test("native boundary uses validated IPC and live data never mixes with demo tas
               snapshot: { work_items: [item], runs: [] },
             }
           }
+          if (frame.method === "approvals.list")
+            result = {
+              approvals: [
+                {
+                  id: "approval-live",
+                  run_id: "run-live",
+                  work_item_id: "real-task",
+                  operation_hash: "hash-live",
+                  operation: { tool: "Bash", input: { command: "rm -rf build" } },
+                  state: "pending",
+                  expires_at: null,
+                },
+              ],
+            }
+          if (frame.method === "session.pairings_list") result = { pairings: [] }
+          if (frame.method === "runs.requests_list") result = { requests: [] }
           if (frame.method === "work_items.create")
             result = {
               ...item,
@@ -92,6 +108,7 @@ test("native boundary uses validated IPC and live data never mixes with demo tas
   await page.goto("/")
   await page.getByRole("button", { name: "Project setup", exact: true }).click()
   await page.getByRole("button", { name: "Configurar conexión", exact: true }).click()
+  await page.getByLabel("Socket del host").fill("/tmp/keel.sock")
   await page.getByLabel("Project ID (opcional)").fill("real-project")
   await page.getByRole("button", { name: "Connect", exact: true }).click()
   await expect(page.getByRole("dialog")).toContainText("Conectado · 1 tareas")
@@ -101,8 +118,9 @@ test("native boundary uses validated IPC and live data never mixes with demo tas
   await expect(page.locator(".task-card")).toContainText("Real IPC fixture task")
   await expect(page.locator(".status-bar")).toContainText("Costo desconocido")
   await page.getByRole("button", { name: "Inbox", exact: true }).click()
-  await expect(page.getByText("Detalle de operación pendiente")).toBeVisible()
-  await expect(page.getByRole("button", { name: "Approve once", exact: true })).toBeDisabled()
+  // El Inbox en vivo lee la lista durable del daemon, no los eventos sueltos.
+  await expect(page.getByTestId("approval")).toContainText("rm -rf build")
+  await expect(page.getByRole("button", { name: "Aprobar una vez", exact: true })).toBeEnabled()
   await page.getByRole("button", { name: "Board", exact: true }).click()
   await page.getByRole("button", { name: "New task", exact: false }).click()
   await page.getByLabel("Title", { exact: true }).fill("Created through native IPC")
