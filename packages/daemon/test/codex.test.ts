@@ -245,7 +245,8 @@ describe("ADR-0008: adaptador de Codex, transporte sdk", () => {
       const outcome = manifest(run.id).outcome as { category: string }
       expect(outcome.category).not.toBe("completed")
     }
-  })
+    // Tres daemons con su repo git seguidos: en Windows pasa de los 5 s por defecto.
+  }, 30_000)
 
   test("cancelar aborta el turno y el run queda cancelled", async () => {
     const { daemon, start, stored } = boot(hanging)
