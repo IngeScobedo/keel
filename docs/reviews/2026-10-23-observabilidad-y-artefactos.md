@@ -131,3 +131,22 @@ explícita, dentro de su misma transacción.
 - **Publicar al Shared Research Hub (§6).** `shared_researches` exige una
   instancia de agente y un snapshot de repo. Llega con el hub.
 - **El PDF**, que el propio ADR deja para después.
+
+## Windows: respuestas que no llegan dentro de `bun test`
+
+**Qué pasa.** Bun 1.4.4 en Windows, en `test/resources.test.ts`, en «sin grant
+vigente se pregunta». Un agente espera la decisión por la puerta de agentes, y
+el humano la resuelve por la humana. El servidor escribe las dos respuestas en
+el mismo tick, y la traza (`DBG send` y `DBG write`) muestra los bytes escritos
+en cada socket. Aun así, ningún cliente del mismo proceso las recibe y la prueba
+vence.
+
+**Lo que no falla:**
+
+- El mismo flujo en un script fuera de `bun test`, con las mismas consultas cada
+  20 ms, funciona: la denegación llega en unos 2 ms.
+- Linux.
+
+**Mientras tanto.** La prueba se salta en Windows. Hay que reducirlo a un caso
+mínimo para saber si es de Bun, y probar el puente real de un agente en Windows
+antes de darlo por bueno ahí.
