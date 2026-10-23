@@ -29,17 +29,19 @@ bun run gui:e2e
 
 ## Ventana nativa, contra el daemon
 
-Así se prueba con datos reales. En dos terminales, desde la raíz:
-
 ```bash
-bun packages/daemon/src/main.ts --root /ruta/a/tu/repo   # imprime el socket
-bun run gui:desktop                                      # abre la ventana
+bun run gui:desktop
 ```
 
-La ventana se conecta sola al socket por defecto del daemon (el mismo que
-calcula `ipc/endpoint.ts`) o al último que se usó. Para otro daemon:
-`KEEL_SOCKET=/ruta/al.sock bun run gui:desktop`, o **Project setup → Configurar
-conexión**.
+Al abrirse, la ventana busca el daemon en su socket por defecto. Si no hay uno,
+lo arranca desligado (`bun packages/daemon/src/main.ts`, o `KEEL_DAEMON`), y
+cerrar la ventana no lo detiene (ADR-0019 §1). El daemon abre el último proyecto
+usado. Para cambiar de proyecto o abrir otra carpeta (repo o no), usa el
+selector de la cabecera, que muestra siempre la rama, el adelanto o atraso y los
+cambios del repo activo.
+
+Para otro daemon: `KEEL_SOCKET=/ruta/al.sock bun run gui:desktop`, o **Project
+setup → Configurar conexión**.
 
 - **Requisitos:** los
   [prerrequisitos de Tauri](https://v2.tauri.app/start/prerequisites/), es

@@ -3,8 +3,8 @@
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
 import { randomBytes } from "node:crypto"
-import { existsSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { existsSync, realpathSync, statSync } from "node:fs"
+import { basename, dirname, join } from "node:path"
 import {
   AGENT_SCOPES,
   type AgentScope,
@@ -21,6 +21,7 @@ import {
   RUN_START_RULES,
   type TransitionAuthority,
 } from "@keel/core"
+import { GitError, type RepoStatus, repoStatus } from "@keel/git"
 import type { z } from "zod"
 import {
   ClaudeAdapter,
@@ -75,7 +76,11 @@ import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./work
 export type DaemonOptions = {
   dbPath: string
   socketPath: string
-  rootPath: string
+  /**
+   * Proyecto que se abre al arrancar (ADR-0019 §2). Sin él, el último abierto;
+   * si nunca hubo uno, la carpeta actual.
+   */
+  rootPath?: string
   profile?: Partial<ClaudeProfile>
   adapterDeps?: ClaudeAdapterDeps
   /** Perfil de Codex (ADR-0008); el modo suscripción necesita `subscription_enabled`. */
@@ -116,7 +121,9 @@ export class Daemon {
   /** Driver del modo sin VCS, confirmado por el humano (ADR-0010). */
   readonly directFs: DirectFsDriver
   readonly agentTokens: AgentTokens
+  /** Proyecto por defecto: el de `--root` o el último abierto. */
   readonly project: { workspace_id: string; project_id: string }
+  readonly rootPath: string
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
   private readonly approvalWaiters = new Map<string, (d: "approved" | "denied") => void>()
@@ -138,12 +145,15 @@ export class Daemon {
     this.opts = opts
     this.store = openStore(opts.dbPath)
     this.repo = new Repo(this.store.db)
-    this.project = this.repo.ensureDefaultProject(opts.rootPath)
-    this.profile = { ...DEFAULT_PROFILE, cwd: opts.rootPath, ...opts.profile }
+    const root = opts.rootPath ?? this.repo.listProjects()[0]?.root_path ?? process.cwd()
+    this.rootPath = root
+    this.project = this.repo.ensureDefaultProject(root, basename(root))
+    this.repo.touchProject(this.project.project_id)
+    this.profile = { ...DEFAULT_PROFILE, cwd: root, ...opts.profile }
     this.processes = opts.processes ?? defaultProcessTable()
     this.limits = { ...DEFAULT_LIMITS, ...opts.limits }
     this.claude = new ClaudeAdapter({ processes: this.processes, ...opts.adapterDeps })
-    this.codexProfile = { ...DEFAULT_CODEX_PROFILE, cwd: opts.rootPath, ...opts.codex }
+    this.codexProfile = { ...DEFAULT_CODEX_PROFILE, cwd: root, ...opts.codex }
     this.codex = new CodexAdapter(
       { processes: this.processes, ...opts.codexDeps },
       this.codexProfile.transport,
@@ -156,14 +166,14 @@ export class Daemon {
     this.outbox.on(SNAPSHOT_RESTORE, (m) => this.onSnapshotRestore(m.payload as SnapshotRestore))
     this.workspaces = new GitWorktreeDriver({
       repo: this.repo,
-      rootPath: opts.rootPath,
+      rootOf: (id) => this.repo.projectRoot(id) ?? root,
       worktreesDir: opts.worktreesDir ?? defaultWorktreesDir(),
     })
     // Junto a la base: el directorio privado del daemon (`~/.keel`, 0700).
     this.agentTokens = new AgentTokens(opts.tokensDir ?? join(dirname(opts.dbPath), "run-tokens"))
     this.directFs = new DirectFsDriver({
       repo: this.repo,
-      rootPath: opts.rootPath,
+      rootOf: (id) => this.repo.projectRoot(id) ?? root,
       snapshotsDir: opts.snapshotsDir ?? defaultSnapshotsDir(),
     })
     this.toolGate = new ApprovalGate({
@@ -324,7 +334,7 @@ export class Daemon {
       return runCommand(
         this.uowDeps(),
         {
-          projectId: this.project.project_id,
+          projectId: this.projectOfParams(ctx, p),
           actorId: ctx.actor.actor_id,
           idempotencyKey: p.idempotency_key,
           requestHash,
@@ -386,20 +396,22 @@ export class Daemon {
 
   private handlers(): Handlers {
     const repo = this.repo
-    const project = this.project
     return {
-      "daemon.health": () => ({
-        version: "0.0.0",
-        event_loop_lag_ms: Math.round(this.lagMs),
-        rss_bytes: process.memoryUsage().rss,
-        ingest_queue: 0,
-        wal_bytes: existsSync(`${this.opts.dbPath}-wal`)
-          ? Bun.file(`${this.opts.dbPath}-wal`).size
-          : 0,
-        limits: this.limits,
-        spent_today_micro_usd: repo.spentSince(project.project_id, startOfLocalDay()),
-        project: { id: project.project_id, root_path: this.opts.rootPath },
-      }),
+      "daemon.health": (_params, ctx) => {
+        const pid = this.scopeOf(ctx)
+        return {
+          version: "0.0.0",
+          event_loop_lag_ms: Math.round(this.lagMs),
+          rss_bytes: process.memoryUsage().rss,
+          ingest_queue: 0,
+          wal_bytes: existsSync(`${this.opts.dbPath}-wal`)
+            ? Bun.file(`${this.opts.dbPath}-wal`).size
+            : 0,
+          limits: this.limits,
+          spent_today_micro_usd: repo.spentSince(pid, startOfLocalDay()),
+          project: { id: pid, root_path: repo.projectRoot(pid) ?? this.rootPath },
+        }
+      },
       "work_items.create": this.mutation<Params<"work_items.create">>(
         "work_items.create",
         (p, uow, ctx) => {
@@ -586,7 +598,7 @@ export class Daemon {
         requireHuman(ctx, "revisar las peticiones de run")
         const p = params as Params<"runs.requests_list">
         return {
-          requests: repo.listRunRequests(project.project_id, p.state).map(runRequestView),
+          requests: repo.listRunRequests(this.scopeOf(ctx), p.state).map(runRequestView),
         }
       },
       "runs.request_resolve": this.mutation<Params<"runs.request_resolve">>(
@@ -594,8 +606,7 @@ export class Daemon {
         (p, uow, ctx) => {
           requireHuman(ctx, "resolver una petición de run")
           const request = repo.getRunRequest(p.run_request_id)
-          if (!request || request.project_id !== project.project_id)
-            throw rpcError(ErrorCode.notFound, "la petición de run no existe")
+          if (!request) throw rpcError(ErrorCode.notFound, "la petición de run no existe")
           if (request.state !== "pending")
             throw rpcError(ErrorCode.conflict, `la petición ya está ${request.state}`)
           if (p.decision === "reject") {
@@ -672,13 +683,16 @@ export class Daemon {
           }
           if (p.work_item_id !== undefined) {
             const w = repo.getWorkItem(p.work_item_id)
-            if (!w || w.project_id !== project.project_id)
-              throw rpcError(ErrorCode.notFound, "work item no existe")
+            if (!w) throw rpcError(ErrorCode.notFound, "work item no existe")
           }
           const scopes = p.scopes ?? [...AGENT_SCOPES]
+          // La sesión trabaja en el proyecto de la tarea o en el que tiene abierto el humano.
+          const pairProject = p.work_item_id
+            ? (repo.getWorkItem(p.work_item_id)?.project_id ?? this.scopeOf(ctx))
+            : this.scopeOf(ctx)
           const done = repo.resolvePairing(pairing.id, {
             state: p.decision === "approve" ? "approved" : "rejected",
-            project_id: p.decision === "approve" ? project.project_id : null,
+            project_id: p.decision === "approve" ? pairProject : null,
             work_item_id: p.decision === "approve" ? (p.work_item_id ?? null) : null,
             scopes: p.decision === "approve" ? scopes : [],
             decided_by: uow.actorId,
@@ -691,7 +705,7 @@ export class Daemon {
                 actor_id: `agent:ext:${pairing.id}`,
                 kind: "agent",
                 run_id: null,
-                project_id: project.project_id,
+                project_id: pairProject,
                 work_item_id: done.work_item_id,
                 scopes,
                 pairing_id: pairing.id,
@@ -702,12 +716,58 @@ export class Daemon {
           return view
         },
       ),
+      "projects.list": (_params, ctx) => {
+        requireHuman(ctx, "listar los proyectos")
+        return { projects: repo.listProjects().map(projectView), current: this.scopeOf(ctx) }
+      },
+      "projects.open": (params, ctx) => {
+        requireHuman(ctx, "abrir un proyecto")
+        const p = params as Params<"projects.open">
+        let root: string
+        try {
+          root = realpathSync.native(p.path)
+          if (!statSync(root).isDirectory()) throw new Error("no es una carpeta")
+        } catch (e) {
+          throw rpcError(
+            ErrorCode.invalidParams,
+            `no se puede abrir ${p.path}: ${(e as Error).message}`,
+          )
+        }
+        const opened = repo.ensureDefaultProject(root, basename(root) || root)
+        repo.touchProject(opened.project_id)
+        ctx.client.project_id = opened.project_id
+        const view = this.projectViewOf(opened.project_id)
+        this.emitIn(opened.project_id, "project.opened", view)
+        return view
+      },
+      "projects.use": (params, ctx) => {
+        requireHuman(ctx, "cambiar de proyecto")
+        const p = params as Params<"projects.use">
+        if (!repo.projectRoot(p.project_id))
+          throw rpcError(ErrorCode.notFound, "el proyecto no existe")
+        repo.touchProject(p.project_id)
+        ctx.client.project_id = p.project_id
+        return this.projectViewOf(p.project_id)
+      },
+      "projects.status": async (params, ctx) => {
+        const p = params as Params<"projects.status">
+        const pid = this.scopeOf(ctx, p.project_id)
+        const root = repo.projectRoot(pid)
+        if (!root) throw rpcError(ErrorCode.notFound, "el proyecto no existe")
+        let gitStatus: RepoStatus | null = null
+        try {
+          gitStatus = await repoStatus(root)
+        } catch (e) {
+          if (!(e instanceof GitError)) throw e
+        }
+        return { project_id: pid, root_path: root, git: gitStatus }
+      },
       "projects.set_vcs": this.mutation<Params<"projects.set_vcs">>(
         "projects.set_vcs",
         (p, uow, ctx) => {
           // Pasar a sin VCS pierde el aislamiento: lo confirma un humano (ADR-0010 §2).
           requireHuman(ctx, "cambiar el control de versiones del proyecto")
-          const projectId = p.project_id ?? project.project_id
+          const projectId = this.scopeOf(ctx, p.project_id)
           const vcs = repo.setProjectVcs(projectId, p.vcs, uow.actorId)
           const view = { project_id: projectId, ...vcs }
           uow.emit("project.vcs_changed", null, view)
@@ -743,7 +803,7 @@ export class Daemon {
         const p = params as Params<"approvals.list">
         return {
           approvals: repo
-            .listApprovals(project.project_id, {
+            .listApprovals(this.scopeOf(ctx), {
               ...(p.state ? { state: p.state } : {}),
               ...(p.include_resolved ? { includeResolved: true } : {}),
               ...(p.run_id ? { runId: p.run_id } : {}),
@@ -761,7 +821,7 @@ export class Daemon {
         const p = params as Params<"permissions.rules_list">
         return {
           rules: repo
-            .listPermissionRules(project.project_id, p.include_revoked ?? false)
+            .listPermissionRules(this.scopeOf(ctx), p.include_revoked ?? false)
             .map(ruleView),
         }
       },
@@ -770,7 +830,7 @@ export class Daemon {
         (p, uow, ctx) => {
           requireHuman(ctx, "crear una regla de permiso")
           const rule = repo.addPermissionRule({
-            project_id: project.project_id,
+            project_id: uow.projectId,
             tool: p.tool,
             prefix: p.prefix ?? null,
             exact: p.exact ?? false,
@@ -788,8 +848,7 @@ export class Daemon {
         (p, uow, ctx) => {
           requireHuman(ctx, "revocar una regla de permiso")
           const old = repo.getPermissionRule(p.rule_id)
-          if (!old || old.project_id !== project.project_id)
-            throw rpcError(ErrorCode.notFound, "la regla no existe")
+          if (!old) throw rpcError(ErrorCode.notFound, "la regla no existe")
           const rule = repo.revokePermissionRule(p.rule_id, uow.actorId) as PermissionRuleRow
           const view = ruleView(rule)
           uow.emit("permission.rule_revoked", null, view)
@@ -959,7 +1018,7 @@ export class Daemon {
    */
   private scopeOf(ctx: HandlerContext, projectId?: string): string {
     const actor = ctx.actor
-    if (actor.kind !== "agent") return projectId ?? this.project.project_id
+    if (actor.kind !== "agent") return projectId ?? ctx.client.project_id ?? this.project.project_id
     if (actor.run_id !== null) {
       const run = this.repo.getRun(actor.run_id)
       if (!run || !ACTIVE_RUN_STATUSES.includes(run.status))
@@ -974,11 +1033,25 @@ export class Daemon {
     return actor.project_id
   }
 
+  /**
+   * Proyecto de una mutación (ADR-0019 §2): el de la entidad que nombra (tarea,
+   * run, regla), el que pide explícitamente o el de la conexión. Así sus
+   * eventos llegan a quien está suscrito a ese proyecto.
+   */
+  private projectOfParams(ctx: HandlerContext, p: object): string {
+    if (ctx.actor.kind === "agent") return this.scopeOf(ctx)
+    const q = p as { work_item_id?: string; run_id?: string; project_id?: string }
+    const fromItem = q.work_item_id ? this.repo.getWorkItem(q.work_item_id)?.project_id : undefined
+    const fromRun = q.run_id ? this.repo.getRun(q.run_id)?.project_id : undefined
+    return fromItem ?? fromRun ?? this.scopeOf(ctx, q.project_id)
+  }
+
   /** La tarea existe y es del proyecto de la conexión; si no, para un agente es como si no existiera. */
   private workItemIn(ctx: HandlerContext, id: string): WorkItemRow {
-    const projectId = this.scopeOf(ctx)
     const w = this.repo.getWorkItem(id)
-    if (!w || w.project_id !== projectId) throw rpcError(ErrorCode.notFound, "work item no existe")
+    // El humano ve todos sus proyectos; el agente, sólo el suyo.
+    if (!w || (ctx.actor.kind === "agent" && w.project_id !== this.scopeOf(ctx)))
+      throw rpcError(ErrorCode.notFound, "work item no existe")
     return w
   }
 
@@ -1000,7 +1073,6 @@ export class Daemon {
     },
   ): ReturnType<Repo["runView"]> {
     const repo = this.repo
-    const project = this.project
     const w = this.requireWorkItem(p.work_item_id)
     if (p.expected_revision !== undefined && p.expected_revision !== w.revision)
       throw rpcError(ErrorCode.conflict, "la tarea cambió desde la revisión esperada", {
@@ -1033,9 +1105,9 @@ export class Daemon {
     const provider = p.profile ?? "claude"
     if (provider !== "claude" && provider !== "codex")
       throw rpcError(ErrorCode.invalidParams, `perfil desconocido: ${provider} (claude | codex)`)
-    const options = this.runOptions(p.purpose, provider, p.options)
+    const options = this.runOptions(w.project_id, p.purpose, provider, p.options)
     const run = repo.createRun({
-      project_id: project.project_id,
+      project_id: w.project_id,
       work_item_id: w.id,
       purpose: p.purpose,
       // Va en el manifest para que el despacho, aunque llegue tras una caída, use el
@@ -1061,6 +1133,7 @@ export class Daemon {
    * no ejecutan trabajan en la raíz del repo y sólo admiten `ask` o `plan`.
    */
   private runOptions(
+    projectId: string,
     purpose: Params<"runs.start">["purpose"],
     provider: "claude" | "codex",
     o: Params<"runs.start">["options"],
@@ -1071,7 +1144,7 @@ export class Daemon {
         ErrorCode.invalidParams,
         `un run ${purpose} trabaja en la raíz del repo: sólo admite los modos ask o plan`,
       )
-    if (mode === "bypass" && this.repo.getProjectVcs(this.project.project_id).vcs !== "git")
+    if (mode === "bypass" && this.repo.getProjectVcs(projectId).vcs !== "git")
       throw rpcError(
         ErrorCode.invalidParams,
         "bypass sólo existe dentro de un worktree de git; este proyecto no usa git",
@@ -1141,13 +1214,29 @@ export class Daemon {
     })
   }
 
+  private projectViewOf(projectId: string) {
+    const row = this.repo.listProjects().find((x) => x.id === projectId)
+    if (!row) throw rpcError(ErrorCode.notFound, "el proyecto no existe")
+    return projectView(row)
+  }
+
+  /** Un evento del sistema en un proyecto concreto, sin run. */
+  private emitIn(projectId: string, kind: string, payload: unknown): void {
+    runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+      uow.emit(kind, null, payload),
+    )
+  }
+
   private emitSystem(kind: string, runId: string | null, payload: unknown): void {
-    runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => uow.emit(kind, runId, payload))
+    const projectId = runId ? this.repo.getRun(runId)?.project_id : undefined
+    runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+      uow.emit(kind, runId, payload),
+    )
   }
 
   /** Tras un run terminal, la tarea sale de `running` y, si el final lo pide, se encola la liberación. */
   private settleWorkItem(final: RunRow, origin: ReleaseOrigin): void {
-    runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) =>
+    runUnitOfWork(this.uowDeps(), this.systemScope(final.project_id), (uow) =>
       this.settleInTransaction(uow, final, origin),
     )
   }
@@ -1166,8 +1255,9 @@ export class Daemon {
     if (releasesOnFinish(final.status)) this.enqueueRelease(uow, final.id, origin)
   }
 
-  private systemScope() {
-    return { projectId: this.project.project_id, actorId: "system:daemon" }
+  /** Los eventos del sistema van al proyecto de su run; sin run, al proyecto por defecto. */
+  private systemScope(projectId?: string) {
+    return { projectId: projectId ?? this.project.project_id, actorId: "system:daemon" }
   }
 }
 
@@ -1241,6 +1331,12 @@ export function agentEnv(run: RunRow, item: WorkItemRow, who: string): Record<st
     KEEL_RUN_ID: run.id,
     KEEL_ACTOR: `agent:${run.id}`,
   }
+}
+
+function projectView(p: ReturnType<Repo["listProjects"]>[number]) {
+  // Los proyectos de antes de ADR-0019 se llaman «default»: se muestra su carpeta.
+  const name = p.name === "default" ? basename(p.root_path) || p.root_path : p.name
+  return { id: p.id, name, root_path: p.root_path, vcs: p.vcs, last_opened_at: p.last_opened_at }
 }
 
 function ruleView(r: PermissionRuleRow) {

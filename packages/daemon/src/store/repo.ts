@@ -192,7 +192,10 @@ export class Repo {
   }
 
   // --- workspace / proyecto por defecto ---------------------------------------
-  ensureDefaultProject(rootPath: string): { workspace_id: string; project_id: string } {
+  ensureDefaultProject(
+    rootPath: string,
+    name = "default",
+  ): { workspace_id: string; project_id: string } {
     const ws = this.db
       .query<{ id: string }, [string]>("SELECT id FROM work_spaces WHERE root_path = ?")
       .get(rootPath)
@@ -210,11 +213,54 @@ export class Repo {
     const projectId = pr?.id ?? ulid()
     if (!pr)
       this.db
-        .query(
-          "INSERT INTO projects(id, workspace_id, name, slug) VALUES (?, ?, 'default', 'default')",
-        )
-        .run(projectId, workspaceId)
+        .query("INSERT INTO projects(id, workspace_id, name, slug) VALUES (?, ?, ?, 'default')")
+        .run(projectId, workspaceId, name)
     return { workspace_id: workspaceId, project_id: projectId }
+  }
+
+  /** Carpeta de un proyecto: la de su `work_space` (ADR-0019 §2). */
+  projectRoot(projectId: string): string | null {
+    return (
+      this.db
+        .query<{ root_path: string }, [string]>(
+          "SELECT w.root_path FROM projects p JOIN work_spaces w ON w.id = p.workspace_id WHERE p.id = ?",
+        )
+        .get(projectId)?.root_path ?? null
+    )
+  }
+  listProjects(): {
+    id: string
+    name: string
+    root_path: string
+    vcs: string
+    last_opened_at: string | null
+    created_at: string
+  }[] {
+    return this.db
+      .query<
+        {
+          id: string
+          name: string
+          root_path: string
+          vcs: string
+          last_opened_at: string | null
+          created_at: string
+        },
+        []
+      >(
+        `SELECT p.id, p.name, w.root_path, p.vcs, p.last_opened_at, p.created_at
+           FROM projects p JOIN work_spaces w ON w.id = p.workspace_id
+          WHERE p.archived_at IS NULL
+          ORDER BY coalesce(p.last_opened_at, p.created_at) DESC`,
+      )
+      .all()
+  }
+  touchProject(projectId: string): void {
+    this.db
+      .query(
+        "UPDATE projects SET last_opened_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+      )
+      .run(projectId)
   }
 
   // --- repos del proyecto y worktrees de runs (SDD 03) ----------------------------

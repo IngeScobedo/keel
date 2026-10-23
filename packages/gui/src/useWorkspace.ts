@@ -2,6 +2,7 @@ import type { EventNotification, MethodName, Methods } from "@keel/core"
 import { useCallback, useEffect, useRef, useState } from "react"
 import {
   defaultSocketPath,
+  ensureDaemon,
   hasNativeShell,
   KeelClient,
   mutationMeta,
@@ -9,6 +10,9 @@ import {
 } from "./client.js"
 import { DEMO_PROJECT, demoRuns, demoTasks } from "./fixtures.js"
 import { applyEvent, mergeReplay, type Snapshot, touchesInbox, type WorkItem } from "./model.js"
+
+type ProjectView = ReturnType<(typeof Methods)["projects.open"]["result"]["parse"]>
+type RepoState = ReturnType<(typeof Methods)["projects.status"]["result"]["parse"]>
 
 const SOCKET_KEY = "keel-socket"
 function rememberedSocket(): string | null {
@@ -22,6 +26,10 @@ function rememberedSocket(): string | null {
 export function useWorkspace() {
   const [snapshot, setSnapshot] = useState<Snapshot>({ work_items: demoTasks, runs: demoRuns })
   const [mode, setMode] = useState<"demo" | "connecting" | "live" | "offline">("demo")
+  /** Qué hace la ventana mientras no hay conexión: arrancar el daemon o conectar. */
+  const [phase, setPhase] = useState("")
+  const [projects, setProjects] = useState<ProjectView[]>([])
+  const [repo, setRepo] = useState<RepoState | null>(null)
   const [events, setEvents] = useState<EventNotification[]>([])
   const [error, setError] = useState("")
   /** Sube con cada evento que cambia aprobaciones, emparejamientos o peticiones de run. */
@@ -72,6 +80,9 @@ export function useWorkspace() {
           if (ready) setSnapshot((old) => applyEvent(old, event, project.current))
         })
         await rpc.connect(path)
+        // El proyecto pedido queda activo en esta conexión (ADR-0019 §2): lo que se cree
+        // desde aquí va a él.
+        if (projectId) await rpc.call("projects.use", { project_id: projectId })
         const daemonHealth = await rpc.call("daemon.health", {})
         if (generation.current !== currentGeneration) return
         setHealth(daemonHealth)
@@ -90,6 +101,15 @@ export function useWorkspace() {
         setSnapshot(mergeReplay(result.snapshot, buffered, project.current))
         ready = true
         setMode("live")
+        setPhase("")
+        void rpc
+          .call("projects.list", {})
+          .then((r) => setProjects(r.projects))
+          .catch(() => setProjects([]))
+        void rpc
+          .call("projects.status", {})
+          .then(setRepo)
+          .catch(() => setRepo(null))
         setSocketPath(path)
         try {
           localStorage.setItem(SOCKET_KEY, path)
@@ -112,6 +132,10 @@ export function useWorkspace() {
     const timer = setInterval(() => {
       const rpc = client.current
       if (!rpc) return
+      void rpc
+        .call("projects.status", {})
+        .then(setRepo)
+        .catch(() => {})
       void rpc
         .call("daemon.health", {})
         .then(setHealth)
@@ -138,6 +162,15 @@ export function useWorkspace() {
       const path = await defaultSocketPath().catch(() => "")
       if (!path) return
       setSocketPath(path)
+      // Si nadie escucha, la ventana arranca el daemon (ADR-0019 §1); cerrarla no lo detiene.
+      setMode("connecting")
+      setPhase("Arrancando el daemon…")
+      try {
+        await ensureDaemon(path)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      }
+      setPhase("Conectando…")
       await connect(path, "")
     })()
   }, [connect])
@@ -153,6 +186,34 @@ export function useWorkspace() {
     },
     [mode],
   )
+
+  /** Cambia de proyecto: la conexión nueva se suscribe a él y lo deja activo. */
+  const switchProject = useCallback(
+    async (projectId: string) => {
+      if (socketPath) await connect(socketPath, projectId)
+    },
+    [connect, socketPath],
+  )
+  /** Abre una carpeta como proyecto (o la reabre) y cambia a él. */
+  const openProject = useCallback(
+    async (path: string) => {
+      if (!client.current) throw new Error("Conecta el daemon primero")
+      const opened = await client.current.call("projects.open", { path })
+      await switchProject(opened.id)
+      return opened
+    },
+    [switchProject],
+  )
+  // Rama y cambios del repo: al terminar un run o tocar un worktree, se releen.
+  const lastKind = events[events.length - 1]?.kind ?? ""
+  useEffect(() => {
+    if (mode !== "live" || !client.current) return
+    if (!/^(worktree\.|workspace\.|run\.updated)/.test(lastKind)) return
+    void client.current
+      .call("projects.status", {})
+      .then(setRepo)
+      .catch(() => {})
+  }, [lastKind, mode])
 
   async function create(title: string, spec: string): Promise<WorkItem> {
     if (mode === "demo") {
@@ -207,6 +268,11 @@ export function useWorkspace() {
     events,
     inboxTick,
     socketPath,
+    phase,
+    projects,
+    repo,
+    switchProject,
+    openProject,
     connect,
     create,
     showDemo,

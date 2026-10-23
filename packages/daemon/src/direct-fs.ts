@@ -47,7 +47,8 @@ export type FsChanges = { added: string[]; modified: string[]; deleted: string[]
 
 export type DirectFsDeps = {
   repo: Repo
-  rootPath: string
+  /** Carpeta del proyecto (ADR-0019 §2). */
+  rootOf: (projectId: string) => string
   snapshotsDir: string
   limits?: Partial<typeof DEFAULT_SNAPSHOT_LIMITS>
 }
@@ -74,7 +75,8 @@ export class DirectFsDriver implements WorkspaceDriver {
   }
 
   async provision(run: RunRow, _item: WorkItemRow): Promise<Provisioned> {
-    const { repo, rootPath, snapshotsDir } = this.deps
+    const { repo, snapshotsDir } = this.deps
+    const rootPath = this.deps.rootOf(run.project_id)
     if (run.purpose !== "execute") return { ok: true, cwd: rootPath, events: [] }
     const vcs = repo.getProjectVcs(run.project_id)
     if (vcs.vcs !== "none" || !vcs.vcs_none_confirmed_at)

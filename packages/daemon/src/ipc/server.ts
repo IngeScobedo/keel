@@ -74,6 +74,8 @@ export type ClientState = {
   closed: boolean
   /** Fijado por `session.bind_agent`; sin él, la conexión es del actor del servidor. */
   actor?: Actor
+  /** Proyecto abierto por el humano en esta conexión (ADR-0019 §2). */
+  project_id?: string
 }
 
 export const MAX_QUEUED_BYTES = 32 * 1024 * 1024

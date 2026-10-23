@@ -92,6 +92,29 @@ test("native boundary uses validated IPC and live data never mixes with demo tas
               ],
             }
           if (frame.method === "session.pairings_list") result = { pairings: [] }
+          if (frame.method === "projects.use")
+            result = {
+              id: "real-project",
+              name: "real",
+              root_path: "/r",
+              vcs: "git",
+              last_opened_at: null,
+            }
+          if (frame.method === "projects.list")
+            result = {
+              projects: [
+                {
+                  id: "real-project",
+                  name: "real",
+                  root_path: "/r",
+                  vcs: "git",
+                  last_opened_at: null,
+                },
+              ],
+              current: "real-project",
+            }
+          if (frame.method === "projects.status")
+            result = { project_id: "real-project", root_path: "/r", git: null }
           if (frame.method === "runs.requests_list") result = { requests: [] }
           if (frame.method === "work_items.create")
             result = {

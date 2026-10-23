@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod daemon;
 mod transport;
 use serde_json::Value;
 use std::sync::Arc;
@@ -47,6 +48,12 @@ fn ipc_default_path() -> String {
     base.join("keel.sock").to_string_lossy().into_owned()
 }
 
+/// Arranca el daemon si nadie escucha en `path` (ADR-0019 §1).
+#[tauri::command]
+async fn daemon_ensure(path: String) -> Result<String, String> {
+    daemon::ensure(&path).await.map(|(state, _)| state.to_string())
+}
+
 #[tauri::command]
 async fn ipc_disconnect(bridge: State<'_, Bridge>) -> Result<(), String> {
     if let Some(session) = bridge.0.lock().await.take() { session.close(); }
@@ -55,8 +62,10 @@ async fn ipc_disconnect(bridge: State<'_, Bridge>) -> Result<(), String> {
 
 fn main() {
     tauri::Builder::default()
+        // Sólo el diálogo de abrir carpeta (ADR-0019 §2); la ventana no lee archivos.
+        .plugin(tauri_plugin_dialog::init())
         .manage(Bridge::default())
-        .invoke_handler(tauri::generate_handler![ipc_connect, ipc_request, ipc_disconnect, ipc_default_path])
+        .invoke_handler(tauri::generate_handler![ipc_connect, ipc_request, ipc_disconnect, ipc_default_path, daemon_ensure])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar Keel GUI");
 }

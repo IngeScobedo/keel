@@ -63,7 +63,8 @@ export type Released = {
 
 export type WorkspacesDeps = {
   repo: Repo
-  rootPath: string
+  /** Carpeta del proyecto: cada proyecto abierto tiene la suya (ADR-0019 §2). */
+  rootOf: (projectId: string) => string
   worktreesDir: string
   owner?: string
 }
@@ -83,7 +84,8 @@ export class GitWorktreeDriver implements WorkspaceDriver {
 
   /** Prepara dónde corre el run. Nunca rechaza por un repo ausente: devuelve `ok: false`. */
   async provision(run: RunRow, item: WorkItemRow): Promise<Provisioned> {
-    const { repo, rootPath, worktreesDir } = this.deps
+    const { repo, worktreesDir } = this.deps
+    const rootPath = this.deps.rootOf(run.project_id)
     if (run.purpose !== "execute") return { ok: true, cwd: rootPath, events: [] }
     let gitRepo: GitRepo
     try {
@@ -189,7 +191,9 @@ export class GitWorktreeDriver implements WorkspaceDriver {
     }
     let root: GitRepo
     try {
-      root = await this.gitRepo(this.deps.rootPath)
+      const run = this.deps.repo.getRun(runId)
+      if (!run) return out
+      root = await this.gitRepo(this.deps.rootOf(run.project_id))
     } catch (e) {
       if (e instanceof GitError && e.kind === "not_a_repository") return out
       throw e

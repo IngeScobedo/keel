@@ -2040,3 +2040,30 @@ progress::-moz-progress-bar {
 .rule-form input:nth-child(2) {
   flex: 1;
 }
+.repo-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.workspace-popover button[aria-current="true"] {
+  background: var(--color-surface-selected);
+}
+.workspace-popover small.mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+}
+.open-path {
+  display: flex;
+  gap: 6px;
+  padding: 4px 8px 8px;
+}
+.open-path input {
+  flex: 1;
+  min-width: 0;
+}

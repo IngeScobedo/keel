@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "Eventos del transporte IPC en la ventana local; sin acceso a archivos ni shell.",
+  "description": "Eventos del transporte IPC y el diálogo de abrir carpeta (ADR-0019 §2); sin acceso a archivos ni shell.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }

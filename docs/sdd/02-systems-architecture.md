@@ -66,6 +66,7 @@ protocolo; diagnósticos saneados van por stderr.
 | `runs.request`, `runs.requests_list`, `runs.request_resolve`                | El agente pide un run; el humano lo aprueba con las reglas de inicio.                                                                                |
 | `session.pair`, `session.pair_status`, `session.pair_resolve`               | Sesión externa: pide entrar, espera y el humano aprueba con scopes.                                                                                  |
 | `projects.set_vcs`, `snapshots.restore`                                     | Modo sin VCS confirmado y restauración, sólo humanos (ADR-0010).                                                                                     |
+| `projects.list`, `projects.open`, `projects.use`, `projects.status`         | Varios proyectos por daemon (ADR-0019 §2): abrir una carpeta, cambiar el activo de la conexión y leer rama, HEAD y cambios.                          |
 
 Los comandos de mutación llevan `request_id`, `idempotency_key` y revisión
 esperada cuando aplique. Identidad humana y permisos provienen de la conexión

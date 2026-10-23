@@ -39,6 +39,11 @@ export class NativeWire implements Wire {
 
 export const hasNativeShell = () => isTauri()
 
+/** Arranca el daemon si nadie escucha en `path` (ADR-0019 §1): `running` o `started`. */
+export function ensureDaemon(path: string): Promise<string> {
+  return invoke<string>("daemon_ensure", { path })
+}
+
 /** Ruta del daemon por defecto, la misma que usa el daemon; sólo el shell nativo la conoce. */
 export function defaultSocketPath(): Promise<string> {
   return invoke<string>("ipc_default_path")

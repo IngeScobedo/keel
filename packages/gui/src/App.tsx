@@ -7,6 +7,8 @@ import {
   Command,
   FileText,
   FolderGit2,
+  FolderOpen,
+  GitBranch,
   Inbox as InboxIcon,
   LayoutGrid,
   Moon,
@@ -79,6 +81,28 @@ export function App() {
     {},
   )
   const demo = workspace.mode === "demo"
+  const [openPath, setOpenPath] = useState("")
+  const currentProject = workspace.projects.find((p) => p.id === workspace.health?.project?.id)
+  async function openFolder(path: string) {
+    try {
+      await workspace.openProject(path)
+      setOpenPath("")
+      setPage("board")
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e))
+      setConnection(true)
+    }
+  }
+  async function pickFolder() {
+    // Diálogo nativo (tauri-plugin-dialog, ADR-0019 §2); en el navegador no existe.
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog")
+      const chosen = await open({ directory: true, multiple: false, title: "Abrir proyecto" })
+      if (typeof chosen === "string") await openFolder(chosen)
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e))
+    }
+  }
   const details = demo ? { ...demoDetails, ...localDetails } : {}
   const task = workspace.work_items.find((item) => item.id === selectedTask)
   const run = workspace.runs.find((item) => item.id === selectedRun)
@@ -171,13 +195,68 @@ export function App() {
             icon={FolderGit2}
             onClick={() => setSwitcher((value) => !value)}
             aria-expanded={switcher}
+            aria-label="Proyecto"
           >
-            {demo ? "keel-api" : repoName(workspace.health?.project?.root_path)}
+            {demo
+              ? "keel-api"
+              : currentProject?.name || repoName(workspace.health?.project?.root_path)}
             <ChevronDown size={12} />
           </Button>
+          {!demo && workspace.repo?.git && <RepoBadge git={workspace.repo.git} />}
+          {!demo && workspace.repo && !workspace.repo.git && (
+            <span className="repo-badge muted">sin git</span>
+          )}
           {switcher && (
             <div className="workspace-popover">
-              <h3>Workspace</h3>
+              <h3>Proyectos</h3>
+              {workspace.projects.map((p) => (
+                <button
+                  type="button"
+                  key={p.id}
+                  aria-current={p.id === currentProject?.id ? "true" : undefined}
+                  onClick={() => {
+                    setSwitcher(false)
+                    setPage("board")
+                    void workspace.switchProject(p.id)
+                  }}
+                >
+                  <FolderGit2 size={15} />
+                  {p.name}
+                  <small className="mono">{p.root_path}</small>
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={workspace.mode !== "live"}
+                onClick={() => {
+                  setSwitcher(false)
+                  void pickFolder()
+                }}
+              >
+                <FolderOpen size={15} />
+                Abrir carpeta…<small>Elige un repo o carpeta del disco</small>
+              </button>
+              <form
+                className="open-path"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (!openPath.trim()) return
+                  setSwitcher(false)
+                  void openFolder(openPath.trim())
+                }}
+              >
+                <input
+                  aria-label="Ruta de la carpeta"
+                  placeholder="/ruta/al/repo"
+                  value={openPath}
+                  onChange={(e) => setOpenPath(e.target.value)}
+                  disabled={workspace.mode !== "live"}
+                />
+                <button type="submit" className="button" disabled={workspace.mode !== "live"}>
+                  Abrir
+                </button>
+              </form>
+              <h3>Otros</h3>
               <button
                 type="button"
                 onClick={() => {
@@ -222,7 +301,7 @@ export function App() {
               : workspace.mode === "live"
                 ? `keeld · ${workspace.health?.project?.root_path ?? "proyecto"}`
                 : workspace.mode === "connecting"
-                  ? "Connecting…"
+                  ? workspace.phase || "Connecting…"
                   : "Daemon offline"}
           </button>
         </div>
@@ -551,6 +630,29 @@ export function App() {
     </div>
   )
 }
+/** Rama, adelanto o atraso y cambios del repo del proyecto activo. */
+function RepoBadge({
+  git,
+}: {
+  git: {
+    branch: string | null
+    head: string | null
+    ahead: number
+    behind: number
+    changed: number
+  }
+}) {
+  return (
+    <span className="repo-badge" data-testid="repo-badge" title={git.head ?? "sin commits"}>
+      <GitBranch size={12} />
+      {git.branch ?? `HEAD ${git.head?.slice(0, 7) ?? "—"}`}
+      {git.ahead > 0 && <span>↑{git.ahead}</span>}
+      {git.behind > 0 && <span>↓{git.behind}</span>}
+      {git.changed > 0 && <span className="amber">{git.changed} cambios</span>}
+    </span>
+  )
+}
+
 /** Último segmento de la carpeta que sirve el daemon, con `/` o `\\`. */
 function repoName(root: string | undefined) {
   if (!root) return "daemon"

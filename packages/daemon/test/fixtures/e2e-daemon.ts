@@ -17,6 +17,8 @@ import { replayQuery } from "../replay.ts"
 
 const dir = mkdtempSync(join(tmpdir(), "keel-e2e-"))
 initRepo(join(dir, "repo"))
+// Un segundo repo para abrirlo desde la GUI (ADR-0019 §2).
+const otherRepo = initRepo(join(dir, "otro"))
 const daemon = new Daemon({
   dbPath: join(dir, "keel.sqlite"),
   socketPath: join(dir, "keel.sock"),
@@ -36,7 +38,7 @@ const daemon = new Daemon({
 })
 daemon.start()
 process.stdout.write(
-  `${JSON.stringify({ socket: daemon.server.path, project_id: daemon.project.project_id })}\n`,
+  `${JSON.stringify({ socket: daemon.server.path, project_id: daemon.project.project_id, other_repo: otherRepo })}\n`,
 )
 
 let stopping = false

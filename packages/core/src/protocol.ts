@@ -193,6 +193,13 @@ export const ApprovalViewSchema = z.object({
   /** Quién decidió (humano o regla); null si nadie todavía. */
   decision_actor: z.string().nullable().optional(),
 })
+export const ProjectViewSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  root_path: z.string(),
+  vcs: z.string(),
+  last_opened_at: z.string().nullable(),
+})
 export const NoteViewSchema = z.object({
   id: z.string(),
   work_item_id: z.string(),
@@ -327,6 +334,40 @@ export const Methods = {
       scopes: z.array(AgentScopeSchema).optional(),
     }),
     result: PairingViewSchema,
+  },
+  /** ADR-0019 §2: proyectos abiertos en este daemon, el más reciente primero. */
+  "projects.list": {
+    params: z.object({}),
+    result: z.object({ projects: z.array(ProjectViewSchema), current: z.string() }),
+  },
+  /** Abre (o reabre) la carpeta como proyecto y lo deja activo en esta conexión. */
+  "projects.open": {
+    params: z.object({ path: z.string().min(1) }),
+    result: ProjectViewSchema,
+  },
+  /** Cambia el proyecto activo de esta conexión. */
+  "projects.use": {
+    params: z.object({ project_id: z.string() }),
+    result: ProjectViewSchema,
+  },
+  /** Rama, HEAD, upstream y cambios del repo del proyecto (`@keel/git`). */
+  "projects.status": {
+    params: z.object({ project_id: z.string().optional() }),
+    result: z.object({
+      project_id: z.string(),
+      root_path: z.string(),
+      git: z
+        .object({
+          branch: z.string().nullable(),
+          head: z.string().nullable(),
+          upstream: z.string().nullable(),
+          ahead: z.number().int(),
+          behind: z.number().int(),
+          changed: z.number().int(),
+          untracked: z.number().int(),
+        })
+        .nullable(),
+    }),
   },
   "projects.set_vcs": {
     params: MutationMeta.extend({

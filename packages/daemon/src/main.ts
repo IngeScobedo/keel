@@ -1,5 +1,6 @@
 /**
  * Entrada del daemon:  bun packages/daemon/src/main.ts [--db ruta] [--socket ruta] [--root dir]
+ * Sin --root abre el último proyecto; los demás se abren desde la GUI (projects.open).
  * Defaults: ~/.keel/keel.sqlite y el endpoint de ADR-0005 §1 (ipc/endpoint.ts): socket Unix
  * en $XDG_RUNTIME_DIR/keel/keel.sock (fallback ~/.keel/keel.sock), Named Pipe en Windows.
  *
@@ -17,10 +18,11 @@
  * Puente MCP para agentes (ADR-0009); lo lanza el proveedor de cada run:
  *   main.ts mcp    (lee KEEL_RUN_TOKEN_FILE y KEEL_SOCKET del entorno)
  */
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { Daemon } from "./daemon.js"
+import { IpcClient } from "./ipc/client.js"
 import { defaultEndpoint } from "./ipc/endpoint.js"
 import type { Limits } from "./limits.js"
 import { runBridge } from "./mcp/bridge.js"
@@ -82,10 +84,29 @@ if (import.meta.main && process.argv[2] === "mcp") {
   maintenance(process.argv[2])
 } else if (import.meta.main) {
   const d = defaultPaths()
+  const socketPath = arg("--socket") ?? d.socketPath
+  // Un daemon por usuario (ADR-0019 §1): si ya hay uno vivo en el endpoint, éste se
+  // retira en vez de pisar su socket. Lo que quedó de una caída sí se reemplaza.
+  if (await daemonAlive(socketPath)) {
+    console.log(`keel daemon ya está corriendo en ${socketPath}`)
+    process.exit(0)
+  }
+  const dbPath = arg("--db") ?? d.dbPath
+  // Y una base por daemon: dos daemons con sockets distintos sobre la misma base serían
+  // dos escritores con dos outbox.
+  const holder = readLock(dbPath)
+  if (holder && holder.socket !== socketPath && (await daemonAlive(holder.socket))) {
+    console.error(`otro daemon usa ${dbPath} (socket ${holder.socket}); no arranco`)
+    process.exit(1)
+  }
+  writeFileSync(`${dbPath}.lock`, JSON.stringify({ pid: process.pid, socket: socketPath }), {
+    mode: 0o600,
+  })
   const daemon = new Daemon({
-    dbPath: arg("--db") ?? d.dbPath,
-    socketPath: arg("--socket") ?? d.socketPath,
-    rootPath: arg("--root") ?? process.cwd(),
+    dbPath,
+    socketPath,
+    // Sin --root: el último proyecto abierto (la GUI arranca el daemon así, ADR-0019 §1).
+    ...(arg("--root") ? { rootPath: arg("--root") as string } : {}),
     limits: limitsFromArgs(),
     codex: {
       subscription_enabled: process.argv.includes("--codex-subscription"),
@@ -110,9 +131,35 @@ if (import.meta.main && process.argv[2] === "mcp") {
     // Apagado ordenado: los runs y liberaciones en curso terminan antes de cerrar la base.
     void daemon.idle().finally(() => {
       daemon.stop()
+      if (readLock(dbPath)?.pid === process.pid) rmSync(`${dbPath}.lock`, { force: true })
       process.exit(0)
     })
   }
   process.on("SIGINT", bye)
   process.on("SIGTERM", bye)
+}
+
+/** ¿Responde un daemon en ese endpoint? Un socket huérfano no responde. */
+async function daemonAlive(path: string): Promise<boolean> {
+  let c: IpcClient | null = null
+  try {
+    c = await IpcClient.connect(path)
+    await Promise.race([
+      c.call("daemon.health", {}),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("sin respuesta")), 2000)),
+    ])
+    return true
+  } catch {
+    return false
+  } finally {
+    c?.close()
+  }
+}
+
+function readLock(dbPath: string): { pid: number; socket: string } | null {
+  try {
+    return JSON.parse(readFileSync(`${dbPath}.lock`, "utf8")) as { pid: number; socket: string }
+  } catch {
+    return null
+  }
 }

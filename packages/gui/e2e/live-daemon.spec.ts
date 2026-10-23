@@ -12,7 +12,7 @@ import { expect, type Page, test } from "@playwright/test"
 
 const FIXTURE = join(import.meta.dirname, "..", "..", "daemon", "test", "fixtures", "e2e-daemon.ts")
 
-type Daemon = { proc: ChildProcess; socket: string; project_id: string }
+type Daemon = { proc: ChildProcess; socket: string; project_id: string; other_repo: string }
 async function bootDaemon(): Promise<Daemon> {
   const proc = spawn("bun", [FIXTURE], { stdio: ["pipe", "pipe", "inherit"] })
   const line = await new Promise<string>((resolve, reject) => {
@@ -20,7 +20,10 @@ async function bootDaemon(): Promise<Daemon> {
     rl.once("line", resolve)
     proc.once("exit", (code) => reject(new Error(`el daemon salió con ${code}`)))
   })
-  return { proc, ...(JSON.parse(line) as { socket: string; project_id: string }) }
+  return {
+    proc,
+    ...(JSON.parse(line) as { socket: string; project_id: string; other_repo: string }),
+  }
 }
 
 /** Cliente NDJSON mínimo: el mismo que usa el shell nativo, sin lógica. */
@@ -78,6 +81,7 @@ async function nativeShell(page: Page, daemon: Daemon) {
     "__keelNative",
     async (command: string, args: { path?: string; frame?: { id: string } }) => {
       if (command === "ipc_default_path") return daemon.socket
+      if (command === "daemon_ensure") return "running"
       if (command === "ipc_connect") {
         line?.sock.destroy()
         line = await Line.open(args.path as string, (frame) => {
@@ -250,4 +254,16 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   if (process.env.KEEL_E2E_SHOTS)
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "task.png"), fullPage: true })
   external.sock.destroy()
+
+  // 4. Otro proyecto: abrirlo por ruta, ver su rama y que sus tareas no se mezclan.
+  await page.getByRole("button", { name: "Proyecto" }).click()
+  await page.getByLabel("Ruta de la carpeta").fill(daemon.other_repo)
+  await page.getByRole("button", { name: "Abrir", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Proyecto" })).toContainText("otro")
+  await expect(page.getByTestId("repo-badge")).toContainText("main")
+  await expect(page.locator(".task-card")).toHaveCount(0)
+  await page.getByRole("button", { name: "Proyecto" }).click()
+  await page.locator(".workspace-popover").getByRole("button", { name: /^repo/ }).click()
+  await expect(page.getByRole("button", { name: "Proyecto" })).toContainText("repo")
+  await expect(page.locator(".task-card")).toHaveCount(1)
 })
