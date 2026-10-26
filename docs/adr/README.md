@@ -29,16 +29,17 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0017](./0017-contexto-para-agentes-y-busqueda.md)              | Contexto para agentes: tarea vinculada, recursos MCP y búsqueda                                                      | Aceptado (2026-10-23) | Media      |
 | [0018](./0018-identidad-del-agente-en-el-sistema.md)            | Identidad del agente fuera de las tools: dos puertas, shell aislada y atribución                                     | Aceptado (2026-10-23) | **Máxima** |
 | [0019](./0019-uso-interactivo-desde-la-gui.md)                  | Uso interactivo desde la GUI: daemon de usuario, proyectos, conversación y permisos                                  | Aceptado (2026-10-23) | Alta       |
-| [0020](./0020-chat-del-run-como-superficie-de-foco.md)          | El chat del run como superficie de foco: tarjetas por intención, aprobaciones por patrón y control en vivo           | Propuesto             | Alta       |
+| [0020](./0020-chat-del-run-como-superficie-de-foco.md)          | El chat del run como superficie de foco: tarjetas por intención, aprobaciones por patrón y control en vivo           | Aceptado (2026-10-26) | Alta       |
 
 ## Estado
 
 Todos están **Aceptados**: 0008, 0009 y 0010 el 2026-10-22; 0001 a 0007 y 0011 a
-0019 el 2026-10-23, por el humano. Los escribió Claude a petición del humano a
-partir del SDD, los ADRs de Mirador, el canvas de pen.dev y los docs oficiales
-de Anthropic verificados en su fecha. Uno nuevo nace como **Propuesto** y sólo
-el humano lo acepta; uno aceptado no se edita: se supersede, y las desviaciones
-que se encuentren al implementarlo van a `../reviews/`.
+0019 el 2026-10-23; 0020 el 2026-10-26, por el humano. Los escribió Claude a
+petición del humano a partir del SDD, los ADRs de Mirador, el canvas de pen.dev
+y los docs oficiales de Anthropic verificados en su fecha. Uno nuevo nace como
+**Propuesto** y sólo el humano lo acepta; uno aceptado no se edita: se
+supersede, y las desviaciones que se encuentren al implementarlo van a
+`../reviews/`.
 
 ## Orden de lectura
 

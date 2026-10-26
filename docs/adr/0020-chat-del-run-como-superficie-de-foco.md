@@ -1,6 +1,6 @@
 # ADR-0020: El chat del run como superficie de foco: tarjetas por intención, aprobaciones por patrón y control en vivo
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-26)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Alta
 - **Relacionados:** ADR-0001 (adopta `deny-on-timeout` de ADR-0004 de Mirador;
