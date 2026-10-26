@@ -174,6 +174,39 @@ SDK avisa que `allowedTools` con nombres pelados auto-aprueba antes de
 `canUseTool` (`CLAUDE_SDK_CAN_USE_TOOL_SHADOWED`): para gatear todo, el perfil
 debe vaciar `allowedTools` y decidir en `PreToolUse`.
 
+## Tercera corrida (2026-10-26) — el método sobre el harness del proyecto (ADR-0021)
+
+`bun spikes/sdk-capabilities/src/method-probe.ts`. Usa `claude` 2.1.310 y haiku,
+con un repo de prueba que el spike crea en un temporal. El repo trae:
+
+- un `CLAUDE.md` con una palabra clave;
+- un `.claude/settings.json` con `permissions.allow: ["Bash(touch:*)"]` y un
+  hook `PreToolUse` que bloquea la palabra «prohibido»;
+- una skill `saludo`.
+
+Además hay un plugin local `keel-method` con la skill `grilling` y el agente
+`keel-reviewer`.
+
+| Prueba                  | Configuración                                                    | Resultado                                                                                                                                                                                                                               |
+| ----------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Harness del proyecto    | `settingSources: ["project"]`                                    | El agente leyó el `CLAUDE.md` («ZORZAL») y usó la skill `saludo`. El hook del proyecto bloqueó `echo prohibido` y el agente no lo reformuló.                                                                                            |
+| `permissions.allow`     | la regla `Bash(touch:*)`, `touch d.txt` exacto, sin hook de Keel | `canUseTool` **sí** se llamó: en un directorio que Claude Code no marca como de confianza, la regla no auto-aprobó. En un repo de confianza podría hacerlo; no se mide porque la confianza vive en `~/.claude.json` (ADR-0002 regla 2). |
+| Hook de Keel            | `PreToolUse` que devuelve `permissionDecision: "ask"`            | `touch b.txt` pasó por `canUseTool`. Es la garantía, sin depender de la confianza.                                                                                                                                                      |
+| Plugin de Keel          | `plugins: [{ type: "local", path }]`                             | `init` lista la skill `keel-method:grilling`, el agente `keel-method:keel-reviewer` y el plugin. El agente usó ambos sin tocar el repo.                                                                                                 |
+| Modo `plan` con Keel    | `permissionMode: "plan"` y `canUseTool` que niega todo           | `ls` corrió sin preguntar. Claude Code rechazó `touch` y `Write` por su cuenta, sin llegar al gate. El agente intentó `ExitPlanMode`; Keel la negó y siguió en plan. Nada se escribió.                                                  |
+| Modo `plan` permitiendo | el hook de Keel con `ask` y `canUseTool` que permite todo        | El agente llamó a `ExitPlanMode`, la aprobación lo sacó de plan y escribió. El modo `plan` no es una frontera: lo es el gate de Keel.                                                                                                   |
+
+Consecuencias para la implementación de ADR-0021:
+
+- Las etapas de sólo lectura corren en modo `plan`, y Keel niega lo que llegue a
+  su gate, incluida `ExitPlanMode`. Al negarla, Keel le recuerda al agente que
+  avance con su tool de etapas.
+- El hook `PreToolUse` de Keel devuelve `ask` para lo que casen las reglas
+  `allow` del proyecto. Así ninguna se salta el gate, sea cual sea la confianza
+  del directorio.
+- El método se entrega como plugin local generado por Keel, y el harness del
+  proyecto con `settingSources: ["project"]`.
+
 ## Qué cambia en los ADRs
 
 - ADR-0002: `cost_kind = estimated` con Claude en sesión de suscripción (precio
