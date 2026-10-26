@@ -52,6 +52,7 @@ export function Inspector({
   call,
   tasks,
   onOpenTask,
+  onCloseTask,
 }: {
   task: WorkItem
   details?: TaskDetails
@@ -68,6 +69,8 @@ export function Inspector({
   /** ADR-0022: todas las tareas, para el plan de una feature. */
   tasks?: WorkItem[]
   onOpenTask?: (item: WorkItem) => void
+  /** ADR-0027: cerrar a mano con motivo y evidencia. */
+  onCloseTask?: () => void
 }) {
   const [tab, setTab] = useState<(typeof taskTabs)[number]>("Activity")
   const [draft, setDraft] = useState("")
@@ -182,10 +185,25 @@ export function Inspector({
         )}
         <section>
           <h3>Human review</h3>
-          <Button icon={ShieldCheck} disabled={!canComplete} onClick={() => setConfirmDone(true)}>
-            Approve & close
-          </Button>
-          {!demo && <Hint>El cierre humano (needs_review → done) aún no tiene comando.</Hint>}
+          {demo ? (
+            <Button icon={ShieldCheck} disabled={!canComplete} onClick={() => setConfirmDone(true)}>
+              Approve & close
+            </Button>
+          ) : (
+            <>
+              <Button
+                icon={ShieldCheck}
+                disabled={!onCloseTask || task.lifecycle === "done" || task.lifecycle === "running"}
+                onClick={() => onCloseTask?.()}
+              >
+                Cerrar a mano
+              </Button>
+              <Hint>
+                Para trabajo hecho fuera de Keel: con motivo y evidencia (ADR-0027). Lo trabajado en
+                Keel se cierra con su plan de cierre.
+              </Hint>
+            </>
+          )}
         </section>
       </aside>
       <section className="task-main">

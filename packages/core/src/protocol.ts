@@ -595,6 +595,25 @@ export const Methods = {
     }),
     result: WorkItemViewSchema,
   },
+  /**
+   * ADR-0027: cierre humano de una tarea, con su motivo y su evidencia (un enlace o
+   * un texto que diga dónde está el trabajo). Sólo por la puerta humana.
+   */
+  "work_items.close": {
+    params: MutationMeta.extend({
+      work_item_id: z.string(),
+      reason: z.string().trim().min(3).max(2_000),
+      evidence: z
+        .object({
+          url: z.string().url().max(2_000).optional(),
+          text: z.string().trim().min(3).max(2_000).optional(),
+        })
+        .refine((e) => e.url !== undefined || e.text !== undefined, {
+          message: "la evidencia necesita un enlace o un texto",
+        }),
+    }),
+    result: WorkItemViewSchema,
+  },
   "work_items.transition": {
     params: MutationMeta.extend({
       work_item_id: z.string(),

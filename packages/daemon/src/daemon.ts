@@ -143,7 +143,7 @@ import {
   type WorkItemRow,
 } from "./store/repo.js"
 import { CredentialService } from "./vault/credentials.js"
-import { type KeyStore, systemKeyStore } from "./vault/keystore.js"
+import { type KeyStore, noKeyStore } from "./vault/keystore.js"
 import {
   authorizedKeysLine,
   fingerprint,
@@ -202,7 +202,7 @@ export type DaemonOptions = {
   processes?: ProcessTable
   /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
   limits?: Partial<Limits>
-  /** ADR-0025 §2: dónde vive la llave maestra del vault; por defecto, el llavero del sistema. */
+  /** ADR-0025 §2: dónde vive la llave maestra del vault; por defecto ninguno (main.ts pasa el del sistema). */
   keystore?: KeyStore
   /** ADR-0025 §4: el ejecutable de `keel askpass`; por defecto, un envoltorio en el estado de Keel. */
   askpass?: string
@@ -323,7 +323,9 @@ export class Daemon {
     const stateDir = dirname(opts.dbPath)
     this.vault = new Vault({
       db: this.store.db,
-      keystore: opts.keystore ?? systemKeyStore(),
+      // La librería no toca el llavero del sistema salvo que se lo pidan (main.ts lo hace):
+      // las pruebas y otros consumidores no escriben en el llavero del usuario.
+      keystore: opts.keystore ?? noKeyStore(),
       emit: (kind, payload) =>
         runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => uow.emit(kind, null, payload)),
     })
@@ -816,6 +818,78 @@ export class Daemon {
           return { note, work_item: workItem }
         },
       ),
+      "work_items.close": this.mutation<Params<"work_items.close">>(
+        "work_items.close",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "cerrar una tarea")
+          const w = this.requireWorkItem(p.work_item_id)
+          if (repo.liveRunFor(w.id))
+            throw rpcError(
+              ErrorCode.invalidTransition,
+              "la tarea tiene un run vivo: detenlo antes de cerrarla",
+            )
+          // ADR-0027 §3: una feature se cierra cuando sus hijas terminaron.
+          const pending = repo.childrenOf(w.id).filter((c) => c.lifecycle !== "done")
+          if (pending.length)
+            throw rpcError(
+              ErrorCode.invalidTransition,
+              `la feature tiene ${pending.length} subtarea(s) sin terminar: ciérralas primero`,
+            )
+          const plan = repo
+            .listApprovals(w.project_id)
+            .find(
+              (a) =>
+                JSON.parse(a.operation_json).tool === "git.plan" &&
+                repo.getRun(a.run_id)?.work_item_id === w.id,
+            )
+          if (plan)
+            throw rpcError(
+              ErrorCode.invalidTransition,
+              "la tarea tiene un plan de cierre esperando: ese plan es su cierre",
+            )
+          const closed = this.transition(uow, w, "done", "human_close", {
+            ...(p.expected_revision === undefined ? {} : { expectedRevision: p.expected_revision }),
+            reason: `cerrada a mano: ${p.reason}`,
+          })
+          // La evidencia queda con su procedencia (ADR-0012): quién, cuándo y que fue a mano.
+          const body = [
+            `# Cierre a mano de ${w.display_id}`,
+            "",
+            `**Motivo:** ${p.reason}`,
+            ...(p.evidence.url ? ["", `**Enlace:** ${p.evidence.url}`] : []),
+            ...(p.evidence.text ? ["", p.evidence.text] : []),
+          ].join("\n")
+          const stored = this.artifacts.put(body, "text/markdown")
+          const ev = repo.addEvidence({
+            project_id: w.project_id,
+            work_item_id: w.id,
+            run_id: null,
+            kind: "manual_close",
+            title: p.evidence.url ? `Cerrada a mano · ${p.evidence.url}` : "Cerrada a mano",
+            artifact_ref: stored.ref,
+            sha256: stored.sha256,
+            metadata: { reason: p.reason, url: p.evidence.url ?? null },
+            provenance: {
+              actor: actorOf(ctx),
+              captured_at: nowIso(),
+              source: { manual_close: true },
+            },
+            created_by: ctx.actor.actor_id,
+            supersedes_id: null,
+          })
+          uow.emit("evidence.attached", null, this.evidenceView(ev))
+          uow.emit("task.closed", null, {
+            work_item_id: w.id,
+            manual: true,
+            reason: p.reason,
+            url: p.evidence.url ?? null,
+            approver: ctx.actor.actor_id,
+          })
+          const view = repo.workItemView(closed)
+          uow.emit("work_item.updated", null, view)
+          return view
+        },
+      ),
       "work_items.transition": this.mutation<Params<"work_items.transition">>(
         "work_items.transition",
         (p, uow) => {
@@ -823,7 +897,7 @@ export class Daemon {
           if (p.to === "done")
             throw rpcError(
               ErrorCode.invalidTransition,
-              "`done` requiere el cierre humano explícito (SDD 01 §3); aún no implementado",
+              "`done` es el cierre humano: usa work_items.close con motivo y evidencia (ADR-0027)",
             )
           const updated = this.transition(uow, w, p.to, "human", {
             ...(p.expected_revision === undefined ? {} : { expectedRevision: p.expected_revision }),

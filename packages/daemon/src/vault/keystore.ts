@@ -26,6 +26,9 @@ async function run(
     stdout: "pipe",
     stderr: "pipe",
   })
+  // Un llavero bloqueado puede esperar un diálogo que en WSL nunca aparece: se corta.
+  const timer = setTimeout(() => p.kill(), 10_000)
+  p.exited.finally(() => clearTimeout(timer))
   // El error del llavero nunca lleva el secreto: es el mensaje de la herramienta.
   const [out, err] = await Promise.all([
     new Response(p.stdout).text(),

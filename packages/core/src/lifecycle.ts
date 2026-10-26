@@ -33,6 +33,11 @@ export const LIFECYCLE_EDGES: readonly LifecycleEdge[] = [
   { from: "failed", to: "planned", by: "human" }, // replanificación
   { from: "needs_review", to: "planned", by: "human" }, // cambios solicitados
   { from: "needs_review", to: "done", by: "human_close" }, // aceptación humana
+  // ADR-0027: cierre a mano, con motivo y evidencia, de trabajo hecho fuera de Keel.
+  { from: "triage", to: "done", by: "human_close" },
+  { from: "planned", to: "done", by: "human_close" },
+  { from: "waiting_human", to: "done", by: "human_close" },
+  { from: "failed", to: "done", by: "human_close" },
 ]
 
 export function lifecycleEdge(from: Lifecycle, to: Lifecycle): LifecycleEdge | null {

@@ -176,8 +176,13 @@ export function summarizeEvent(event: EventNotification): { title: string; detai
 export function moveTarget(
   item: WorkItem,
   column: BoardColumn,
-): { to: "planned" } | { reason: string } | null {
+): { to: "planned" } | { close: true } | { reason: string } | null {
   if (item.board_status === column) return null
+  // ADR-0027: soltar en Done pide el cierre a mano, con motivo y evidencia.
+  if (column === "completed")
+    return allowedTransitions(item.lifecycle, "human_close").includes("done")
+      ? { close: true }
+      : { reason: `${item.display_id} está ${item.lifecycle}: detén su run antes de cerrarla.` }
   if (item.stage)
     return { reason: `${item.display_id} la lleva el método: avanza con «Trabajar» y sus gates.` }
   if (column === "todo")
@@ -188,7 +193,5 @@ export function moveTarget(
     return { reason: "Pasa a In Progress cuando arranca un run: ábrela y trabájala." }
   if (column === "in_review")
     return { reason: "Llega a In Review cuando un run termina con su evidencia." }
-  if (column === "completed")
-    return { reason: "Termina al aprobar su plan de cierre; todavía no hay cierre manual." }
   return { reason: "Una tarea no vuelve a Backlog: el lifecycle no tiene esa transición." }
 }

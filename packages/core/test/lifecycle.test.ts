@@ -21,7 +21,17 @@ describe("SDD 01 §3: máquina de estados de la tarea", () => {
 
   test("done sólo se alcanza por cierre humano y es terminal", () => {
     const intoDone = LIFECYCLE_EDGES.filter((e) => e.to === "done")
-    expect(intoDone).toEqual([{ from: "needs_review", to: "done", by: "human_close" }])
+    // ADR-0027: además de la revisión, el cierre a mano con evidencia.
+    expect(intoDone.every((e) => e.by === "human_close")).toBe(true)
+    expect(intoDone.map((e): string => e.from).sort()).toEqual([
+      "failed",
+      "needs_review",
+      "planned",
+      "triage",
+      "waiting_human",
+    ])
+    expect(checkTransition("running", "done", "human_close").ok).toBe(false)
+    expect(checkTransition("blocked", "done", "human_close").ok).toBe(false)
     expect(LIFECYCLE_EDGES.some((e) => e.from === "done")).toBe(false)
     expect(checkTransition("needs_review", "done", "human")).toMatchObject({
       ok: false,

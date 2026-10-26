@@ -34,6 +34,7 @@ import type { Limits } from "./limits.js"
 import { runBridge } from "./mcp/bridge.js"
 import { backupStore, restoreStore } from "./store/backup.js"
 import { openStore } from "./store/db.js"
+import { systemKeyStore } from "./vault/keystore.js"
 
 export function defaultPaths(): { dbPath: string; socketPath: string } {
   const home = join(homedir(), ".keel")
@@ -128,6 +129,8 @@ if (import.meta.main && process.argv[2] === "askpass") {
     // Sin --root: el último proyecto abierto (la GUI arranca el daemon así, ADR-0019 §1).
     ...(arg("--root") ? { rootPath: arg("--root") as string } : {}),
     limits: limitsFromArgs(),
+    // ADR-0025 §2: el daemon del usuario guarda la llave maestra en su llavero.
+    keystore: systemKeyStore(),
     codex: {
       subscription_enabled: process.argv.includes("--codex-subscription"),
       ...(arg("--codex-model") ? { model: arg("--codex-model") as string } : {}),

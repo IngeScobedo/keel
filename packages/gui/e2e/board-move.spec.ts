@@ -11,7 +11,7 @@ test.afterEach(async () => {
   await new Promise((r) => daemon.proc.once("exit", r))
 })
 
-test("arrastrar de Backlog a Ready la planifica; a Done se explica por qué no", async ({
+test("arrastrar de Backlog a Ready la planifica; a Done la cierra con motivo y evidencia", async ({
   page,
 }) => {
   test.setTimeout(45_000)
@@ -30,7 +30,14 @@ test("arrastrar de Backlog a Ready la planifica; a Done se explica por qué no",
   await expect(column("Backlog")).toContainText("mover esta tarjeta")
   await card.dragTo(column("Ready"))
   await expect(column("Ready")).toContainText("mover esta tarjeta")
+  await card.dragTo(column("In Review"))
+  await expect(page.getByTestId("move-note")).toContainText("evidencia")
+  // ADR-0027: soltar en Done abre el cierre a mano con motivo y evidencia.
   await card.dragTo(column("Done"))
-  await expect(page.getByTestId("move-note")).toContainText("plan de cierre")
-  await expect(column("Ready")).toContainText("mover esta tarjeta")
+  const close = page.getByTestId("close-task")
+  await close.getByLabel("Motivo del cierre").fill("se hizo fuera de Keel con la PR")
+  await expect(close.getByRole("button", { name: "Cerrar la tarea" })).toBeDisabled()
+  await close.getByLabel("Enlace de la evidencia").fill("https://github.com/o/r/pull/126")
+  await close.getByRole("button", { name: "Cerrar la tarea" }).click()
+  await expect(column("Done")).toContainText("mover esta tarjeta")
 })

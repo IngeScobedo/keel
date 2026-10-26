@@ -34,9 +34,11 @@ describe("mover tarjetas en el tablero", () => {
     expect(moveTarget(item({}), "in_progress")).toMatchObject({
       reason: expect.stringContaining("run"),
     })
-    expect(moveTarget(item({}), "completed")).toMatchObject({
-      reason: expect.stringContaining("cierre"),
-    })
+    // ADR-0027: a Done se cierra a mano; con un run vivo, no.
+    expect(moveTarget(item({}), "completed")).toEqual({ close: true })
+    expect(
+      moveTarget(item({ lifecycle: "running", board_status: "in_progress" }), "completed"),
+    ).toMatchObject({ reason: expect.stringContaining("detén su run") })
     expect(
       moveTarget(item({ lifecycle: "running", board_status: "in_progress" }), "todo"),
     ).toMatchObject({ reason: expect.stringContaining("running") })

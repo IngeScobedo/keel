@@ -211,6 +211,7 @@ export function Board({
   onNew,
   demo,
   onTransition,
+  onClose,
 }: {
   tasks: WorkItem[]
   runs: Run[]
@@ -221,6 +222,8 @@ export function Board({
   demo: boolean
   /** Con el daemon: pide la transición humana (`work_items.transition`). */
   onTransition?: (item: WorkItem, to: "planned") => Promise<void>
+  /** ADR-0027: soltar en Done abre el cierre a mano. */
+  onClose?: (item: WorkItem) => void
 }) {
   const [dragging, setDragging] = useState<WorkItem | null>(null)
   const [over, setOver] = useState<BoardColumn | null>(null)
@@ -234,6 +237,11 @@ export function Board({
     if (!t) return
     if ("reason" in t) {
       setMoveNote(t.reason)
+      return
+    }
+    if ("close" in t) {
+      setMoveNote("")
+      onClose?.(item)
       return
     }
     setMoveNote("")
@@ -350,7 +358,7 @@ export function Board({
                       dragging && over === column.id
                         ? (() => {
                             const t = moveTarget(dragging, column.id)
-                            return t && "to" in t ? "ok" : t ? "no" : undefined
+                            return t && ("to" in t || "close" in t) ? "ok" : t ? "no" : undefined
                           })()
                         : undefined
                     }

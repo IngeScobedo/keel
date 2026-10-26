@@ -24,6 +24,7 @@ import {
 } from "lucide-react"
 import { type FormEvent, useEffect, useState } from "react"
 import { Board } from "./Board.js"
+import { CloseTask } from "./CloseTask.js"
 import { ControlPlane } from "./ControlPlane.js"
 import { hasNativeShell, mutationMeta } from "./client.js"
 import { demoDetails } from "./fixtures.js"
@@ -75,6 +76,8 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState("")
   /** ADR-0024 §3: «preguntar al proyecto…» desde ⌘K. */
   const [question, setQuestion] = useState("")
+  /** ADR-0027: la tarea que se está cerrando a mano. */
+  const [closing, setClosing] = useState<WorkItem | null>(null)
   /** ADR-0025 §6: lo que pidió el agente, para abrir el alta llena en Conexiones. */
   const [setup, setSetup] = useState<SetupPrefill | null>(null)
   useEffect(() => {
@@ -420,6 +423,7 @@ export function App() {
                       reason: "movida en el tablero",
                     })
                   },
+                  onClose: setClosing,
                 }
               : {})}
           />
@@ -440,6 +444,7 @@ export function App() {
               {...(workspace.mode === "live" ? { call: workspace.call } : {})}
               tasks={workspace.work_items}
               onOpenTask={openTask}
+              {...(workspace.mode === "live" ? { onCloseTask: () => setClosing(task) } : {})}
               onAddNote={(text) =>
                 setSessionNotes((old) => ({
                   ...old,
@@ -583,6 +588,9 @@ export function App() {
       </footer>
       {workspace.mode === "live" && (
         <SecretPrompts events={workspace.events} call={workspace.call} />
+      )}
+      {closing && workspace.mode === "live" && (
+        <CloseTask task={closing} call={workspace.call} onClose={() => setClosing(null)} />
       )}
       {palette && (
         <Modal title="Command palette" onClose={() => setPalette(false)}>
