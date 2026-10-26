@@ -187,6 +187,14 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       `runs.request` (el humano aprueba con las reglas de `runs.start`), el
       emparejamiento de sesiones externas con código, tarea opcional y scopes, y
       corridas reales con Claude (vínculo antes del primer turno) y Codex.
+- [x] El chat del run como superficie de foco (ADR-0020, aceptado el
+      2026-10-26). Tarjetas por intención con diff, exploración agrupada y
+      acciones de Keel animadas; tres densidades; permisos en la tarjeta con
+      patrón editable; aprobaciones sin vencimiento; modo, modelo y esfuerzo en
+      vivo; sugerencias de Claude; `AskUserQuestion` y `ExitPlanMode` con sus
+      respuestas. Evidencia: `packages/daemon/test/run-chat.test.ts`,
+      `packages/gui/e2e/run-chat.spec.ts`; lo pendiente en
+      `docs/reviews/2026-10-26-chat-de-foco-implementado.md`.
 - [ ] DAG validado y versionado, estimaciones, C1–C5, roles y scopes por repo.
 - [ ] C1–C2 con un worker; paralelismo superior justificado y acotado por
       presupuesto.

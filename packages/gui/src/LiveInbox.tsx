@@ -163,7 +163,7 @@ export function LiveInbox({
               <header className="section-header">
                 <Hand size={12} className="amber" />
                 <strong>Aprobaciones</strong>
-                <span className="muted">el agente espera; sin respuesta se deniega al vencer</span>
+                <span className="muted">el agente espera por ti; el tiempo nunca aprueba</span>
               </header>
               {live.map((approval) => {
                 const op = operationText(approval.operation)
@@ -176,7 +176,9 @@ export function LiveInbox({
                     <div className="approval-heading">
                       <strong>{op.tool}</strong>
                       <span className="mono muted">{t?.display_id ?? approval.work_item_id}</span>
-                      <span className="mono muted">{left === null ? "" : `${left}s`}</span>
+                      <span className="mono muted">
+                        {left === null ? "sin límite" : `${left}s`}
+                      </span>
                     </div>
                     <div className="approval-body">
                       {op.tool === "git.plan" ? (
@@ -193,14 +195,29 @@ export function LiveInbox({
                           <p className="mono muted">
                             run {approval.run_id} · hash {approval.operation_hash.slice(0, 12)}
                           </p>
-                          <ApprovalActions
-                            approvalId={approval.id}
-                            operationHash={approval.operation_hash}
-                            tool={op.tool}
-                            input={(approval.operation as { input?: unknown } | null)?.input}
-                            call={call}
-                            onDone={() => void refresh()}
-                          />
+                          {/* Una pregunta del agente se contesta con sus opciones, en el chat (ADR-0020 §7). */}
+                          {op.tool === "AskUserQuestion" || op.tool === "ExitPlanMode" ? (
+                            <Button
+                              variant="primary"
+                              onClick={() => {
+                                const r = runs.find((x) => x.id === approval.run_id)
+                                if (r) onRun(r)
+                              }}
+                            >
+                              {op.tool === "AskUserQuestion"
+                                ? "Contestar en el chat"
+                                : "Revisar el plan en el chat"}
+                            </Button>
+                          ) : (
+                            <ApprovalActions
+                              approvalId={approval.id}
+                              operationHash={approval.operation_hash}
+                              tool={op.tool}
+                              input={(approval.operation as { input?: unknown } | null)?.input}
+                              call={call}
+                              onDone={() => void refresh()}
+                            />
+                          )}
                         </>
                       )}
                     </div>

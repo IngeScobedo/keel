@@ -1,11 +1,14 @@
 import type { EventNotification, VisualState } from "@keel/core"
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, GitBranch, Search } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { MODES } from "./Composer.js"
+import { clock } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { demoTools } from "./fixtures.js"
 import { formatCost, type Run, type WorkItem } from "./model.js"
 import { Operations } from "./Operations.js"
 import { RunChat } from "./RunChat.js"
+import type { Density } from "./ToolCards.js"
 import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -82,17 +85,8 @@ export function RunsList({
   )
 }
 const runTabs = ["Agents", "Timeline", "Operaciones", "Cost"] as const
-export function RunView({
-  run,
-  task,
-  demo,
-  events,
-  onBack,
-  onTask,
-  call,
-  runs,
-  onRun,
-}: {
+
+type RunViewProps = {
   run: Run
   task?: WorkItem
   demo: boolean
@@ -103,16 +97,46 @@ export function RunView({
   /** Para mostrar la cadena de runs de una conversación (ADR-0019 §3). */
   runs?: Run[]
   onRun?: (run: Run) => void
-}) {
-  const [tab, setTab] = useState<(typeof runTabs)[number]>(demo ? "Agents" : "Timeline")
-  const [raw, setRaw] = useState(false)
+  /** Abrir otra tarea (la que creó el agente) desde el chat. */
+  onOpenTask?: (id: string) => void
+}
+
+/** Con daemon, el run es un chat de foco (ADR-0020); sin él, la vista de ejemplo. */
+export function RunView(props: RunViewProps) {
+  return props.demo ? <DemoRunView {...props} /> : <LiveRunView {...props} />
+}
+
+const liveTabs = ["Chat", "Operaciones", "Costo", "Eventos"] as const
+const DENSITIES: { id: Density; label: string }[] = [
+  { id: "story", label: "Historia" },
+  { id: "balanced", label: "Equilibrada" },
+  { id: "raw", label: "Cruda" },
+]
+const DENSITY_KEY = "keel-density"
+function initialDensity(): Density {
+  try {
+    const v = localStorage.getItem(DENSITY_KEY)
+    return v === "story" || v === "raw" ? v : "balanced"
+  } catch {
+    return "balanced"
+  }
+}
+
+function LiveRunView({
+  run,
+  task,
+  events,
+  onBack,
+  onTask,
+  call,
+  runs,
+  onRun,
+  onOpenTask,
+}: RunViewProps) {
+  const [tab, setTab] = useState<(typeof liveTabs)[number]>("Chat")
+  const [density, setDensity] = useState<Density>(initialDensity)
   const [stopError, setStopError] = useState("")
   const [query, setQuery] = useState("")
-  const [expanded, setExpanded] = useState("tool-4")
-  const [workersOpen, setWorkersOpen] = useState(true)
-  const tools = demoTools.filter((tool) =>
-    `${tool.name} ${tool.label}`.toLowerCase().includes(query.toLowerCase()),
-  )
   const runEvents = events.filter((event) => event.run_id === run.id)
   // La conversación es la cadena de runs: los padres primero, este al final.
   const chain = new Set<string>([run.id])
@@ -122,6 +146,197 @@ export function RunView({
     r = runs?.find((x) => x.id === parentId)
   }
   const chainEvents = events.filter((e) => e.run_id !== null && chain.has(e.run_id))
+  const where = workspaceOf(run, runEvents)
+  const running = !TERMINAL.has(run.status)
+  const mode = run.options?.permission_mode ?? "ask"
+  const started = runEvents.find((e) => e.kind === "run.created")?.received_at ?? null
+  return (
+    <div className="page run-page run-focus">
+      <header className="rc-head">
+        <Button variant="ghost" icon={ArrowLeft} onClick={onBack} aria-label="Runs" />
+        <button type="button" className="text-link mono" onClick={onTask}>
+          {task?.display_id ?? "Task"}
+        </button>
+        <h1 title={task?.title}>{task?.title ?? run.work_item_id}</h1>
+        <span className="mono muted rc-runid" data-testid="run-id" title="Run">
+          {run.id}
+        </span>
+        <span className="rc-branch mono" title={where.base ? `base ${where.base}` : undefined}>
+          <GitBranch size={12} />
+          {where.branch ?? where.label}
+        </span>
+        {run.isolation && (
+          <span
+            className={`mode-badge isolation-${run.isolation}`}
+            data-testid="isolation"
+            title={ISOLATION_HINT[run.isolation]}
+          >
+            {ISOLATION_LABEL[run.isolation]}
+          </span>
+        )}
+        <div className="toolbar-spacer" />
+        <RunClock run={run} started={started} />
+        <span className={`mode-badge ${mode}`} data-testid="run-mode">
+          {MODES.find((m) => m.id === mode)?.label ?? mode}
+        </span>
+        <div className="segmented" title="Densidad">
+          {DENSITIES.map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              className="button"
+              aria-pressed={density === d.id}
+              onClick={() => {
+                setDensity(d.id)
+                try {
+                  localStorage.setItem(DENSITY_KEY, d.id)
+                } catch {
+                  /* Preferencia no crítica. */
+                }
+              }}
+            >
+              {d.label}
+            </button>
+          ))}
+        </div>
+        <Button
+          variant="danger"
+          disabled={!call || !running}
+          onClick={() =>
+            call?.("runs.cancel", { ...mutationMeta(), run_id: run.id }).catch((e: unknown) =>
+              setStopError(e instanceof Error ? e.message : String(e)),
+            )
+          }
+        >
+          Detener
+        </Button>
+      </header>
+      <div className="rc-tabs">
+        <Tabs values={liveTabs} active={tab} onChange={setTab} />
+      </div>
+      {stopError && (
+        <p className="error-banner" role="alert">
+          {stopError}
+        </p>
+      )}
+      {tab === "Chat" && (
+        <RunChat
+          events={chainEvents}
+          run={run}
+          running={running}
+          density={density}
+          {...(task ? { task } : {})}
+          {...(call ? { call } : {})}
+          {...(onRun ? { onContinued: onRun } : {})}
+          {...(onOpenTask ? { onTask: onOpenTask } : {})}
+        />
+      )}
+      {tab === "Operaciones" &&
+        (call ? (
+          <div className="padded">
+            <Operations call={call} runId={run.id} version={runEvents.length} />
+          </div>
+        ) : (
+          <Empty title="Conecta el daemon para ver las operaciones" />
+        ))}
+      {tab === "Costo" && <CostView run={run} demo={false} />}
+      {tab === "Eventos" && (
+        <div className="padded">
+          <label className="search-field">
+            <Search size={14} />
+            <input
+              aria-label="Buscar eventos"
+              placeholder="Buscar en los eventos…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          <div className="timeline">
+            {runEvents.flatMap((event) => {
+              const detail = JSON.stringify(event.payload, null, 2)
+              if (!`${event.kind} ${detail}`.toLowerCase().includes(query.toLowerCase())) return []
+              return [
+                <article key={event.event_seq} data-testid="timeline-row">
+                  <span className="mono muted">#{event.event_seq}</span>
+                  <div>
+                    <strong>{event.kind}</strong>
+                    <pre>{detail}</pre>
+                  </div>
+                  <time className="mono muted">
+                    {new Date(event.received_at).toLocaleTimeString()}
+                  </time>
+                </article>,
+              ]
+            })}
+            {runEvents.length === 0 && <Empty title="Sin eventos recibidos para este run" />}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** «Trabajando · 02:14» mientras corre; el estado al terminar. */
+function RunClock({ run, started }: { run: Run; started: string | null }) {
+  const [now, setNow] = useState(Date.now)
+  const running = !TERMINAL.has(run.status)
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(t)
+  }, [running])
+  if (run.visual_state === "running" && started)
+    return (
+      <span className="rc-clock" data-state="running">
+        <span className="rc-pulse" /> Trabajando · {clock(started, now)}
+      </span>
+    )
+  return <Status state={run.visual_state} />
+}
+
+function CostView({ run, demo }: { run: Run; demo: boolean }) {
+  return (
+    <div className="cost-view">
+      <h2>Usage & budget</h2>
+      <strong>{formatCost(run)}</strong>
+      <p className="muted">
+        cost_kind: <code>{run.cost_kind}</code>
+      </p>
+      <div className="callout">
+        <h3>
+          {run.cost_kind === "unknown"
+            ? "El proveedor no ha publicado un importe"
+            : run.cost_kind === "estimated"
+              ? "Estimación del runtime"
+              : "Costo observado"}
+        </h3>
+        <p>
+          El costo conserva su procedencia. Una cuota de suscripción no se interpreta como costo por
+          llamada conocido.
+        </p>
+      </div>
+      {demo && (
+        <>
+          <h3>Ejemplo de watchdog</h3>
+          <progress value={run.total_cost_micro_usd ?? 0} max={2_500_000} />
+          <p className="mono">{formatCost(run)} / $2.50 cap de ejemplo</p>
+          <Hint>El watchdog no está implementado en el backend actual.</Hint>
+        </>
+      )}
+    </div>
+  )
+}
+
+function DemoRunView({ run, task, demo, events, onBack, onTask, call }: RunViewProps) {
+  const [tab, setTab] = useState<(typeof runTabs)[number]>(demo ? "Agents" : "Timeline")
+  const [stopError, setStopError] = useState("")
+  const [query, setQuery] = useState("")
+  const [expanded, setExpanded] = useState("tool-4")
+  const [workersOpen, setWorkersOpen] = useState(true)
+  const tools = demoTools.filter((tool) =>
+    `${tool.name} ${tool.label}`.toLowerCase().includes(query.toLowerCase()),
+  )
+  const runEvents = events.filter((event) => event.run_id === run.id)
   const where = workspaceOf(run, runEvents)
   return (
     <div className="page run-page">
@@ -333,22 +548,7 @@ export function RunView({
                 El daemon sólo publica IDs de nodos. En Timeline puedes ver los eventos recibidos.
               </Empty>
             ))}
-          {tab === "Timeline" && !demo && !raw && (
-            <RunChat
-              events={chainEvents}
-              running={!TERMINAL.has(run.status)}
-              runId={run.id}
-              {...(call ? { call } : {})}
-              {...(onRun ? { onContinued: onRun } : {})}
-            />
-          )}
-          {tab === "Timeline" && !demo && (
-            <label className="raw-toggle">
-              <input type="checkbox" checked={raw} onChange={(e) => setRaw(e.target.checked)} />
-              Ver todos los eventos en crudo
-            </label>
-          )}
-          {tab === "Timeline" && (demo || raw) && (
+          {tab === "Timeline" && (
             <div className="timeline">
               {demo
                 ? demoTools
@@ -394,36 +594,7 @@ export function RunView({
             ) : (
               <Empty title="Conecta el daemon para ver las operaciones" />
             ))}
-          {tab === "Cost" && (
-            <div className="cost-view">
-              <h2>Usage & budget</h2>
-              <strong>{formatCost(run)}</strong>
-              <p className="muted">
-                cost_kind: <code>{run.cost_kind}</code>
-              </p>
-              <div className="callout">
-                <h3>
-                  {run.cost_kind === "unknown"
-                    ? "El proveedor no ha publicado un importe"
-                    : run.cost_kind === "estimated"
-                      ? "Estimación del runtime"
-                      : "Costo observado"}
-                </h3>
-                <p>
-                  El costo conserva su procedencia. Una cuota de suscripción no se interpreta como
-                  costo por llamada conocido.
-                </p>
-              </div>
-              {demo && (
-                <>
-                  <h3>Ejemplo de watchdog</h3>
-                  <progress value={run.total_cost_micro_usd ?? 0} max={2_500_000} />
-                  <p className="mono">{formatCost(run)} / $2.50 cap de ejemplo</p>
-                  <Hint>El watchdog no está implementado en el backend actual.</Hint>
-                </>
-              )}
-            </div>
-          )}
+          {tab === "Cost" && <CostView run={run} demo={demo} />}
         </section>
       </div>
     </div>

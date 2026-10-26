@@ -436,6 +436,10 @@ export function App() {
               {...(workspace.mode === "live" ? { call: workspace.call } : {})}
               runs={workspace.runs}
               onRun={openRun}
+              onOpenTask={(id) => {
+                const item = workspace.work_items.find((w) => w.id === id)
+                if (item) openTask(item)
+              }}
             />
           ) : (
             <div className="padded">

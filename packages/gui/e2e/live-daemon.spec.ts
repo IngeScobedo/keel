@@ -1,142 +1,11 @@
 /**
  * La GUI contra un daemon real (SQLite, git y socket reales; proveedores
- * dobles). El shell de Tauri se sustituye por un puente en el proceso de
- * Playwright que abre el mismo socket y reenvía las mismas tramas que
- * `src-tauri/src/transport.rs`; la GUI no nota la diferencia.
+ * dobles), a través del puente de `daemon-bridge.ts`.
  */
-import { type ChildProcess, spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
-import { createConnection, type Socket } from "node:net"
 import { join } from "node:path"
-import { createInterface } from "node:readline"
-import { expect, type Page, test } from "@playwright/test"
-
-const FIXTURE = join(import.meta.dirname, "..", "..", "daemon", "test", "fixtures", "e2e-daemon.ts")
-
-type Daemon = { proc: ChildProcess; socket: string; project_id: string; other_repo: string }
-async function bootDaemon(env: Record<string, string> = {}): Promise<Daemon> {
-  const proc = spawn("bun", [FIXTURE], {
-    stdio: ["pipe", "pipe", "inherit"],
-    env: { ...process.env, ...env },
-  })
-  const line = await new Promise<string>((resolve, reject) => {
-    const rl = createInterface({ input: proc.stdout as NodeJS.ReadableStream })
-    rl.once("line", resolve)
-    proc.once("exit", (code) => reject(new Error(`el daemon salió con ${code}`)))
-  })
-  return {
-    proc,
-    ...(JSON.parse(line) as { socket: string; project_id: string; other_repo: string }),
-  }
-}
-
-/** Cliente NDJSON mínimo: el mismo que usa el shell nativo, sin lógica. */
-class Line {
-  private buf = ""
-  private waiting = new Map<string, (m: Record<string, unknown>) => void>()
-  readonly sock: Socket
-  constructor(sock: Socket, onNotification: (m: unknown) => void) {
-    this.sock = sock
-    sock.setEncoding("utf8")
-    sock.on("data", (chunk: string) => {
-      this.buf += chunk
-      for (let i = this.buf.indexOf("\n"); i >= 0; i = this.buf.indexOf("\n")) {
-        const raw = this.buf.slice(0, i)
-        this.buf = this.buf.slice(i + 1)
-        if (!raw.trim()) continue
-        const m = JSON.parse(raw) as Record<string, unknown>
-        const id = m.id as string | undefined
-        if (id !== undefined && this.waiting.has(id)) {
-          this.waiting.get(id)?.(m)
-          this.waiting.delete(id)
-        } else onNotification(m)
-      }
-    })
-  }
-  static open(path: string, onNotification: (m: unknown) => void = () => {}) {
-    return new Promise<Line>((resolve, reject) => {
-      const sock = createConnection(path, () => resolve(new Line(sock, onNotification)))
-      sock.once("error", reject)
-    })
-  }
-  send(frame: { id: string }) {
-    const p = new Promise<Record<string, unknown>>((r) => this.waiting.set(frame.id, r))
-    this.sock.write(`${JSON.stringify(frame)}\n`)
-    return p
-  }
-  async call(method: string, params: Record<string, unknown> = {}) {
-    const m = await this.send({
-      jsonrpc: "2.0",
-      keel_protocol: 1,
-      id: crypto.randomUUID(),
-      method,
-      params,
-    } as { id: string })
-    if (m.error) throw new Error((m.error as { message: string }).message)
-    return m.result as Record<string, unknown>
-  }
-}
-const meta = () => ({ request_id: crypto.randomUUID(), idempotency_key: crypto.randomUUID() })
-
-/** Sustituye `__TAURI_INTERNALS__` por un puente hacia el socket real. */
-async function nativeShell(page: Page, daemon: Daemon) {
-  let line: Line | null = null
-  await page.exposeFunction(
-    "__keelNative",
-    async (command: string, args: { path?: string; frame?: { id: string } }) => {
-      if (command === "ipc_default_path") return daemon.socket
-      if (command === "daemon_ensure") return "running"
-      if (command === "ipc_connect") {
-        line?.sock.destroy()
-        line = await Line.open(args.path as string, (frame) => {
-          void page.evaluate(
-            (f) => (window as unknown as { __keelPush(f: unknown): void }).__keelPush(f),
-            frame,
-          )
-        })
-        return null
-      }
-      if (command === "ipc_disconnect") {
-        line?.sock.destroy()
-        line = null
-        return null
-      }
-      if (command === "ipc_request") {
-        if (!line) throw new Error("Daemon no conectado")
-        return line.send(args.frame as { id: string })
-      }
-      throw new Error(`comando desconocido ${command}`)
-    },
-  )
-  await page.addInitScript(() => {
-    const callbacks = new Map<number, (event: unknown) => void>()
-    let handler = 0
-    let next = 0
-    const native = window as unknown as { __keelNative(c: string, a: unknown): Promise<unknown> }
-    Object.assign(window, {
-      isTauri: true,
-      __keelPush(frame: unknown) {
-        callbacks.get(handler)?.({ payload: frame })
-      },
-      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
-      __TAURI_INTERNALS__: {
-        transformCallback(callback: (event: unknown) => void) {
-          const id = ++next
-          callbacks.set(id, callback)
-          return id
-        },
-        async invoke(command: string, args: Record<string, unknown>) {
-          if (command === "plugin:event|listen") {
-            handler = Number(args.handler)
-            return 1
-          }
-          if (command === "plugin:event|unlisten") return undefined
-          return native.__keelNative(command, args)
-        },
-      },
-    })
-  })
-}
+import { expect, test } from "@playwright/test"
+import { bootDaemon, type Daemon, Line, meta, nativeShell } from "./daemon-bridge.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -164,35 +33,36 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.getByRole("heading", { name: "Retry con backoff" })).toBeVisible()
   await expect(page.locator(".task-spec")).toHaveText("Reintentos acotados.")
   await page.locator(".live-actions").getByRole("button", { name: "Planear" }).click()
-  await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
+  await expect(page.locator(".rc-head")).toContainText("Succeeded", { timeout: 20_000 })
   // El run se lee como conversación: instrucción, herramientas y respuesta, lo nuevo abajo.
   await expect(page.getByTestId("chat-tool").first()).toBeVisible()
   await expect(page.getByTestId("chat-agent").last()).toBeVisible()
-  await expect(page.locator(".run-summary")).toContainText("raíz del repo")
+  await expect(page.locator(".rc-branch")).toContainText("raíz del repo")
   // Continuar la conversación desde el chat: nace un run hijo y la vista pasa a él.
-  const planUrlRun = await page.locator(".run-page .toolbar > span.mono").textContent()
+  const planUrlRun = await page.getByTestId("run-id").textContent()
   await page.getByLabel("Mensaje al agente").fill("detalla los pasos")
   await page.getByRole("button", { name: "Continuar", exact: true }).click()
-  await expect(page.locator(".run-page .toolbar > span.mono")).not.toHaveText(planUrlRun ?? "")
+  await expect(page.getByTestId("run-id")).not.toHaveText(planUrlRun ?? "")
   await expect(page.getByTestId("chat-divider")).toBeVisible()
   await expect(page.getByTestId("chat-human").last()).toContainText("detalla los pasos")
-  await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
+  await expect(page.locator(".rc-head")).toContainText("Succeeded", { timeout: 20_000 })
 
   // 2. Pasarla a planned y ejecutar con Codex: el comando pide aprobación.
-  await page.locator(".run-page .toolbar .text-link").click()
+  await page.locator(".rc-head .text-link").click()
   await page.getByRole("button", { name: "Mover a planned" }).click()
   await page.getByLabel("Proveedor").selectOption("codex")
   if (process.env.KEEL_E2E_SHOTS)
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "start.png") })
   await page.getByLabel("Instrucción para el agente").fill("approval")
   await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()
-  await expect(page.locator(".run-page .toolbar")).toContainText("Waiting for you", {
+  await expect(page.locator(".rc-head")).toContainText("Waiting for you", {
     timeout: 20_000,
   })
   // La aprobación aparece dentro de la conversación del run; también en el Inbox.
-  await expect(page.getByTestId("chat-approval")).toContainText("pide permiso")
+  await expect(page.getByTestId("chat-approval")).toContainText("Pide permiso para ejecutar")
+  await expect(page.getByTestId("chat-approval")).toContainText("sin límite")
   await expect(page.locator(".chat-approval-input")).not.toBeEmpty()
-  await expect(page.locator(".run-summary")).toContainText("keel/")
+  await expect(page.locator(".rc-branch")).toContainText("keel/")
   if (process.env.KEEL_E2E_SHOTS)
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "run.png") })
   // El Inbox la muestra con las mismas opciones; se decide desde el chat con «Siempre».
@@ -201,14 +71,20 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.getByRole("button", { name: "Runs", exact: true }).click()
   await page.locator("tbody tr").last().getByRole("button").click()
   const chatApproval = page.getByTestId("chat-approval")
-  await chatApproval.getByRole("button", { name: /Siempre: Bash\(touch x:\*\)/ }).click()
-  await expect(chatApproval).toContainText("aprobado")
-  await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
-  await expect(page.locator(".mode-badge.ask")).toHaveText("ask")
+  // ADR-0020 §2: Keel propone el patrón y dice si cubre la orden antes de elegir.
+  await expect(chatApproval.getByLabel("Patrón a aprobar")).toHaveValue("touch x *")
+  await expect(chatApproval).toContainText("cubre esta orden")
+  await chatApproval.getByRole("button", { name: /Siempre en el proyecto/ }).click()
+  // Resuelta, la tarjeta vuelve a ser la del comando y conserva la decisión.
+  await expect(page.getByTestId("chat-tool").filter({ hasText: "touch x" })).toContainText(
+    "aprobado",
+  )
+  await expect(page.locator(".rc-head")).toContainText("Succeeded", { timeout: 20_000 })
+  await expect(page.getByTestId("run-mode")).toHaveText("Preguntar")
   // Operaciones (ADR-0011): el comando de Codex queda como lo que es, sin inventar.
   await page.getByRole("tab", { name: "Operaciones", exact: true }).click()
   await expect(page.getByText("Cobertura: instrumented")).toBeVisible()
-  await page.getByRole("tab", { name: "Timeline", exact: true }).click()
+  await page.getByRole("tab", { name: "Chat", exact: true }).click()
   // Codex corre en su propio sandbox, sin verificar contra la puerta humana (ADR-0018).
   await expect(page.getByTestId("isolation")).toHaveText("sandbox del proveedor")
 
@@ -333,12 +209,12 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   // La instrucción inicial y el mensaje, ambos tuyos y en orden.
   await expect(page.getByTestId("chat-human")).toHaveText(["wait", "usa bun"])
   await expect(page.getByTestId("chat-agent").last()).toContainText("recibido: usa bun")
-  await expect(page.locator(".run-page .toolbar")).toContainText("Succeeded", { timeout: 20_000 })
+  await expect(page.locator(".rc-head")).toContainText("Succeeded", { timeout: 20_000 })
   if (process.env.KEEL_E2E_SHOTS)
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "chat.png") })
 
   // 6. Plan de git (ADR-0015): se propone sobre el worktree del run y se aprueba en su tarjeta.
-  const runId = (await page.locator(".run-page .toolbar > span.mono").textContent()) as string
+  const runId = (await page.getByTestId("run-id").textContent()) as string
   const human = await Line.open(daemon.socket)
   const st = (await human.call("git.status", { run_id: runId })) as { worktree: string }
   writeFileSync(join(st.worktree, "plan.txt"), "hola\n")

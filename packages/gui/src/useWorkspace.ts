@@ -15,6 +15,8 @@ type ProjectView = ReturnType<(typeof Methods)["projects.open"]["result"]["parse
 type RepoState = ReturnType<(typeof Methods)["projects.status"]["result"]["parse"]>
 
 const SOCKET_KEY = "keel-socket"
+/** Eventos que guarda la ventana: alcanza para el chat de un run largo (ADR-0020). */
+const EVENT_WINDOW = 5000
 function rememberedSocket(): string | null {
   try {
     return localStorage.getItem(SOCKET_KEY)
@@ -74,9 +76,13 @@ export function useWorkspace() {
           if (generation.current !== currentGeneration) return
           if (touchesInbox(event.kind)) setInboxTick((n) => n + 1)
           if (!ready) buffered.push(event)
-          setEvents((old) =>
-            [...old.filter((item) => item.event_seq !== event.event_seq), event].slice(-300),
-          )
+          // La proyección interna no le sirve a ningún cliente y es un tercio del volumen.
+          if (event.kind !== "projection.updated")
+            setEvents((old) =>
+              old.some((item) => item.event_seq === event.event_seq)
+                ? old
+                : [...old, event].slice(-EVENT_WINDOW),
+            )
           if (ready) setSnapshot((old) => applyEvent(old, event, project.current))
         })
         await rpc.connect(path)

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { EventNotification } from "@keel/core"
 import { approvalCanResolve } from "../src/approvals.js"
+import { buildChat } from "../src/chat-model.js"
 import { DEMO_PROJECT, demoRuns, demoTasks, makeDemoApprovals } from "../src/fixtures.js"
 import {
   actorLabel,
   applyEvent,
-  buildChat,
   filterTasks,
   formatCost,
   mergeReplay,
@@ -131,7 +131,11 @@ describe("el run como conversación", () => {
       }),
     ])
     expect(chat.map((c) => c.kind)).toEqual(["prompt", "agent", "tool", "approval", "status"])
-    expect(chat[2]).toMatchObject({ input: "ls", output: "a.ts" })
+    expect(chat[2]).toMatchObject({
+      input: { command: "ls" },
+      response: { stdout: "a.ts" },
+      state: "done",
+    })
     expect(chat[3]).toMatchObject({ decision: "approved" })
     expect(chat[4]).toMatchObject({ tone: "error" })
     expect((chat[4] as { text: string }).text).toContain("Sube el límite")

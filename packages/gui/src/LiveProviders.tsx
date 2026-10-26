@@ -32,6 +32,17 @@ export function LiveProviders({ call }: { call: Call }) {
       setError(e instanceof Error ? e.message : String(e))
     }
   }
+  async function update(patch: {
+    approvals_timeout_ms?: number | null
+    prompt_suggestions?: boolean
+  }) {
+    setError("")
+    try {
+      setView(await call("settings.update", { ...mutationMeta(), ...patch }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
   const sub = view?.codex_subscription
   return (
     <section className="plugins">
@@ -60,6 +71,42 @@ export function LiveProviders({ call }: { call: Call }) {
         Sólo para uso local con tu propia cuenta. El login lo haces tú en una terminal con{" "}
         <code>codex login</code>; Keel no lee ni guarda tus credenciales.
       </Hint>
+      <label className="connection">
+        <input
+          type="checkbox"
+          aria-label="Sugerencias de mensaje de Claude"
+          checked={view?.prompt_suggestions.enabled ?? false}
+          disabled={!view}
+          onChange={(e) => void update({ prompt_suggestions: e.target.checked })}
+        />{" "}
+        <strong>Sugerencias de mensaje de Claude</strong>
+        <p className="muted">
+          Tras cada turno Claude propone tu siguiente mensaje; → lo acepta. Cuesta tokens de tu
+          suscripción. Aplica a los runs que arranquen después.
+        </p>
+      </label>
+      <label className="connection">
+        <strong>Límite para contestar una aprobación</strong>{" "}
+        <select
+          aria-label="Límite para contestar una aprobación"
+          value={String(view?.approvals.timeout_ms ?? "")}
+          disabled={!view}
+          onChange={(e) =>
+            void update({ approvals_timeout_ms: e.target.value ? Number(e.target.value) : null })
+          }
+        >
+          <option value="">Sin límite</option>
+          {[5, 30, 120].map((min) => (
+            <option key={min} value={min * 60_000}>
+              {min < 60 ? `${min} min` : `${min / 60} h`}
+            </option>
+          ))}
+        </select>
+        <p className="muted">
+          Sin límite, el run espera con su lugar de concurrencia tomado. Con límite, al vencer se
+          niega: el tiempo nunca aprueba. Las preguntas del agente nunca vencen.
+        </p>
+      </label>
     </section>
   )
 }
