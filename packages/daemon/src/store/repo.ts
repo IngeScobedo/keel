@@ -267,7 +267,7 @@ export class Repo {
         `SELECT p.id, p.name, w.root_path, p.vcs, p.last_opened_at, p.created_at
            FROM projects p JOIN work_spaces w ON w.id = p.workspace_id
           WHERE p.archived_at IS NULL
-          ORDER BY coalesce(p.last_opened_at, p.created_at) DESC`,
+          ORDER BY coalesce(p.last_opened_at, p.created_at) DESC, p.id DESC`,
       )
       .all()
   }

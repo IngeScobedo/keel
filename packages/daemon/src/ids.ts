@@ -1,10 +1,24 @@
 import { encodeUlid } from "@keel/core"
 
 /** ULID con reloj del daemon y entropía del sistema. */
+/**
+ * ULID monótono: dentro del mismo milisegundo la parte aleatoria se incrementa,
+ * así que `ORDER BY created_at DESC, id DESC` respeta el orden de creación
+ * aunque dos filas compartan instante (pasaba en CI).
+ */
+let lastTime = -1
+const lastRandom = new Uint8Array(10)
 export function ulid(now: number = Date.now()): string {
-  const bytes = new Uint8Array(10)
-  crypto.getRandomValues(bytes)
-  return encodeUlid(now, bytes)
+  if (now === lastTime) {
+    for (let i = lastRandom.length - 1; i >= 0; i--) {
+      lastRandom[i] = ((lastRandom[i] as number) + 1) & 0xff
+      if (lastRandom[i] !== 0) break
+    }
+  } else {
+    crypto.getRandomValues(lastRandom)
+    lastTime = now
+  }
+  return encodeUlid(now, lastRandom)
 }
 
 export function nowIso(): string {
