@@ -245,7 +245,11 @@ export class Daemon {
   private readonly approvalWaiters = new Map<string, (r: ApprovalResolution) => void>()
   readonly outbox: Outbox
   readonly processes: ProcessTable
-  readonly limits: Limits
+  /** Los límites efectivos: flags del daemon > Ajustes de la GUI > defaults (ADR-0002 regla 5). */
+  get limits(): Limits {
+    const set = this.repo.getSetting(LIMITS)?.value as Partial<Limits> | undefined
+    return { ...DEFAULT_LIMITS, ...(set ?? {}), ...this.opts.limits }
+  }
   private orphanSweep: Promise<void> = Promise.resolve()
   /** Runs que este proceso ya está despachando: una entrega repetida del outbox no los duplica. */
   private readonly dispatching = new Set<string>()
@@ -349,7 +353,6 @@ export class Daemon {
     this.repo.touchProject(this.project.project_id)
     this.profile = { ...DEFAULT_PROFILE, cwd: root, ...opts.profile }
     this.processes = opts.processes ?? defaultProcessTable()
-    this.limits = { ...DEFAULT_LIMITS, ...opts.limits }
     this.claude = new ClaudeAdapter({ processes: this.processes, ...opts.adapterDeps })
     this.codexProfile = { ...DEFAULT_CODEX_PROFILE, cwd: root, ...opts.codex }
     this.codex = new CodexAdapter(
@@ -591,6 +594,22 @@ export class Daemon {
       },
       // Encendidas por decisión del humano (ADR-0020 §6) hasta que las apague.
       prompt_suggestions: { enabled: suggestions ? suggestions.value === true : true },
+      limits: (() => {
+        const l = this.limits
+        const set = this.repo.getSetting(LIMITS)
+        return {
+          run_budget_usd: l.run_budget_micro_usd / 1e6,
+          daily_budget_usd: l.daily_budget_micro_usd / 1e6,
+          max_concurrent_runs: l.max_concurrent_runs,
+          source: (this.opts.limits && Object.keys(this.opts.limits).length
+            ? "flag"
+            : set
+              ? "setting"
+              : "default") as "default" | "setting" | "flag",
+          updated_by: set?.updated_by ?? null,
+          updated_at: set?.updated_at ?? null,
+        }
+      })(),
     }
     if (this.codexProfile.subscription_enabled)
       return {
@@ -1335,9 +1354,12 @@ export class Daemon {
         // Una ejecución revisada o fallida vuelve a planned por decisión del humano
         // (las mismas aristas que work_items.transition) y sigue en su worktree.
         const w = this.requireWorkItem(parent.work_item_id)
+        // ADR-0021: una tarea del método que espera al humano también sigue al escribirle.
         if (
           parent.purpose === "execute" &&
-          (w.lifecycle === "needs_review" || w.lifecycle === "failed")
+          (w.lifecycle === "needs_review" ||
+            w.lifecycle === "failed" ||
+            w.lifecycle === "waiting_human")
         )
           this.transition(uow, w, "planned", "human", {
             runId: parent.id,
@@ -2439,6 +2461,27 @@ export class Daemon {
             repo.setSetting(APPROVALS_TIMEOUT, p.approvals_timeout_ms, uow.actorId)
           if (p.prompt_suggestions !== undefined)
             repo.setSetting(PROMPT_SUGGESTIONS, p.prompt_suggestions, uow.actorId)
+          // ADR-0002 regla 5: el humano sube (o baja) los límites; queda a su nombre.
+          if (p.limits) {
+            const prev = (repo.getSetting(LIMITS)?.value ?? {}) as Partial<Limits>
+            repo.setSetting(
+              LIMITS,
+              {
+                ...prev,
+                ...(p.limits.run_budget_usd !== undefined
+                  ? { run_budget_micro_usd: Math.round(p.limits.run_budget_usd * 1e6) }
+                  : {}),
+                ...(p.limits.daily_budget_usd !== undefined
+                  ? { daily_budget_micro_usd: Math.round(p.limits.daily_budget_usd * 1e6) }
+                  : {}),
+                ...(p.limits.max_concurrent_runs !== undefined
+                  ? { max_concurrent_runs: p.limits.max_concurrent_runs }
+                  : {}),
+              },
+              uow.actorId,
+            )
+            uow.emit("limits.changed", null, { limits: this.limits, actor: actorOf(ctx) })
+          }
           const view = this.settingsView()
           uow.emit("settings.changed", null, view)
           return view
@@ -4571,6 +4614,7 @@ function codexEffort(e: Effort): "low" | "medium" | "high" {
 const CODEX_SUBSCRIPTION = "codex.subscription_enabled"
 const APPROVALS_TIMEOUT = "approvals.timeout_ms"
 const PROMPT_SUGGESTIONS = "claude.prompt_suggestions"
+const LIMITS = "daemon.limits"
 
 /** Estados de un run en los que su agente conserva la capacidad. */
 const ACTIVE_RUN_STATUSES: readonly string[] = [

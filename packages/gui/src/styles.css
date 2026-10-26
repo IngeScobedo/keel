@@ -3953,3 +3953,24 @@ button.rc-ledger-row:hover {
   flex-direction: column;
   gap: 8px;
 }
+
+.limits-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.limits-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+.limits-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.limits-row input {
+  width: 120px;
+}

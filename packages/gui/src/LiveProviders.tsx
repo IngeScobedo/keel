@@ -35,6 +35,7 @@ export function LiveProviders({ call }: { call: Call }) {
   async function update(patch: {
     approvals_timeout_ms?: number | null
     prompt_suggestions?: boolean
+    limits?: { run_budget_usd?: number; daily_budget_usd?: number; max_concurrent_runs?: number }
   }) {
     setError("")
     try {
@@ -107,6 +108,103 @@ export function LiveProviders({ call }: { call: Call }) {
           niega: el tiempo nunca aprueba. Las preguntas del agente nunca vencen.
         </p>
       </label>
+      {view?.limits && <Limits limits={view.limits} onSave={(limits) => void update({ limits })} />}
     </section>
+  )
+}
+
+/**
+ * ADR-0002 regla 5: presupuesto estimado y concurrencia, con defaults bajos. Subirlos es
+ * esta acción del humano; con la suscripción, el costo es una estimación a precio de lista.
+ */
+function Limits({
+  limits,
+  onSave,
+}: {
+  limits: {
+    run_budget_usd: number
+    daily_budget_usd: number
+    max_concurrent_runs: number
+    source: "default" | "setting" | "flag"
+    updated_by: string | null
+    updated_at: string | null
+  }
+  onSave: (l: {
+    run_budget_usd: number
+    daily_budget_usd: number
+    max_concurrent_runs: number
+  }) => void
+}) {
+  const [run, setRun] = useState(String(limits.run_budget_usd))
+  const [day, setDay] = useState(String(limits.daily_budget_usd))
+  const [conc, setConc] = useState(String(limits.max_concurrent_runs))
+  const flag = limits.source === "flag"
+  return (
+    <form
+      className="connection limits-form"
+      data-testid="limits"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSave({
+          run_budget_usd: Number(run),
+          daily_budget_usd: Number(day),
+          max_concurrent_runs: Number(conc),
+        })
+      }}
+    >
+      <strong>Presupuesto y concurrencia</strong>
+      <div className="limits-row">
+        <label>
+          Por run (USD estimado)
+          <input
+            aria-label="Presupuesto por run"
+            type="number"
+            min={0.1}
+            max={1000}
+            step="0.5"
+            value={run}
+            disabled={flag}
+            onChange={(e) => setRun(e.target.value)}
+          />
+        </label>
+        <label>
+          Por día (USD estimado)
+          <input
+            aria-label="Presupuesto por día"
+            type="number"
+            min={1}
+            max={10000}
+            step="1"
+            value={day}
+            disabled={flag}
+            onChange={(e) => setDay(e.target.value)}
+          />
+        </label>
+        <label>
+          Runs a la vez
+          <input
+            aria-label="Runs a la vez"
+            type="number"
+            min={1}
+            max={8}
+            value={conc}
+            disabled={flag}
+            onChange={(e) => setConc(e.target.value)}
+          />
+        </label>
+        <button type="submit" className="button" disabled={flag}>
+          Guardar
+        </button>
+      </div>
+      <p className="muted">
+        {flag
+          ? "Fijados con flags al arrancar el daemon: mandan sobre este ajuste."
+          : limits.source === "setting"
+            ? `Los cambió ${limits.updated_by} · ${limits.updated_at}.`
+            : "Valores bajos por defecto (ADR-0002): subirlos es decisión tuya."}{" "}
+        Con la suscripción el costo es una estimación del SDK a precio de lista, no una factura; al
+        agotarse el del día, no arranca otro run hasta mañana o hasta que lo subas.
+      </p>
+    </form>
   )
 }

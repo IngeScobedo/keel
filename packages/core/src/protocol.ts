@@ -589,6 +589,20 @@ export const SettingsViewSchema = z.object({
   approvals: z.object({ timeout_ms: z.number().int().positive().nullable() }),
   /** ADR-0020 §6: sugerencias de mensaje de Claude (cuestan tokens). */
   prompt_suggestions: z.object({ enabled: z.boolean() }),
+  /**
+   * ADR-0002 regla 5: presupuesto estimado y concurrencia. Defaults bajos; subirlos
+   * es acción del humano (aquí o con flags del daemon, que mandan).
+   */
+  limits: z
+    .object({
+      run_budget_usd: z.number(),
+      daily_budget_usd: z.number(),
+      max_concurrent_runs: z.number().int(),
+      source: z.enum(["default", "setting", "flag"]),
+      updated_by: z.string().nullable(),
+      updated_at: z.string().nullable(),
+    })
+    .optional(),
 })
 export type SettingsView = z.infer<typeof SettingsViewSchema>
 
@@ -1453,6 +1467,14 @@ export const Methods = {
         .nullable()
         .optional(),
       prompt_suggestions: z.boolean().optional(),
+      /** ADR-0002 regla 5: subir (o bajar) el presupuesto y la concurrencia. */
+      limits: z
+        .object({
+          run_budget_usd: z.number().min(0.1).max(1_000).optional(),
+          daily_budget_usd: z.number().min(1).max(10_000).optional(),
+          max_concurrent_runs: z.number().int().min(1).max(8).optional(),
+        })
+        .optional(),
     }),
     result: SettingsViewSchema,
   },
