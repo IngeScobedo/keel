@@ -92,4 +92,20 @@ describe("ADR-0025: el vault", () => {
     await expect(v.use(id, "t", (x) => x)).rejects.toThrow("no existe")
     expect(s.db.query("SELECT count(*) n FROM vault_items").get()).toEqual({ n: 1 })
   })
+
+  test("un llavero bloqueado no rompe: el vault queda sin crear y dice por qué", async () => {
+    const { s } = store()
+    const locked = {
+      ...memoryKeyStore(),
+      set: async () => {
+        throw new Error("Tu llavero del sistema está bloqueado")
+      },
+    }
+    const v = new Vault({ db: s.db, keystore: locked })
+    expect(await v.open()).toBe("uninitialized")
+    expect(v.status().keychain.hint).toContain("bloqueado")
+    // La frase sigue funcionando como respaldo.
+    expect(await v.unlock("frase de respaldo")).toBe("unlocked")
+    expect(v.status().keychain.hint).toBeNull()
+  })
 })

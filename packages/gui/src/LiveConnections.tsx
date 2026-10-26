@@ -370,6 +370,15 @@ function VaultBanner({
             </button>
           </form>
         )}
+        {!keychainLost && phrase.length > 0 && phrase.length < 8 && (
+          <p className="muted">Mínimo 8 caracteres ({phrase.length}).</p>
+        )}
+        {first && (
+          <p className="muted">
+            Es una frase nueva para el vault de Keel, no tu contraseña del sistema. Guárdala: sin
+            ella, los secretos del vault no se pueden leer.
+          </p>
+        )}
         {error && <p className="error">{error}</p>}
       </div>
     </div>

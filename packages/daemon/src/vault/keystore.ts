@@ -17,14 +17,28 @@ export type KeyStore = {
   describe(): { available: boolean; tool: string | null; hint: string | null }
 }
 
-async function run(cmd: string[], stdin?: string): Promise<{ code: number; out: string }> {
+async function run(
+  cmd: string[],
+  stdin?: string,
+): Promise<{ code: number; out: string; err: string }> {
   const p = Bun.spawn(cmd, {
     stdin: stdin === undefined ? "ignore" : new Blob([stdin]),
     stdout: "pipe",
-    stderr: "ignore",
+    stderr: "pipe",
   })
-  const out = await new Response(p.stdout).text()
-  return { code: await p.exited, out: out.trim() }
+  // El error del llavero nunca lleva el secreto: es el mensaje de la herramienta.
+  const [out, err] = await Promise.all([
+    new Response(p.stdout).text(),
+    new Response(p.stderr).text(),
+  ])
+  return { code: await p.exited, out: out.trim(), err: err.trim() }
+}
+
+/** El mensaje del llavero en palabras del humano. */
+function keychainError(err: string): string {
+  if (/locked collection/i.test(err))
+    return "Tu llavero del sistema está bloqueado (en WSL no se desbloquea al entrar): desbloquéalo y reinicia Keel, o abre el vault con una frase."
+  return `el llavero no aceptó la llave del vault${err ? `: ${err}` : ""}`
 }
 
 export function systemKeyStore(platform: NodeJS.Platform = process.platform): KeyStore {
@@ -43,7 +57,7 @@ export function systemKeyStore(platform: NodeJS.Platform = process.platform): Ke
           [tool, "store", "--label=Keel vault", "service", "keel", "account", "vault"],
           Buffer.from(raw).toString("base64"),
         )
-        if (r.code !== 0) throw new Error("el llavero no aceptó la llave del vault")
+        if (r.code !== 0) throw new Error(keychainError(r.err))
       },
       describe: () => ({
         available: tool !== null,
@@ -77,7 +91,7 @@ export function systemKeyStore(platform: NodeJS.Platform = process.platform): Ke
           "-w",
           Buffer.from(raw).toString("base64"),
         ])
-        if (r.code !== 0) throw new Error("el llavero no aceptó la llave del vault")
+        if (r.code !== 0) throw new Error(keychainError(r.err))
       },
       describe: () => ({ available: tool !== null, tool: tool ? "security" : null, hint: null }),
     }

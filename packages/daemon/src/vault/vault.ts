@@ -83,7 +83,19 @@ export class Vault {
    * Abre el vault con el llavero si se puede. La primera vez crea la KEK y la guarda
    * ahí. Sin llavero queda bloqueado hasta `unlock(frase)`.
    */
+  /** Por qué no se pudo usar el llavero, para decírselo al humano. */
+  private keychainError: string | null = null
+
   async open(): Promise<VaultState> {
+    try {
+      return await this.openWithKeychain()
+    } catch (e) {
+      this.keychainError = e instanceof Error ? e.message : String(e)
+      return this.state()
+    }
+  }
+
+  private async openWithKeychain(): Promise<VaultState> {
     if (this.kek) return "unlocked"
     const mode = this.meta("mode")
     if (mode === "passphrase") return "locked"
@@ -141,7 +153,10 @@ export class Vault {
       keystore: (this.source ??
         this.meta("mode") ??
         (this.keystore.available() ? "keychain" : "none")) as "keychain" | "passphrase" | "none",
-      keychain: this.keystore.describe(),
+      keychain: {
+        ...this.keystore.describe(),
+        ...(this.keychainError && !this.kek ? { hint: this.keychainError } : {}),
+      },
       items:
         this.db
           .query<{ n: number }, []>("SELECT count(*) n FROM vault_items WHERE deleted_at IS NULL")
