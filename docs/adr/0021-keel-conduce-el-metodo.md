@@ -1,6 +1,6 @@
 # ADR-0021: Keel conduce el método: etapas con gates, documentos de la tarea y una conversación por tarea
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-26)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Máxima
 - **Relacionados:**
