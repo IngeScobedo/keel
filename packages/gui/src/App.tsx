@@ -25,7 +25,7 @@ import {
 import { type FormEvent, useEffect, useState } from "react"
 import { Board } from "./Board.js"
 import { ControlPlane } from "./ControlPlane.js"
-import { hasNativeShell } from "./client.js"
+import { hasNativeShell, mutationMeta } from "./client.js"
 import { demoDetails } from "./fixtures.js"
 import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
@@ -410,6 +410,18 @@ export function App() {
             onSelect={openTask}
             onRun={openRun}
             onNew={() => setNewTask(true)}
+            {...(workspace.mode === "live"
+              ? {
+                  onTransition: async (item, to) => {
+                    await workspace.call("work_items.transition", {
+                      ...mutationMeta(item.revision),
+                      work_item_id: item.id,
+                      to,
+                      reason: "movida en el tablero",
+                    })
+                  },
+                }
+              : {})}
           />
         )}
         {page === "task" &&

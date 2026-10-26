@@ -1,4 +1,5 @@
 import {
+  allowedTransitions,
   type EventNotification,
   type Methods,
   NEEDS_YOU,
@@ -165,4 +166,29 @@ export function summarizeEvent(event: EventNotification): { title: string; detai
       }
       return null
   }
+}
+
+/**
+ * Soltar una tarjeta en otra columna (ADR-0006 §4): la columna se proyecta del
+ * lifecycle, así que mover es pedir la transición humana que lleva a esa columna. Si
+ * no existe, la tarjeta vuelve y se dice por qué; nunca se salta una guarda.
+ */
+export function moveTarget(
+  item: WorkItem,
+  column: BoardColumn,
+): { to: "planned" } | { reason: string } | null {
+  if (item.board_status === column) return null
+  if (item.stage)
+    return { reason: `${item.display_id} la lleva el método: avanza con «Trabajar» y sus gates.` }
+  if (column === "todo")
+    return allowedTransitions(item.lifecycle, "human").includes("planned")
+      ? { to: "planned" }
+      : { reason: `${item.display_id} está ${item.lifecycle}: no puede volver a Ready a mano.` }
+  if (column === "in_progress")
+    return { reason: "Pasa a In Progress cuando arranca un run: ábrela y trabájala." }
+  if (column === "in_review")
+    return { reason: "Llega a In Review cuando un run termina con su evidencia." }
+  if (column === "completed")
+    return { reason: "Termina al aprobar su plan de cierre; todavía no hay cierre manual." }
+  return { reason: "Una tarea no vuelve a Backlog: el lifecycle no tiene esa transición." }
 }

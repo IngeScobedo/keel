@@ -12,9 +12,11 @@ import {
 import { useState } from "react"
 import { STAGE_LABEL } from "./chat-model.js"
 import {
+  type BoardColumn,
   COLUMNS,
   filterTasks,
   formatCost,
+  moveTarget,
   type Run,
   type TaskDetails,
   type WorkItem,
@@ -26,11 +28,14 @@ export function TaskCard({
   details,
   runs,
   onSelect,
+  onDragStart,
 }: {
   item: WorkItem
   details?: TaskDetails
   runs: Run[]
   onSelect: () => void
+  /** ADR-0006 §4: arrastrar pide la transición humana de la columna destino. */
+  onDragStart?: (() => void) | undefined
 }) {
   const run =
     runs.find((r) => r.work_item_id === item.id && r.status === "running") ??
@@ -42,6 +47,12 @@ export function TaskCard({
       data-state={item.visual_state}
       onClick={onSelect}
       aria-label={`${item.display_id}: ${item.title}`}
+      draggable={onDragStart !== undefined}
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", item.id)
+        e.dataTransfer.effectAllowed = "move"
+        onDragStart?.()
+      }}
     >
       <span className="card-top">
         <span className="mono card-id">
@@ -199,6 +210,7 @@ export function Board({
   onRun,
   onNew,
   demo,
+  onTransition,
 }: {
   tasks: WorkItem[]
   runs: Run[]
@@ -207,7 +219,30 @@ export function Board({
   onRun: (run: Run) => void
   onNew: () => void
   demo: boolean
+  /** Con el daemon: pide la transición humana (`work_items.transition`). */
+  onTransition?: (item: WorkItem, to: "planned") => Promise<void>
 }) {
+  const [dragging, setDragging] = useState<WorkItem | null>(null)
+  const [over, setOver] = useState<BoardColumn | null>(null)
+  const [moveNote, setMoveNote] = useState("")
+  async function drop(column: BoardColumn) {
+    const item = dragging
+    setDragging(null)
+    setOver(null)
+    if (!item || !onTransition) return
+    const t = moveTarget(item, column)
+    if (!t) return
+    if ("reason" in t) {
+      setMoveNote(t.reason)
+      return
+    }
+    setMoveNote("")
+    try {
+      await onTransition(item, t.to)
+    } catch (e) {
+      setMoveNote(e instanceof Error ? e.message : String(e))
+    }
+  }
   const [view, setView] = useState<"board" | "list">("board")
   const [query, setQuery] = useState("")
   const [needsYou, setNeedsYou] = useState(false)
@@ -267,6 +302,14 @@ export function Board({
           New task <kbd>C</kbd>
         </Button>
       </div>
+      {moveNote && (
+        <p className="move-note" role="status" data-testid="move-note">
+          {moveNote}
+          <button type="button" className="text-link" onClick={() => setMoveNote("")}>
+            entendido
+          </button>
+        </p>
+      )}
       <div className="board-layout">
         <section className="board-content" aria-label="Tablero de tareas">
           {visible.length === 0 ? (
@@ -299,7 +342,29 @@ export function Board({
                     (column.id === "backlog" && !COLUMNS.some((c) => c.id === item.board_status)),
                 )
                 return (
-                  <section className="board-column" key={column.id} aria-label={column.label}>
+                  <section
+                    className="board-column"
+                    key={column.id}
+                    aria-label={column.label}
+                    data-drop={
+                      dragging && over === column.id
+                        ? (() => {
+                            const t = moveTarget(dragging, column.id)
+                            return t && "to" in t ? "ok" : t ? "no" : undefined
+                          })()
+                        : undefined
+                    }
+                    onDragOver={(e) => {
+                      if (!dragging) return
+                      e.preventDefault()
+                      setOver(column.id)
+                    }}
+                    onDragLeave={() => setOver((o) => (o === column.id ? null : o))}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      void drop(column.id)
+                    }}
+                  >
                     <header>
                       <span>
                         {column.label} <small className="mono muted">{items.length}</small>
@@ -319,6 +384,7 @@ export function Board({
                             {...(details[item.id] ? { details: details[item.id] } : {})}
                             runs={runs}
                             onSelect={() => onSelect(item)}
+                            {...(onTransition ? { onDragStart: () => setDragging(item) } : {})}
                           />
                           {item.feature && (
                             <SubtaskFold items={childrenOf(item.id)} onSelect={onSelect} />

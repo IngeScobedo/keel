@@ -3913,3 +3913,25 @@ button.rc-ledger-row:hover {
   gap: 4px;
   font-size: 12px;
 }
+
+/* ADR-0006 §4: soltar una tarjeta pide la transición humana de la columna. */
+.board-column[data-drop="ok"] {
+  outline: 1px dashed var(--color-accent-default);
+  background: var(--color-accent-subtle);
+}
+.board-column[data-drop="no"] {
+  outline: 1px dashed var(--color-status-failed-border);
+}
+.task-card[draggable="true"] {
+  cursor: grab;
+}
+.move-note {
+  margin: 6px 16px 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-status-waiting-human-bg);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  display: flex;
+  gap: 10px;
+}
