@@ -3493,9 +3493,17 @@ export class Daemon {
         repo.liveRunFor(c.id) !== null ||
         ["running", "waiting_human", "needs_review", "failed"].includes(c.lifecycle),
     )
-    if (busy) return
+    // Si la hija que acaba de integrarse aún figura con su run vivo, se reintenta cuando
+    // ese run termine (sin esto la feature se quedaba esperando para siempre).
+    if (busy) {
+      this.waitingFeatures.add(parentId)
+      return
+    }
     const next = now.find((c) => c.lifecycle === "planned" && repo.openBlocks(c.id).length === 0)
-    if (!next) return
+    if (!next) {
+      this.waitingFeatures.delete(parentId)
+      return
+    }
     try {
       runUnitOfWork(this.uowDeps(), this.systemScope(parent.project_id), (uow) => {
         const run = this.startFlowRun(uow, next, workPrompt(next, "implement"), { source: "keel" })

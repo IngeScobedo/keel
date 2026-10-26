@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, normalize } from "node:path"
 import { Daemon, IpcClient } from "../src/index.ts"
 import { memoryKeyStore } from "../src/vault/keystore.ts"
 import { envFromAlias, generateEd25519, hostAliases, importSshConfig } from "../src/vault/ssh.ts"
@@ -388,7 +388,7 @@ describe("ADR-0025: importar y llaves", () => {
       ["staging-x", "10.0.0.2", expect.any(String), 2222, "staging"],
       ["dev-y", "10.0.0.2", expect.any(String), 2222, "dev"],
     ])
-    expect(hosts[0]?.identity_file).toBe(join(home, ".ssh", "id_ed25519"))
+    expect(hosts[0]?.identity_file).toBe(normalize(join(home, ".ssh", "id_ed25519")))
     expect(envFromAlias("rifas").environment).toBeNull()
   })
 

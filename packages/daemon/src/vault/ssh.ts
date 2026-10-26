@@ -10,7 +10,7 @@
 import { generateKeyPairSync, randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { join } from "node:path"
+import { join, normalize } from "node:path"
 
 // --- llaves ed25519 en formato OpenSSH ------------------------------------------------
 
@@ -204,7 +204,7 @@ export async function importSshConfig(
     const one = (k: string) => opts.get(k)?.[0] ?? null
     const identity =
       (opts.get("identityfile") ?? [])
-        .map((p) => p.replace(/^~(?=\/)/, home))
+        .map((p) => normalize(p.replace(/^~(?=[\\/])/, home)))
         .find((p) => existsSync(p)) ?? null
     const proxy = one("proxyjump")
     out.push({
