@@ -84,7 +84,9 @@ async function scenario(text: string) {
     return
   }
   if (text.startsWith("approval")) {
-    notify("item/started", command("c2", "inProgress"))
+    // Como el real: el item anuncia la misma orden por la que luego pide permiso.
+    const touch = { command: "/bin/bash -lc 'touch x'" }
+    notify("item/started", command("c2", "inProgress", touch))
     const answer = (await ask("srv-1", "item/commandExecution/requestApproval", {
       kind: "command",
       threadId: THREAD,
@@ -96,7 +98,7 @@ async function scenario(text: string) {
     })) as { decision: string }
     log({ approval: answer })
     notify("serverRequest/resolved", { threadId: THREAD, requestId: "srv-1" })
-    notify("item/completed", command("c2", answer.decision === "accept" ? "completed" : "declined", { exitCode: answer.decision === "accept" ? 0 : null }))
+    notify("item/completed", command("c2", answer.decision === "accept" ? "completed" : "declined", { ...touch, exitCode: answer.decision === "accept" ? 0 : null }))
     turnCompleted("completed")
     return
   }

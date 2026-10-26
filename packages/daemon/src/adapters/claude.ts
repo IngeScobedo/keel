@@ -18,9 +18,11 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import type {
+  EffortLevel,
   HookCallback,
   HookCallbackMatcher,
   HookInput,
+  ModelInfo,
   Options,
   PermissionResult,
   Query,
@@ -30,13 +32,19 @@ import type {
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
-import type { PermissionMode } from "@keel/core"
+import type { Effort, ModelOption, PermissionMode } from "@keel/core"
 import { nowIso, ulid } from "../ids.js"
 import { defaultProcessTable, type ProcessTable } from "../processes.js"
 import { RunProjector } from "../projector.js"
 import { type SandboxSpec, wrapCommand } from "../sandbox.js"
 import type { RunRow } from "../store/repo.js"
-import type { Preflight, ProviderAdapter, ProviderCapabilities, RunContext } from "./provider.js"
+import type {
+  LiveChange,
+  Preflight,
+  ProviderAdapter,
+  ProviderCapabilities,
+  RunContext,
+} from "./provider.js"
 
 export const ADAPTER_VERSION = "claude-sdk/0.3.295"
 export const SOURCE = "claude-sdk"
@@ -48,8 +56,11 @@ export type ClaudeProfile = {
   model: string
   allowed_tools: string[]
   max_turns: number
-  /** ms que el daemon espera una decisión humana antes de denegar (SDD 02 §9). */
-  approval_timeout_ms: number
+  /**
+   * ms que el daemon espera una decisión humana antes de denegar; null = sin
+   * límite (ADR-0020 §3, por defecto). Un ajuste del usuario lo reemplaza.
+   */
+  approval_timeout_ms: number | null
   /** Tiempo máximo de reloj de un run; al vencer, Keel lo aborta (`end_reason: timeout`). */
   max_wall_ms: number
   /** Tope de costo estimado del run (`maxBudgetUsd` del SDK); lo fija el daemon (limits.ts). */
@@ -62,6 +73,15 @@ export type ClaudeProfile = {
   mcp_servers: Record<string, { command: string; args: string[]; env: Record<string, string> }>
   /** Modo de permisos del run (ADR-0019 §4); `ask` deja todo lo no permitido al gate de Keel. */
   permission_mode: PermissionMode
+  /**
+   * El humano puede pasar este run a `bypass` en vivo (ADR-0020 §4): sólo
+   * `execute` en un worktree de git. El SDK exige declararlo al lanzar.
+   */
+  allow_bypass: boolean
+  /** Esfuerzo del modelo; null = el del modelo (ADR-0020 §5). */
+  effort: Effort | null
+  /** Sugerencias de mensaje tras cada turno (ADR-0020 §6). */
+  prompt_suggestions: boolean
   /** Variables extra del proceso del agente (atribución en git, ADR-0018 §1). */
   env: Record<string, string>
   /** Sesión del proveedor que retoma este run (continuar una conversación, ADR-0019 §3). */
@@ -83,13 +103,16 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   model: "haiku",
   allowed_tools: ["Read", "Glob", "Grep"],
   max_turns: 12,
-  approval_timeout_ms: 60_000,
+  approval_timeout_ms: null,
   // Default bajo (ADR-0002 regla 3): subirlo es una decisión explícita del perfil.
   max_wall_ms: 30 * 60_000,
   max_budget_usd: null,
   cwd: process.cwd(),
   mcp_servers: {},
   permission_mode: "ask",
+  allow_bypass: false,
+  effort: null,
+  prompt_suggestions: false,
   env: {},
   resume_session_id: null,
   sandbox: null,
@@ -252,6 +275,10 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
   }
   private readonly running = new Map<string, AbortController>()
   private readonly inputs = new Map<string, TurnInput>()
+  /** La `Query` de cada run vivo: modo y modelo cambian por ella (ADR-0020 §4). */
+  private readonly queries = new Map<string, Query>()
+  /** Modelos de la cuenta, preguntados una vez por arranque (ADR-0020 §5). */
+  private models: ModelOption[] | null = null
   /** Por qué abortó Keel un run: lo canceló el humano o venció su tiempo máximo. */
   private readonly abortCause = new Map<string, "cancelled" | "timeout">()
   private readonly deps: ClaudeAdapterDeps
@@ -267,6 +294,72 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
 
   sendMessage(runId: string, text: string): boolean {
     return this.inputs.get(runId)?.push(text) ?? false
+  }
+
+  async setMode(runId: string, mode: PermissionMode): Promise<LiveChange> {
+    const q = this.queries.get(runId)
+    if (!q) return { error: "el run no está vivo" }
+    await q.setPermissionMode(SDK_PERMISSION_MODE[mode])
+    return { applies: "now" }
+  }
+
+  async setModel(runId: string, model: string, effort: Effort | null): Promise<LiveChange> {
+    const q = this.queries.get(runId)
+    if (!q) return { error: "el run no está vivo" }
+    await q.setModel(model)
+    if (effort) await q.applyFlagSettings({ effortLevel: effort as EffortLevel })
+    return { applies: "now" }
+  }
+
+  /**
+   * Los modelos que el SDK dice tener para esta cuenta. Sin run vivo, abre
+   * una sesión sin prompt sólo para preguntar y la cierra: no gasta tokens.
+   */
+  async listModels(profile: ClaudeProfile): Promise<ModelOption[] | null> {
+    if (this.models) return this.models
+    const live = this.queries.values().next().value
+    try {
+      const infos = live ? await live.supportedModels() : await this.probeModels(profile)
+      if (infos) this.models = infos.map(modelOption)
+    } catch {
+      return null
+    }
+    return this.models
+  }
+
+  private async probeModels(profile: ClaudeProfile): Promise<ModelInfo[] | null> {
+    const launch = this.resolveLaunch(profile)
+    if (!launch.ok) return null
+    let release: () => void = () => {}
+    const silent: AsyncIterable<SDKUserMessage> = {
+      [Symbol.asyncIterator]: () => ({
+        next: () =>
+          new Promise<IteratorResult<SDKUserMessage>>((resolve) => {
+            release = () => resolve({ done: true, value: undefined })
+          }),
+      }),
+    }
+    const abort = new AbortController()
+    const queryFn = this.deps.queryFn ?? ((a) => sdkQuery(a))
+    const q = queryFn({
+      prompt: silent,
+      options: {
+        ...(launch.binary ? { pathToClaudeCodeExecutable: launch.binary } : {}),
+        cwd: profile.cwd,
+        settingSources: [],
+        env: launch.env,
+        abortController: abort,
+      },
+    })
+    if (!isQuery(q)) return null
+    const timer = setTimeout(() => abort.abort("timeout"), 30_000)
+    try {
+      return await q.supportedModels()
+    } finally {
+      clearTimeout(timer)
+      release()
+      abort.abort("listo")
+    }
   }
 
   cancel(runId: string, reason: string | null): boolean {
@@ -339,7 +432,22 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     ): Promise<PermissionResult> => {
       const d = await ctx.decideTool({ tool: toolName, input, signal: opts.signal })
       return d.behavior === "allow"
-        ? { behavior: "allow", updatedInput: d.input }
+        ? {
+            behavior: "allow",
+            updatedInput: d.input,
+            // El SDK aplica el modo al aprobar: Claude Code no lo pisa al salir de plan.
+            ...(d.mode
+              ? {
+                  updatedPermissions: [
+                    {
+                      type: "setMode",
+                      mode: SDK_PERMISSION_MODE[d.mode],
+                      destination: "session",
+                    },
+                  ],
+                }
+              : {}),
+          }
         : { behavior: "deny", message: d.message }
     }
 
@@ -375,7 +483,11 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       ],
       ...mcpOptions(profile.mcp_servers),
       permissionMode: SDK_PERMISSION_MODE[profile.permission_mode],
-      ...(profile.permission_mode === "bypass" ? { allowDangerouslySkipPermissions: true } : {}),
+      ...(profile.permission_mode === "bypass" || profile.allow_bypass
+        ? { allowDangerouslySkipPermissions: true }
+        : {}),
+      ...(profile.effort ? { effort: profile.effort as EffortLevel } : {}),
+      ...(profile.prompt_suggestions ? { promptSuggestions: true } : {}),
       env: { ...env, ...profile.env },
       ...(profile.resume_session_id ? { resume: profile.resume_session_id } : {}),
       abortController: abort,
@@ -388,6 +500,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       auth_mode: profile.auth_mode,
       binary,
       model: profile.model,
+      effort: profile.effort,
       mcp_servers: Object.keys(profile.mcp_servers),
       cwd: profile.cwd,
       isolation: profile.sandbox ? "sandbox" : "none",
@@ -406,7 +519,9 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
     let sessionSaved: string | null = null
     this.inputs.set(run.id, input)
     try {
-      for await (const message of queryFn({ prompt: input, options })) {
+      const q = queryFn({ prompt: input, options })
+      if (isQuery(q)) this.queries.set(run.id, q)
+      for await (const message of q) {
         const raw = message as unknown as Record<string, unknown> & { type: string; uuid?: string }
         const key = raw.uuid ? `msg:${raw.uuid}` : `msg:${raw.type}:${ulid()}`
         const { payload: m } = ctx.ingest(
@@ -434,6 +549,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       clearTimeout(deadline)
       input.close()
       this.inputs.delete(run.id)
+      this.queries.delete(run.id)
     }
     // Un único punto decide cómo terminó (run-outcome de @keel/core). La salida del
     // proceso puede llegar justo después del fin del stream: se espera un momento.
@@ -561,6 +677,19 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
           "subscription_session requiere el binario `claude` instalado por el usuario; no se encontró",
       }
     return { ok: true, env, binary }
+  }
+}
+
+function isQuery(q: Query | AsyncIterable<SDKMessage>): q is Query {
+  return typeof (q as Partial<Query>).setPermissionMode === "function"
+}
+
+function modelOption(m: ModelInfo): ModelOption {
+  return {
+    value: m.value,
+    display_name: m.displayName,
+    description: m.description,
+    efforts: m.supportsEffort ? (m.supportedEffortLevels ?? []) : [],
   }
 }
 

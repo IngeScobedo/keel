@@ -1,9 +1,14 @@
 /**
  * Gate de herramientas del daemon (SDD 02 §9): cada herramienta no
  * auto-aprobada abre una solicitud en `approval_requests`, pone el run en
- * `waiting_human` y espera la decisión humana hasta el plazo; al vencer,
- * deniega (deny-on-timeout) y la solicitud queda en el inbox. El SDK no lo hace
- * por su cuenta (FINDINGS §3). No depende del proveedor.
+ * `waiting_human` y espera la decisión humana. ADR-0020 §3: la espera no vence
+ * salvo que el humano fije un límite; si vence, se niega (el tiempo nunca
+ * aprueba). El SDK no lo hace por su cuenta (FINDINGS §3). No depende del
+ * proveedor.
+ *
+ * `AskUserQuestion` y `ExitPlanMode` no son permisos sino preguntas (ADR-0020
+ * §7): ninguna regla, concesión ni plazo las resuelve, y la respuesta del
+ * humano vuelve al agente dentro de la entrada aprobada.
  */
 
 import { isAbsolute, relative, resolve } from "node:path"
@@ -11,6 +16,7 @@ import {
   describePattern,
   filePathOf,
   matchesPattern,
+  type PermissionMode,
   type PermissionPattern,
   redact,
   shellCommand,
@@ -19,15 +25,32 @@ import type { RunContext, ToolDecision, ToolGate, ToolRequest } from "./adapters
 import { canonicalJson, sha256Hex, ulid } from "./ids.js"
 import type { Repo } from "./store/repo.js"
 
+/** Lo que decidió el humano, con lo que el agente necesita para seguir. */
+export type ApprovalResolution = {
+  decision: "approved" | "denied" | "expired"
+  /** `AskUserQuestion`: texto de la pregunta → respuesta. */
+  answers?: Record<string, string>
+  annotations?: Record<string, { notes?: string | undefined; preview?: string | undefined }>
+  /** Lo que el agente lee si se niega. */
+  reason?: string
+  /** Al aprobar un plan: el modo con el que sigue el run. */
+  then_mode?: PermissionMode
+}
+
+/** null = sin límite. */
 export type ApprovalWaiter = (
   approvalId: string,
-  timeoutMs: number,
-) => Promise<"approved" | "denied" | "expired">
+  timeoutMs: number | null,
+) => Promise<ApprovalResolution>
+
+/** Herramientas que preguntan al humano: nunca se resuelven solas (ADR-0020 §7). */
+export const QUESTION_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"])
 
 export type ApprovalGateDeps = {
   repo: Repo
   waitApproval: ApprovalWaiter
-  timeoutMs: number
+  /** Límite vigente de la espera; null = sin límite (ADR-0020 §3). */
+  timeoutMs: number | null | (() => number | null)
   /** Dónde trabaja el run: una regla nunca cubre archivos fuera de ahí (ADR-0019 §4). */
   cwdOf?: (runId: string) => string | null
 }
@@ -103,8 +126,13 @@ export class ApprovalGate implements ToolGate {
   }
 
   async decide(ctx: RunContext, req: ToolRequest): Promise<ToolDecision> {
-    const { repo, waitApproval, timeoutMs } = this.deps
+    const { repo, waitApproval } = this.deps
     const run = ctx.run
+    const question = QUESTION_TOOLS.has(req.tool)
+    // Una pregunta espera siempre: el tiempo no contesta por el humano.
+    const limit =
+      typeof this.deps.timeoutMs === "function" ? this.deps.timeoutMs() : this.deps.timeoutMs
+    const timeoutMs = question ? null : limit
     // ADR-0015 §7: el perfil por defecto no empuja por shell; el plan aprobado sí.
     // Es una comodidad, no una frontera: el texto se puede disfrazar.
     const cmd = shellCommand(req.input)
@@ -127,7 +155,7 @@ export class ApprovalGate implements ToolGate {
           "Keel: git push por shell está desactivado. Usa la tool git_propose: arma un plan con commit, push y PR que el humano aprueba.",
       }
     }
-    const auto = this.automatic(ctx, req)
+    const auto = question ? null : this.automatic(ctx, req)
     if (auto) {
       ctx.record(
         "approval.auto",
@@ -148,7 +176,7 @@ export class ApprovalGate implements ToolGate {
     const operation = { tool: req.tool, input: req.input, run_id: run.id }
     // El hash es de la operación real (la que se ejecuta); lo guardado es la copia saneada.
     const hash = await sha256Hex(canonicalJson(operation))
-    const expires = new Date(Date.now() + timeoutMs).toISOString()
+    const expires = timeoutMs === null ? null : new Date(Date.now() + timeoutMs).toISOString()
     const saved = redact(operation).value as { input?: unknown }
     const approvalId = repo.createApproval({
       project_id: run.project_id,
@@ -172,32 +200,61 @@ export class ApprovalGate implements ToolGate {
       null,
     )
     ctx.notifyRun()
-    const decision = await Promise.race([
+    const resolution = await Promise.race([
       waitApproval(approvalId, timeoutMs),
-      new Promise<"denied">((resolve) =>
-        req.signal.addEventListener("abort", () => resolve("denied"), { once: true }),
+      new Promise<ApprovalResolution>((resolve) =>
+        req.signal.addEventListener("abort", () => resolve({ decision: "denied" }), {
+          once: true,
+        }),
       ),
     ])
+    const decision = resolution.decision
     if (repo.getRun(run.id)?.status === "waiting_human")
       repo.updateRun(run.id, { status: "running" })
     if (decision === "expired") repo.setApproval(approvalId, "expired", null)
     ctx.record(
       "approval.resolved",
       `approval:${approvalId}:${decision}`,
-      { approval_id: approvalId, decision },
+      {
+        approval_id: approvalId,
+        decision,
+        ...(resolution.answers ? { answers: resolution.answers } : {}),
+        ...(resolution.annotations ? { annotations: resolution.annotations } : {}),
+        ...(resolution.reason ? { reason: resolution.reason } : {}),
+      },
       null,
     )
     ctx.notifyRun()
     if (decision === "approved") {
       repo.setApproval(approvalId, "consumed", null)
-      return { behavior: "allow", input: req.input }
+      // La respuesta viaja en la entrada aprobada: así la recibe el SDK (ADR-0020 §7).
+      const input =
+        req.tool === "AskUserQuestion"
+          ? {
+              ...req.input,
+              answers: resolution.answers ?? {},
+              ...(resolution.annotations ? { annotations: resolution.annotations } : {}),
+            }
+          : req.input
+      return {
+        behavior: "allow",
+        input,
+        ...(req.tool === "ExitPlanMode" && resolution.then_mode
+          ? { mode: resolution.then_mode }
+          : {}),
+      }
     }
+    const why = resolution.reason?.trim()
     return {
       behavior: "deny",
       message:
         decision === "expired"
-          ? `Keel: sin decisión humana en ${Math.round(timeoutMs / 1000)} s; denegado (deny-on-timeout). La solicitud ${approvalId} queda en el inbox.`
-          : `Keel: denegado por el humano (${approvalId}).`,
+          ? `Keel: sin decisión humana en ${Math.round((timeoutMs ?? 0) / 1000)} s; denegado al vencer el límite. La solicitud ${approvalId} queda en el inbox.`
+          : req.tool === "AskUserQuestion"
+            ? `Keel: el humano no quiso contestar la pregunta${why ? `: ${why}` : "."}`
+            : req.tool === "ExitPlanMode"
+              ? `Keel: el humano no aprueba el plan todavía; sigue planeando${why ? `. Indicación: ${why}` : "."}`
+              : `Keel: denegado por el humano (${approvalId})${why ? `: ${why}` : "."}`,
     }
   }
 }

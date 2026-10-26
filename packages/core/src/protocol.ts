@@ -123,11 +123,15 @@ export const NodeStateSchema = z.enum([
  */
 export const PermissionModeSchema = z.enum(["ask", "accept_edits", "plan", "bypass"])
 export type PermissionMode = z.infer<typeof PermissionModeSchema>
+/** Niveles de esfuerzo que entiende el proveedor (ADR-0020 §5). */
+export const EffortSchema = z.enum(["low", "medium", "high", "xhigh", "max"])
+export type Effort = z.infer<typeof EffortSchema>
 /** Lo que el humano elige al arrancar; el daemon guarda los valores efectivos en el manifest. */
 export const RunOptionsSchema = z.object({
   model: z.string().min(1).max(120).optional(),
   max_turns: z.number().int().min(1).max(500).optional(),
   permission_mode: PermissionModeSchema.optional(),
+  effort: EffortSchema.optional(),
 })
 export const PermissionRuleViewSchema = z.object({
   id: z.string(),
@@ -342,6 +346,7 @@ export const RunViewSchema = z.object({
       model: z.string().nullable(),
       max_turns: z.number().int().nullable(),
       permission_mode: PermissionModeSchema,
+      effort: EffortSchema.nullable().optional(),
     })
     .nullable()
     .optional(),
@@ -365,6 +370,21 @@ export const NodeViewSchema = z.object({
 })
 
 // --- métodos ------------------------------------------------------------------------
+/** Un modelo que el proveedor dice tener para esta cuenta (ADR-0020 §5). */
+export const ModelOptionSchema = z.object({
+  value: z.string(),
+  display_name: z.string(),
+  description: z.string(),
+  efforts: z.array(EffortSchema),
+})
+export type ModelOption = z.infer<typeof ModelOptionSchema>
+/** Respuestas a `AskUserQuestion`: texto de la pregunta → etiqueta elegida (ADR-0020 §7). */
+export const QuestionAnswersSchema = z.record(z.string(), z.string().max(20_000))
+export const QuestionAnnotationsSchema = z.record(
+  z.string(),
+  z.object({ notes: z.string().max(20_000).optional(), preview: z.string().optional() }),
+)
+
 /** Ajustes del usuario; `source` dice de dónde sale el valor vigente. */
 export const SettingsViewSchema = z.object({
   codex_subscription: z.object({
@@ -374,6 +394,10 @@ export const SettingsViewSchema = z.object({
     updated_by: z.string().nullable(),
     updated_at: z.string().nullable(),
   }),
+  /** ADR-0020 §3: null = una aprobación espera sin límite; al vencer, se niega. */
+  approvals: z.object({ timeout_ms: z.number().int().positive().nullable() }),
+  /** ADR-0020 §6: sugerencias de mensaje de Claude (cuestan tokens). */
+  prompt_suggestions: z.object({ enabled: z.boolean() }),
 })
 export type SettingsView = z.infer<typeof SettingsViewSchema>
 
@@ -551,6 +575,29 @@ export const Methods = {
     }),
     result: RunViewSchema,
   },
+  /** ADR-0020 §4: el modo de un run vivo; `bypass` sólo con worktree de git. */
+  "runs.set_mode": {
+    params: MutationMeta.extend({ run_id: z.string(), permission_mode: PermissionModeSchema }),
+    result: z.object({ run: RunViewSchema, applies: z.enum(["now", "next_turn"]) }),
+  },
+  /** ADR-0020 §4: modelo y esfuerzo de un run vivo. */
+  "runs.set_model": {
+    params: MutationMeta.extend({
+      run_id: z.string(),
+      model: z.string().min(1).max(120),
+      effort: EffortSchema.optional(),
+    }),
+    result: z.object({ run: RunViewSchema, applies: z.enum(["now", "next_turn"]) }),
+  },
+  /** ADR-0020 §5: los modelos y esfuerzos que el proveedor ofrece a esta cuenta. */
+  "providers.models": {
+    params: z.object({ provider: z.enum(["claude", "codex"]) }),
+    result: z.object({
+      models: z.array(ModelOptionSchema),
+      /** `sdk`: los dio el proveedor; `profile`: sólo el del perfil, no se pudo preguntar. */
+      source: z.enum(["sdk", "profile"]),
+    }),
+  },
   "runs.pause": { params: MutationMeta.extend({ run_id: z.string() }), result: RunViewSchema },
   "runs.resume": {
     params: MutationMeta.extend({ run_id: z.string(), directive: z.string().optional() }),
@@ -570,7 +617,18 @@ export const Methods = {
        */
       decision: z.enum(["approve_once", "approve_session", "approve_always", "amend", "deny"]),
       amended_operation: z.unknown().optional(),
-      reason: z.string().optional(),
+      /** Lo que el agente lee al negarse: «no quiso contestar», «sigue planeando: …». */
+      reason: z.string().max(20_000).optional(),
+      /**
+       * ADR-0020 §2: el patrón corregido por el humano (`cd *`) para «sesión» o
+       * «siempre». El daemon lo rechaza si no cubre la operación pedida.
+       */
+      pattern: z.string().max(2_000).optional(),
+      /** ADR-0020 §7: respuestas a una pregunta del agente; sin ellas no se aprueba. */
+      answers: QuestionAnswersSchema.optional(),
+      annotations: QuestionAnnotationsSchema.optional(),
+      /** Al aprobar un plan (`ExitPlanMode`), el modo con el que sigue el run. */
+      then_mode: PermissionModeSchema.optional(),
     }),
     result: z.object({
       approval_id: z.string(),
@@ -892,6 +950,20 @@ export const Methods = {
    */
   "settings.codex_subscription_set": {
     params: MutationMeta.extend({ enabled: z.boolean() }),
+    result: SettingsViewSchema,
+  },
+  /** ADR-0020 §3 y §6: límite de espera de una aprobación y sugerencias de Claude. */
+  "settings.update": {
+    params: MutationMeta.extend({
+      approvals_timeout_ms: z
+        .number()
+        .int()
+        .min(10_000)
+        .max(7 * 86_400_000)
+        .nullable()
+        .optional(),
+      prompt_suggestions: z.boolean().optional(),
+    }),
     result: SettingsViewSchema,
   },
   "events.subscribe": {

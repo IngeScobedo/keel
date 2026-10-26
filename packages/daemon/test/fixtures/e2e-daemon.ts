@@ -13,7 +13,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Daemon } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
-import { replayQuery } from "../replay.ts"
+import { chatQuery, firstPrompt, replayQuery } from "../replay.ts"
 
 const dir = mkdtempSync(join(tmpdir(), "keel-e2e-"))
 initRepo(join(dir, "repo"))
@@ -24,9 +24,13 @@ const daemon = new Daemon({
   socketPath: join(dir, "keel.sock"),
   rootPath: join(dir, "repo"),
   worktreesDir: join(dir, "worktrees"),
-  adapterDeps: { queryFn: replayQuery(), binary: "/fake/claude" },
+  // «chat…» corre el guion del chat de foco (ADR-0020); lo demás, la corrida grabada.
+  adapterDeps: {
+    queryFn: (a) =>
+      firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a),
+    binary: "/fake/claude",
+  },
   mcpBridge: false,
-  profile: { approval_timeout_ms: 120_000 },
   // Con KEEL_E2E_CODEX_OFF=1 arranca sin el flag: la suscripción se enciende desde la GUI.
   codex: { subscription_enabled: process.env.KEEL_E2E_CODEX_OFF !== "1" },
   codexDeps: {

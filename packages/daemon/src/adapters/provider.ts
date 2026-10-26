@@ -10,7 +10,7 @@
  * Vive en el daemon hasta que llegue el segundo proveedor (Codex); entonces se
  * mueve a `@keel/agent-runtime` y se corrige con dos casos reales.
  */
-import type { CostKind } from "@keel/core"
+import type { CostKind, Effort, ModelOption, PermissionMode } from "@keel/core"
 import type { Repo, RunRow } from "../store/repo.js"
 
 /**
@@ -40,7 +40,12 @@ export type ToolRequest = {
 }
 
 export type ToolDecision =
-  | { behavior: "allow"; input: Record<string, unknown> }
+  | {
+      behavior: "allow"
+      input: Record<string, unknown>
+      /** Modo con el que sigue el run al aprobar un plan (ADR-0020 §7). */
+      mode?: PermissionMode
+    }
   | { behavior: "deny"; message: string }
 
 /** Política del daemon para una herramienta que no está auto-aprobada. Una instancia sirve a todos los runs. */
@@ -121,4 +126,14 @@ export interface ProviderAdapter<Profile> {
    * o el turno siguiente).
    */
   sendMessage(runId: string, text: string): boolean
+  /**
+   * ADR-0020 §4: cambia el modo de un run vivo. `now`: el turno en curso;
+   * `next_turn`: desde el siguiente. `error` si el proveedor no puede.
+   */
+  setMode(runId: string, mode: PermissionMode): Promise<LiveChange>
+  setModel(runId: string, model: string, effort: Effort | null): Promise<LiveChange>
+  /** ADR-0020 §5: modelos de la cuenta; null si no se pudo preguntar. */
+  listModels(profile: Profile): Promise<ModelOption[] | null>
 }
+
+export type LiveChange = { applies: "now" | "next_turn" } | { error: string }

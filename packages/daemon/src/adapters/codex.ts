@@ -18,7 +18,14 @@
  * - Costo: sólo tokens. `cost_kind = unknown`; nunca dólares inventados.
  */
 import { spawn } from "node:child_process"
-import { classifyRunOutcome, type PermissionMode, type RunSignals, toolCallLabel } from "@keel/core"
+import {
+  classifyRunOutcome,
+  type Effort,
+  type ModelOption,
+  type PermissionMode,
+  type RunSignals,
+  toolCallLabel,
+} from "@keel/core"
 import {
   Codex,
   type CodexOptions,
@@ -36,7 +43,13 @@ import {
   errorCodeFromInfo,
   tomlValue,
 } from "./codex-app-server.js"
-import type { Preflight, ProviderAdapter, ProviderCapabilities, RunContext } from "./provider.js"
+import type {
+  LiveChange,
+  Preflight,
+  ProviderAdapter,
+  ProviderCapabilities,
+  RunContext,
+} from "./provider.js"
 
 export const CODEX_ADAPTER_VERSION = "codex-sdk/0.162.0"
 export const CODEX_SOURCE = "codex-sdk"
@@ -136,6 +149,14 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
   /** Entrega de mensajes humanos a los runs vivos con `app_server` (ADR-0019 §3). */
   private readonly live = new Map<string, (text: string) => boolean>()
   private readonly abortCause = new Map<string, "cancelled" | "timeout">()
+  /**
+   * ADR-0020 §4: lo que el humano cambió con el run vivo; entra en el
+   * `turn/start` siguiente. Sólo con `app_server`.
+   */
+  private readonly turnOverrides = new Map<
+    string,
+    { execute: boolean; base: CodexProfile["approval_policy"]; next: Record<string, unknown> }
+  >()
   private readonly deps: CodexAdapterDeps
   constructor(deps: CodexAdapterDeps = {}, transport: CodexProfile["transport"] = "app_server") {
     this.deps = deps
@@ -148,6 +169,26 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
 
   sendMessage(runId: string, text: string): boolean {
     return this.live.get(runId)?.(text) ?? false
+  }
+
+  async setMode(runId: string, mode: PermissionMode): Promise<LiveChange> {
+    const o = this.turnOverrides.get(runId)
+    if (!o) return { error: "Codex sólo cambia de modo en vivo con el app-server" }
+    o.next.approvalPolicy = o.execute && mode !== "bypass" ? o.base : "never"
+    return { applies: "next_turn" }
+  }
+
+  async setModel(runId: string, model: string, effort: Effort | null): Promise<LiveChange> {
+    const o = this.turnOverrides.get(runId)
+    if (!o) return { error: "Codex sólo cambia de modelo en vivo con el app-server" }
+    o.next.model = model
+    if (effort) o.next.effort = effort === "low" || effort === "medium" ? effort : "high"
+    return { applies: "next_turn" }
+  }
+
+  /** Sin pregunta al proveedor todavía: el daemon muestra el modelo del perfil. */
+  async listModels(): Promise<ModelOption[] | null> {
+    return null
   }
 
   cancel(runId: string, reason: string | null): boolean {
@@ -346,6 +387,8 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     let markReady: (id: string | null) => void = () => {}
     const queue: string[] = []
     let finished = false
+    const overrides = { execute, base: profile.approval_policy, next: {} }
+    this.turnOverrides.set(run.id, overrides)
     this.live.set(run.id, (text) => {
       // Tras el último turno ya nadie leería la cola: el run no acepta más mensajes.
       if (finished) return false
@@ -466,6 +509,7 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
               threadId,
               input: [{ type: "text", text: next }],
               ...(profile.reasoning_effort ? { effort: profile.reasoning_effort } : {}),
+              ...overrides.next,
             })
             .catch((e: unknown) => {
               markReady(null)
@@ -495,6 +539,7 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
       clearTimeout(deadline)
       this.running.delete(run.id)
       this.live.delete(run.id)
+      this.turnOverrides.delete(run.id)
     }
     const exit = await server.close()
     if (exit.code !== 0 && exit.code !== null && server.stderr)

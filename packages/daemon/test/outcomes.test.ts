@@ -81,7 +81,11 @@ async function run(queryFn: QueryFn, profile: Partial<ClaudeProfile> = {}) {
     repo,
     bus,
     run: r,
-    gate: new ApprovalGate({ repo, waitApproval: async () => "expired", timeoutMs: 20 }),
+    gate: new ApprovalGate({
+      repo,
+      waitApproval: async () => ({ decision: "expired" }),
+      timeoutMs: 20,
+    }),
     source: SOURCE,
     adapterVersion: adapter.adapterVersion,
   })

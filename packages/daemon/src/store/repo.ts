@@ -1032,7 +1032,7 @@ export class Repo {
     run_id: string
     operation_hash: string
     operation: unknown
-    expires_at: string
+    expires_at: string | null
   }): string {
     const id = ulid()
     this.db
@@ -1330,9 +1330,15 @@ function runOptionsOf(r: RunRow): {
   model: string | null
   max_turns: number | null
   permission_mode: "ask" | "accept_edits" | "plan" | "bypass"
+  effort: "low" | "medium" | "high" | "xhigh" | "max" | null
 } | null {
   const m = JSON.parse(r.context_manifest_json) as {
-    options?: { model?: string | null; max_turns?: number | null; permission_mode?: string }
+    options?: {
+      model?: string | null
+      max_turns?: number | null
+      permission_mode?: string
+      effort?: string | null
+    }
   }
   const o = m.options
   if (!o?.permission_mode) return null
@@ -1340,6 +1346,7 @@ function runOptionsOf(r: RunRow): {
     model: o.model ?? null,
     max_turns: o.max_turns ?? null,
     permission_mode: o.permission_mode as "ask" | "accept_edits" | "plan" | "bypass",
+    effort: (o.effort ?? null) as "low" | "medium" | "high" | "xhigh" | "max" | null,
   }
 }
 

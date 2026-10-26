@@ -229,7 +229,12 @@ describe("ADR-0019 §4 y ADR-0018 §1: opciones del run y atribución", () => {
     expect(o.env.GIT_COMMITTER_EMAIL).toBe(`${r.run.id.toLowerCase()}@agents.keel.local`)
     expect(o.env.KEEL_RUN_ID).toBe(r.run.id)
     const view = daemon.repo.runView(daemon.repo.getRun(r.run.id) as never)
-    expect(view.options).toEqual({ model: "sonnet", max_turns: 40, permission_mode: "bypass" })
+    expect(view.options).toEqual({
+      model: "sonnet",
+      max_turns: 40,
+      permission_mode: "bypass",
+      effort: null,
+    })
   })
 
   test("un run que no ejecuta no admite bypass ni accept_edits", async () => {

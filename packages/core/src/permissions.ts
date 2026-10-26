@@ -67,3 +67,32 @@ export function filePathOf(input: unknown): string | null {
   const v = i?.file_path ?? i?.notebook_path ?? i?.path
   return typeof v === "string" ? v : null
 }
+
+/**
+ * El patrón como lo edita el humano (ADR-0020 §2): `cd *` cubre `cd` y lo que
+ * siga; sin `*` final es la orden exacta. Fuera del shell, `*` es toda la
+ * herramienta.
+ */
+export function patternText(p: PermissionPattern): string {
+  if (p.prefix === null) return "*"
+  return p.exact ? p.prefix : `${p.prefix} *`
+}
+
+/**
+ * Lee lo que escribió el humano. Devuelve null si no es un patrón aceptable:
+ * todo el shell es el modo `bypass`, no un patrón, y un prefijo con
+ * metacaracteres no se admite porque lo que siga podría encadenar otra orden.
+ */
+export function parsePattern(tool: string, text: string): PermissionPattern | null {
+  const t = text.trim()
+  if (!SHELL_TOOLS.has(tool))
+    return t === "*" || t === "" || t === tool ? { tool, prefix: null, exact: false } : null
+  if (t === "" || t === "*") return null
+  if (t.endsWith("*")) {
+    if (!t.endsWith(" *")) return null
+    const prefix = t.slice(0, -2).trim()
+    if (!prefix || SHELL_META.test(prefix)) return null
+    return { tool, prefix, exact: false }
+  }
+  return { tool, prefix: t, exact: true }
+}

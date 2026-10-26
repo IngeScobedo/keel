@@ -12,6 +12,7 @@ import {
   allowedTransitions,
   checkTransition,
   describePattern,
+  type Effort,
   ErrorCode,
   type GitPlan,
   GitPlanSchema,
@@ -19,7 +20,10 @@ import {
   type MethodName,
   type Methods,
   type MutationMeta,
+  matchesPattern,
   type PermissionMode,
+  type PermissionPattern,
+  parsePattern,
   patternFor,
   RUN_START_RULES,
   redact,
@@ -53,8 +57,9 @@ import {
   type CodexProfile,
   DEFAULT_CODEX_PROFILE,
 } from "./adapters/codex.js"
+import type { LiveChange } from "./adapters/provider.js"
 import { AgentTokens } from "./agent-tokens.js"
-import { ApprovalGate } from "./approvals.js"
+import { ApprovalGate, type ApprovalResolution, QUESTION_TOOLS } from "./approvals.js"
 import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
@@ -176,7 +181,7 @@ export class Daemon {
   readonly rootPath: string
   readonly profile: ClaudeProfile
   readonly startedAt = Date.now()
-  private readonly approvalWaiters = new Map<string, (d: "approved" | "denied") => void>()
+  private readonly approvalWaiters = new Map<string, (r: ApprovalResolution) => void>()
   readonly outbox: Outbox
   readonly processes: ProcessTable
   readonly limits: Limits
@@ -276,7 +281,7 @@ export class Daemon {
     this.toolGate = new ApprovalGate({
       repo: this.repo,
       waitApproval: (id, ms) => this.waitApproval(id, ms),
-      timeoutMs: this.profile.approval_timeout_ms,
+      timeoutMs: () => this.settingsView().approvals.timeout_ms,
       cwdOf: (runId) => this.runCwd.get(runId) ?? null,
     })
     // El vínculo de una sesión externa dura lo que dura su conexión (ADR-0009 §4).
@@ -407,16 +412,20 @@ export class Daemon {
     }
   }
 
-  private waitApproval(id: string, ms: number): Promise<"approved" | "denied" | "expired"> {
+  /** Espera la decisión humana; `ms` null = sin límite (ADR-0020 §3). */
+  private waitApproval(id: string, ms: number | null): Promise<ApprovalResolution> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
+      const timer =
+        ms === null
+          ? null
+          : setTimeout(() => {
+              this.approvalWaiters.delete(id)
+              resolve({ decision: "expired" })
+            }, ms)
+      this.approvalWaiters.set(id, (r) => {
+        if (timer) clearTimeout(timer)
         this.approvalWaiters.delete(id)
-        resolve("expired")
-      }, ms)
-      this.approvalWaiters.set(id, (d) => {
-        clearTimeout(timer)
-        this.approvalWaiters.delete(id)
-        resolve(d)
+        resolve(r)
       })
     })
   }
@@ -457,9 +466,24 @@ export class Daemon {
 
   /** El flag de arranque manda; si no, lo que el humano eligió en la GUI (ADR-0008 §2). */
   settingsView(): SettingsView {
+    // ADR-0020 §3: lo que fijó el humano manda; si no, el perfil (null = sin límite).
+    const timeout = this.repo.getSetting(APPROVALS_TIMEOUT)
+    const suggestions = this.repo.getSetting(PROMPT_SUGGESTIONS)
+    const rest = {
+      approvals: {
+        timeout_ms: timeout
+          ? typeof timeout.value === "number"
+            ? timeout.value
+            : null
+          : this.profile.approval_timeout_ms,
+      },
+      // Encendidas por decisión del humano (ADR-0020 §6) hasta que las apague.
+      prompt_suggestions: { enabled: suggestions ? suggestions.value === true : true },
+    }
     if (this.codexProfile.subscription_enabled)
       return {
         codex_subscription: { enabled: true, source: "flag", updated_by: null, updated_at: null },
+        ...rest,
       }
     const s = this.repo.getSetting(CODEX_SUBSCRIPTION)
     return {
@@ -469,6 +493,7 @@ export class Daemon {
         updated_by: s?.updated_by ?? null,
         updated_at: s?.updated_at ?? null,
       },
+      ...rest,
     }
   }
 
@@ -704,6 +729,53 @@ export class Daemon {
             this.codex.cancel(run.id, p.reason ?? null),
         )
         return repo.runView(run)
+      }),
+      "runs.set_mode": this.mutation<Params<"runs.set_mode">>("runs.set_mode", (p, uow, ctx) => {
+        requireHuman(ctx, "cambiar el modo de un run")
+        const run = this.requireLiveRun(p.run_id)
+        const before = runOptionsFor(run)
+        // Las mismas reglas que al arrancar: bypass sólo en execute con git.
+        const checked = this.runOptions(run.project_id, run.purpose, this.providerName(run), {
+          permission_mode: p.permission_mode,
+        })
+        const codex = this.providerName(run) === "codex"
+        if (codex && (before.permission_mode === "plan") !== (p.permission_mode === "plan"))
+          throw rpcError(
+            ErrorCode.invalidParams,
+            "Codex no entra ni sale de plan con el run vivo: el sandbox se fija al arrancar",
+          )
+        const updated = repo.mergeManifest(run.id, {
+          options: { ...before, permission_mode: checked.permission_mode },
+        })
+        const applies = codex ? "next_turn" : "now"
+        uow.emit("run.mode_changed", run.id, {
+          from: before.permission_mode,
+          to: checked.permission_mode,
+          applies,
+          actor: actorOf(ctx),
+        })
+        uow.emit("run.updated", run.id, repo.runView(updated))
+        uow.afterCommit(() => this.applyLive(run, (a) => a.setMode(run.id, p.permission_mode)))
+        return { run: repo.runView(updated), applies: applies as "now" | "next_turn" }
+      }),
+      "runs.set_model": this.mutation<Params<"runs.set_model">>("runs.set_model", (p, uow, ctx) => {
+        requireHuman(ctx, "cambiar el modelo de un run")
+        const run = this.requireLiveRun(p.run_id)
+        const before = runOptionsFor(run)
+        const effort = p.effort ?? null
+        const updated = repo.mergeManifest(run.id, {
+          options: { ...before, model: p.model, effort },
+        })
+        const applies = this.providerName(run) === "codex" ? "next_turn" : "now"
+        uow.emit("run.model_changed", run.id, {
+          from: { model: before.model, effort: before.effort ?? null },
+          to: { model: p.model, effort },
+          applies,
+          actor: actorOf(ctx),
+        })
+        uow.emit("run.updated", run.id, repo.runView(updated))
+        uow.afterCommit(() => this.applyLive(run, (a) => a.setModel(run.id, p.model, effort)))
+        return { run: repo.runView(updated), applies: applies as "now" | "next_turn" }
       }),
       "runs.message": this.mutation<Params<"runs.message">>("runs.message", (p, uow, ctx) => {
         requireHuman(ctx, "escribirle a un run")
@@ -1440,6 +1512,40 @@ export class Daemon {
           return view
         },
       ),
+      "settings.update": this.mutation<Params<"settings.update">>(
+        "settings.update",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "cambiar los ajustes")
+          if (p.approvals_timeout_ms !== undefined)
+            repo.setSetting(APPROVALS_TIMEOUT, p.approvals_timeout_ms, uow.actorId)
+          if (p.prompt_suggestions !== undefined)
+            repo.setSetting(PROMPT_SUGGESTIONS, p.prompt_suggestions, uow.actorId)
+          const view = this.settingsView()
+          uow.emit("settings.changed", null, view)
+          return view
+        },
+      ),
+      "providers.models": async (params) => {
+        const p = params as Params<"providers.models">
+        if (p.provider === "claude") {
+          const models = await this.claude.listModels(this.profile)
+          if (models) return { models, source: "sdk" as const }
+        }
+        const fallback = p.provider === "claude" ? this.profile.model : this.codexProfile.model
+        return {
+          models: fallback
+            ? [
+                {
+                  value: fallback,
+                  display_name: fallback,
+                  description: "el del perfil",
+                  efforts: [],
+                },
+              ]
+            : [],
+          source: "profile" as const,
+        }
+      },
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
         "approvals.resolve",
         (p, uow) => {
@@ -1455,6 +1561,9 @@ export class Daemon {
           // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
           const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
           if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
+          // ADR-0020 §7: una pregunta se contesta o se rechaza; no hay «sesión» ni «siempre».
+          if (op.tool && QUESTION_TOOLS.has(op.tool))
+            return this.resolveQuestion(uow, a, op.tool, p)
           // Una operación de recurso se aprueba una vez: los permisos duraderos son grants.
           if (
             op.tool?.startsWith("resource.") &&
@@ -1471,11 +1580,25 @@ export class Daemon {
             p.decision === "approve_always"
               ? "approved"
               : "denied"
-          repo.setApproval(a.id, decision, uow.actorId)
-          // ADR-0019 §4: recordar lo aprobado, para el run o para el proyecto.
+          // ADR-0019 §4: recordar lo aprobado, para el run o para el proyecto. ADR-0020 §2:
+          // el humano puede corregir el patrón, pero tiene que cubrir lo que se pidió.
+          let pattern: PermissionPattern | null = null
           if (p.decision === "approve_session" || p.decision === "approve_always") {
             const op = JSON.parse(a.operation_json) as { tool: string; input: unknown }
-            const pattern = patternFor(op.tool, op.input)
+            pattern =
+              p.pattern === undefined
+                ? patternFor(op.tool, op.input)
+                : parsePattern(op.tool, p.pattern)
+            if (!pattern)
+              throw rpcError(
+                ErrorCode.invalidParams,
+                "patrón no válido: usa la orden exacta o un prefijo sin ;, &&, | ni redirecciones seguido de « *» (para todo el shell, el modo bypass)",
+              )
+            if (!matchesPattern(pattern, op.tool, op.input))
+              throw rpcError(ErrorCode.invalidParams, "el patrón no cubre la operación pedida")
+          }
+          repo.setApproval(a.id, decision, uow.actorId)
+          if (pattern) {
             if (p.decision === "approve_always") {
               const rule = repo.addPermissionRule({
                 project_id: a.project_id,
@@ -1485,9 +1608,15 @@ export class Daemon {
                 source_approval_id: a.id,
               })
               uow.emit("permission.rule_added", a.run_id, ruleView(rule))
-            } else uow.afterCommit(() => this.toolGate.grantSession(a.run_id, pattern, a.id))
+            } else {
+              const granted = pattern
+              uow.afterCommit(() => this.toolGate.grantSession(a.run_id, granted, a.id))
+            }
           }
-          uow.afterCommit(() => this.approvalWaiters.get(a.id)?.(decision))
+          const reason = p.reason
+          uow.afterCommit(() =>
+            this.approvalWaiters.get(a.id)?.({ decision, ...(reason ? { reason } : {}) }),
+          )
           return { approval_id: a.id, state: decision }
         },
       ),
@@ -1513,7 +1642,7 @@ export class Daemon {
     const manifest = JSON.parse(run.context_manifest_json) as {
       budget_micro_usd?: number
       provider?: string
-      options?: { model: string | null; max_turns: number | null; permission_mode: PermissionMode }
+      options?: RunOptionsRecord
     }
     const opt = manifest.options
     const env = agentEnv(run, item, manifest.provider === "codex" ? "Codex" : "Claude")
@@ -1559,6 +1688,7 @@ export class Daemon {
                 ...this.codexProfile,
                 subscription_enabled: this.settingsView().codex_subscription.enabled,
                 ...(opt ? { model: opt.model, permission_mode: opt.permission_mode } : {}),
+                ...(opt?.effort ? { reasoning_effort: codexEffort(opt.effort) } : {}),
                 resume_thread_id: this.resumeOf(run, ws.cwd),
                 env,
                 cwd: ws.cwd,
@@ -1571,8 +1701,14 @@ export class Daemon {
                       model: opt.model ?? this.profile.model,
                       max_turns: opt.max_turns ?? this.profile.max_turns,
                       permission_mode: opt.permission_mode,
+                      effort: opt.effort ?? null,
                     }
                   : {}),
+                // ADR-0020 §4: el humano puede pasar a bypass en vivo donde arrancar en bypass vale.
+                allow_bypass:
+                  run.purpose === "execute" &&
+                  this.repo.getProjectVcs(run.project_id).vcs === "git",
+                prompt_suggestions: this.settingsView().prompt_suggestions.enabled,
                 resume_session_id: this.resumeOf(run, ws.cwd),
                 sandbox,
                 env,
@@ -1749,7 +1885,7 @@ export class Daemon {
     purpose: Params<"runs.start">["purpose"],
     provider: "claude" | "codex",
     o: Params<"runs.start">["options"],
-  ): { model: string | null; max_turns: number | null; permission_mode: PermissionMode } {
+  ): RunOptionsRecord {
     const mode = o?.permission_mode ?? "ask"
     if (purpose !== "execute" && mode !== "ask" && mode !== "plan")
       throw rpcError(
@@ -1761,13 +1897,101 @@ export class Daemon {
         ErrorCode.invalidParams,
         "bypass sólo existe dentro de un worktree de git; este proyecto no usa git",
       )
+    const effort = o?.effort ?? null
     return provider === "claude"
       ? {
           model: o?.model ?? this.profile.model,
           max_turns: o?.max_turns ?? this.profile.max_turns,
           permission_mode: mode,
+          effort: effort ?? this.profile.effort,
         }
-      : { model: o?.model ?? this.codexProfile.model, max_turns: null, permission_mode: mode }
+      : {
+          model: o?.model ?? this.codexProfile.model,
+          max_turns: null,
+          permission_mode: mode,
+          effort,
+        }
+  }
+
+  private providerName(run: RunRow): "claude" | "codex" {
+    const m = JSON.parse(run.context_manifest_json) as { provider?: string }
+    return m.provider === "codex" ? "codex" : "claude"
+  }
+
+  private requireLiveRun(id: string): RunRow {
+    const run = this.repo.getRun(id)
+    if (!run) throw rpcError(ErrorCode.notFound, "el run no existe")
+    if (!ACTIVE_RUN_STATUSES.includes(run.status))
+      throw rpcError(ErrorCode.invalidTransition, `el run está ${run.status}`)
+    return run
+  }
+
+  /** Aplica en el proveedor un cambio ya registrado; si no puede, queda el evento. */
+  private applyLive(
+    run: RunRow,
+    change: (a: ClaudeAdapter | CodexAdapter) => Promise<LiveChange>,
+  ): void {
+    this.track(
+      change(this.providerOf(run))
+        .catch((e: unknown) => ({ error: e instanceof Error ? e.message : String(e) }))
+        .then((r) => {
+          if ("error" in r) this.emitSystem("run.live_change_failed", run.id, { message: r.error })
+        }),
+    )
+  }
+
+  /**
+   * ADR-0020 §7: contestar o rechazar una pregunta del agente. Aprobar exige
+   * respuestas; un plan aprobado puede cambiar el modo del run.
+   */
+  private resolveQuestion(
+    uow: UnitOfWork,
+    a: NonNullable<ReturnType<Repo["getApproval"]>>,
+    tool: string,
+    p: Params<"approvals.resolve">,
+  ) {
+    if (p.decision !== "approve_once" && p.decision !== "deny")
+      throw rpcError(
+        ErrorCode.invalidParams,
+        "una pregunta del agente se contesta (approve_once) o se rechaza (deny)",
+      )
+    const answers = p.answers ?? {}
+    if (p.decision === "approve_once" && tool === "AskUserQuestion") {
+      const op = JSON.parse(a.operation_json) as { input?: { questions?: { question?: string }[] } }
+      const asked = (op.input?.questions ?? []).map((q) => String(q.question ?? ""))
+      const missing = asked.filter((q) => !answers[q]?.trim())
+      if (asked.length === 0 || missing.length > 0)
+        throw rpcError(ErrorCode.invalidParams, "faltan respuestas", { missing })
+    }
+    const decision = p.decision === "deny" ? "denied" : "approved"
+    this.repo.setApproval(a.id, decision, uow.actorId)
+    const run = this.repo.getRun(a.run_id)
+    if (decision === "approved" && tool === "ExitPlanMode" && p.then_mode && run) {
+      const mode = p.then_mode
+      const before = runOptionsFor(run)
+      const checked = this.runOptions(run.project_id, run.purpose, this.providerName(run), {
+        permission_mode: mode,
+      })
+      const updated = this.repo.mergeManifest(run.id, {
+        options: { ...before, permission_mode: checked.permission_mode },
+      })
+      uow.emit("run.mode_changed", run.id, {
+        from: before.permission_mode,
+        to: checked.permission_mode,
+        applies: "now",
+        actor: { id: uow.actorId },
+      })
+      uow.emit("run.updated", run.id, this.repo.runView(updated))
+    }
+    const resolution: ApprovalResolution = {
+      decision,
+      ...(decision === "approved" && p.then_mode ? { then_mode: p.then_mode } : {}),
+      ...(decision === "approved" && tool === "AskUserQuestion" ? { answers } : {}),
+      ...(p.annotations ? { annotations: p.annotations } : {}),
+      ...(p.reason ? { reason: p.reason } : {}),
+    }
+    uow.afterCommit(() => this.approvalWaiters.get(a.id)?.(resolution))
+    return { approval_id: a.id, state: decision as "approved" | "denied" }
   }
 
   private providerOf(run: RunRow): ClaudeAdapter | CodexAdapter {
@@ -1987,8 +2211,8 @@ export class Daemon {
     op: { tool: string; input: unknown },
   ): Promise<"approved" | "denied" | "expired"> {
     const hash = await sha256Hex(canonicalJson({ ...op, run_id: runId }))
-    const timeout = this.profile.approval_timeout_ms
-    const expires = new Date(Date.now() + timeout).toISOString()
+    const timeout = this.settingsView().approvals.timeout_ms
+    const expires = timeout === null ? null : new Date(Date.now() + timeout).toISOString()
     const saved = redact({ ...op, run_id: runId }).value as { input?: unknown }
     const approvalId = this.repo.createApproval({
       project_id: projectId,
@@ -2006,7 +2230,7 @@ export class Daemon {
         expires_at: expires,
       }),
     )
-    const decision = await this.waitApproval(approvalId, timeout)
+    const { decision } = await this.waitApproval(approvalId, timeout)
     if (decision === "expired") this.repo.setApproval(approvalId, "expired", null)
     else if (decision === "approved") this.repo.setApproval(approvalId, "consumed", null)
     runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
@@ -2319,7 +2543,32 @@ function requireHuman(ctx: HandlerContext, what: string): void {
 }
 
 /** Clave del ajuste de ADR-0008 §2 (migración 0011). */
+/** Opciones efectivas guardadas en el manifest del run (ADR-0019 §4, ADR-0020 §4). */
+type RunOptionsRecord = {
+  model: string | null
+  max_turns: number | null
+  permission_mode: PermissionMode
+  effort?: Effort | null
+}
+
+function runOptionsFor(run: RunRow): RunOptionsRecord {
+  const m = JSON.parse(run.context_manifest_json) as { options?: Partial<RunOptionsRecord> }
+  return {
+    model: m.options?.model ?? null,
+    max_turns: m.options?.max_turns ?? null,
+    permission_mode: m.options?.permission_mode ?? "ask",
+    effort: m.options?.effort ?? null,
+  }
+}
+
+/** Codex no tiene `xhigh` ni `max`: se quedan en su nivel más alto. */
+function codexEffort(e: Effort): "low" | "medium" | "high" {
+  return e === "low" || e === "medium" ? e : "high"
+}
+
 const CODEX_SUBSCRIPTION = "codex.subscription_enabled"
+const APPROVALS_TIMEOUT = "approvals.timeout_ms"
+const PROMPT_SUGGESTIONS = "claude.prompt_suggestions"
 
 /** Estados de un run en los que su agente conserva la capacidad. */
 const ACTIVE_RUN_STATUSES: readonly string[] = [

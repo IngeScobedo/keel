@@ -19,7 +19,7 @@ import { askingQuery, hangingQuery, loadRecordedRun, replayQuery } from "./repla
 
 function setup(
   queryFn: ReturnType<typeof replayQuery>,
-  waitApproval: ApprovalWaiter = async () => "expired",
+  waitApproval: ApprovalWaiter = async () => ({ decision: "expired" }),
 ) {
   const dir = mkdtempSync(join(tmpdir(), "keel-adapter-"))
   const store = openStore(join(dir, "keel.sqlite"), { loadVector: false })
@@ -212,7 +212,7 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
   })
 
   test("canUseTool aprobado por el humano → allow y aprobación consumida", async () => {
-    const s = setup(askingQuery(), async () => "approved" as const)
+    const s = setup(askingQuery(), async () => ({ decision: "approved" as const }))
     await s.adapter.execute(s.ctx, "borra", { ...DEFAULT_PROFILE, cwd: s.dir })
     const req = s.published.find((n) => n.kind === "approval.requested")?.payload as {
       approval_id: string
@@ -230,7 +230,7 @@ describe("adaptador Claude SDK (ADR-0002 §4, ADR-0006) sobre la corrida grabada
     const secret = "sk-ant-api03-abcdefghijklmnopqrstuvwxyz"
     const s = setup(
       askingQuery({ command: `curl -H "x-api-key: ${secret}" https://x` }),
-      async () => "approved" as const,
+      async () => ({ decision: "approved" as const }),
     )
     await s.adapter.execute(s.ctx, "borra", { ...DEFAULT_PROFILE, cwd: s.dir })
     const req = s.published.find((n) => n.kind === "approval.requested")?.payload as {

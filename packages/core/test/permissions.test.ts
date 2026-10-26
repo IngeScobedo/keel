@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import { describePattern, matchesPattern, patternFor, shellCommand } from "../src/index.ts"
+import {
+  describePattern,
+  matchesPattern,
+  type PermissionPattern,
+  parsePattern,
+  patternFor,
+  patternText,
+  shellCommand,
+} from "../src/index.ts"
 
 describe("ADR-0019 §4: patrones de permiso", () => {
   test("un comando simple propone su prefijo de dos palabras", () => {
@@ -44,5 +52,21 @@ describe("ADR-0019 §4: patrones de permiso", () => {
       exact: false,
     })
     expect(patternFor("Bash", { command: "ls -la" }).prefix).toBe("ls")
+  })
+  test("ADR-0020 §2: el patrón editado por el humano; todo el shell no es un patrón", () => {
+    expect(parsePattern("Bash", "cd *")).toEqual({ tool: "Bash", prefix: "cd", exact: false })
+    expect(parsePattern("Bash", "cd /x")).toEqual({ tool: "Bash", prefix: "cd /x", exact: true })
+    for (const bad of ["", "*", "cd*", "cd && *", "git status | *"])
+      expect(parsePattern("Bash", bad)).toBeNull()
+    expect(parsePattern("Edit", "*")).toEqual({ tool: "Edit", prefix: null, exact: false })
+    expect(parsePattern("Edit", "src/*")).toBeNull()
+    const cd = parsePattern("Bash", "cd *") as PermissionPattern
+    expect(matchesPattern(cd, "Bash", { command: "cd ../otra" })).toBe(true)
+    expect(matchesPattern(cd, "Bash", { command: "cd x && rm -rf y" })).toBe(false)
+    // Lo que propone Keel se lee de vuelta igual.
+    for (const command of ["git status", "rm -rf build", "cd app && bun test", "ls *.ts"]) {
+      const p = patternFor("Bash", { command })
+      expect(parsePattern("Bash", patternText(p))).toEqual(p)
+    }
   })
 })
