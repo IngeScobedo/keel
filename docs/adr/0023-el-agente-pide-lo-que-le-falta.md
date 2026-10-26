@@ -1,6 +1,8 @@
 # ADR-0023: El agente pide lo que le falta: `setup_request` y la GUI que responde
 
-- **Estado:** Propuesto
+- **Estado:** Rechazado (2026-10-26). El humano quiere un vault propio de Keel,
+  con importación desde el sistema, y separar el vault de cómo lo consume el
+  agente. Lo reemplaza ADR-0025.
 - **Fecha:** 2026-10-26
 - **Criticidad:** Alta
 - **Relacionados:**

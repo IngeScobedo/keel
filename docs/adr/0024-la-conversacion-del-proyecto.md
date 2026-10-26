@@ -1,6 +1,6 @@
 # ADR-0024: La conversación del proyecto: consultas sin tarea, de donde nacen tareas
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-26)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Media
 - **Relacionados:**

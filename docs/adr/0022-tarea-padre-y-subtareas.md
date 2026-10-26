@@ -1,6 +1,6 @@
 # ADR-0022: Tarea padre y subtareas: una feature es un árbol de tareas con su rama
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-26)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Alta
 - **Relacionados:**
