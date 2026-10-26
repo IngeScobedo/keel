@@ -13,7 +13,14 @@
  */
 import { randomUUID } from "node:crypto"
 import { readFileSync, rmSync } from "node:fs"
-import { CEREMONIES, LifecycleSchema, RunPurposeSchema, STAGES, TASK_DOC_KINDS } from "@keel/core"
+import {
+  CEREMONIES,
+  LifecycleSchema,
+  PrioritySchema,
+  RunPurposeSchema,
+  STAGES,
+  TASK_DOC_KINDS,
+} from "@keel/core"
 import { z } from "zod"
 import { IpcClient } from "../ipc/client.js"
 import { agentDoorPath, defaultEndpoint } from "../ipc/endpoint.js"
@@ -90,13 +97,23 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
     ),
     tool(
       "task_create",
-      "Crea una tarea nueva en triage. Un humano decide si se planifica.",
+      "Crea una tarea nueva en triage con lo que encontraste: título, tipo, prioridad (urgent para un issue de seguridad) y en context_markdown los archivos, la evidencia y por qué importa. Queda ligada a la tarea de esta sesión; un humano decide si se trabaja.",
       z.object({
         title: z.string().min(1),
         kind: z.enum(KINDS).default("chore"),
+        priority: PrioritySchema.default("medium"),
+        context_markdown: z.string().optional(),
+        /** Nombre anterior de `context_markdown`; se mantiene por compatibilidad. */
         spec_markdown: z.string().optional(),
       }),
-      (a) => client.call("work_items.create", { ...mutation(), ...a }),
+      ({ context_markdown, spec_markdown, ...a }) =>
+        client.call("work_items.create", {
+          ...mutation(),
+          ...a,
+          ...((context_markdown ?? spec_markdown)
+            ? { spec_markdown: context_markdown ?? spec_markdown }
+            : {}),
+        }),
     ),
     tool(
       "note_add",

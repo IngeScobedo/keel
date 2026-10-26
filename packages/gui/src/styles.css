@@ -2550,6 +2550,12 @@ pre.rc-error {
   border: 1px solid var(--color-border-default);
   color: var(--color-text-tertiary);
 }
+.rc-pill.priority-urgent,
+.rc-pill.priority-high {
+  color: var(--color-status-failed);
+  border-color: var(--color-status-failed-border);
+  background: var(--color-status-failed-bg);
+}
 
 /* Permiso, pregunta y plan: lo que te necesita. */
 .rc-approval,
@@ -3436,4 +3442,84 @@ button.rc-ledger-row:hover {
   border: 1px solid var(--color-border-subtle);
   padding: 3px 8px;
   text-align: left;
+}
+
+/* ADR-0024: la conversación del proyecto. */
+.conv-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.conv-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.conv-head h1 {
+  font-size: 15px;
+  margin: 0;
+}
+.conv-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.conv-chat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.conv-chat > .run-page {
+  flex: 1;
+  min-height: 0;
+}
+.conv-side {
+  width: 280px;
+  border-left: 1px solid var(--color-border-subtle);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: auto;
+}
+.conv-side h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+  margin: 6px 0 0;
+}
+.conv-born {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md, 6px);
+  background: var(--color-surface-raised);
+}
+.conv-born-actions {
+  display: flex;
+  gap: 6px;
+}
+.conv-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+}
+.conv-empty form {
+  width: min(720px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conv-empty textarea {
+  min-height: 90px;
 }

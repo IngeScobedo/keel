@@ -157,6 +157,8 @@ const projected = { visual_state: VisualStateSchema, revision: z.number().int().
 export const StageSchema = z.enum(STAGES)
 export const CeremonySchema = z.enum(CEREMONIES)
 export const TaskDocKindSchema = z.enum(TASK_DOC_KINDS)
+export const PrioritySchema = z.enum(["urgent", "high", "medium", "low"])
+export type Priority = z.infer<typeof PrioritySchema>
 export const WorkItemViewSchema = z.object({
   id: z.string(),
   project_id: z.string(),
@@ -168,6 +170,11 @@ export const WorkItemViewSchema = z.object({
   /** Etapa del método si la tarea se está trabajando (ADR-0021). */
   stage: StageSchema.optional(),
   ceremony: CeremonySchema.nullable().optional(),
+  priority: PrioritySchema.optional(),
+  /** La feature de la que es subtarea (ADR-0022). */
+  parent_work_item_id: z.string().optional(),
+  /** La tarea de la que nació, si la creó un agente fuera del plan (ADR-0024 §2). */
+  origin_work_item_id: z.string().optional(),
   ...projected,
 })
 /** Resultado de un comando de verificación del proyecto, recortado para el agente. */
@@ -515,6 +522,7 @@ export const Methods = {
       title: z.string().min(1),
       kind: z.string(),
       spec_markdown: z.string().optional(),
+      priority: PrioritySchema.optional(),
     }),
     result: WorkItemViewSchema,
   },
@@ -711,6 +719,36 @@ export const Methods = {
       delivered: z.enum(["message", "continued", "started"]),
       run: RunViewSchema,
       flow: TaskFlowViewSchema,
+    }),
+  },
+  /**
+   * ADR-0024: la conversación del proyecto. `open` la crea la primera vez (una
+   * tarea oculta) y devuelve su último run, lo que nació de ella y sus notas.
+   */
+  "conversation.open": {
+    params: z.object({ project_id: z.string().optional() }),
+    result: z.object({
+      work_item: WorkItemViewSchema,
+      run: RunViewSchema.nullable(),
+      born: z.array(WorkItemViewSchema),
+      notes: z.array(NoteViewSchema),
+    }),
+  },
+  /**
+   * Pregunta al proyecto: le escribe al run vivo, continúa la última sesión o,
+   * con `fresh`, empieza una conversación nueva sin la sesión anterior.
+   */
+  "conversation.ask": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      text: z.string().min(1).max(20_000),
+      fresh: z.boolean().optional(),
+      profile: z.enum(["claude", "codex"]).optional(),
+      options: RunOptionsSchema.optional(),
+    }),
+    result: z.object({
+      delivered: z.enum(["message", "continued", "started"]),
+      run: RunViewSchema,
     }),
   },
   "tasks.flow": {

@@ -125,6 +125,7 @@ import { bwrapPath, type SandboxSpec } from "./sandbox.js"
 import { SemanticProjector } from "./semantic.js"
 import { openStore, type Store } from "./store/db.js"
 import {
+  CONVERSATION_KEY,
   type EvidenceRow,
   type NoteRow,
   type PairingRow,
@@ -617,15 +618,32 @@ export class Daemon {
       "work_items.create": this.mutation<Params<"work_items.create">>(
         "work_items.create",
         (p, uow, ctx) => {
-          // Lo que crea un agente nace en triage con source = 'agent' (ADR-0009 §5).
+          // Lo que crea un agente nace en triage con source = 'agent' (ADR-0009 §5) y
+          // queda ligado a la tarea y al run de los que nació (ADR-0024 §2).
           const projectId = this.scopeOf(ctx, p.project_id)
+          const actor = ctx.actor
+          const origin =
+            actor.kind === "agent" && actor.work_item_id
+              ? repo.getWorkItem(actor.work_item_id)
+              : null
           const w = repo.createWorkItem({
             project_id: projectId,
             title: p.title,
             kind: p.kind,
-            source: ctx.actor.kind === "agent" ? "agent" : "human",
+            source: actor.kind === "agent" ? "agent" : "human",
             ...(p.spec_markdown === undefined ? {} : { spec_markdown: p.spec_markdown }),
+            ...(p.priority ? { priority: p.priority } : {}),
+            ...(origin ? { origin_work_item_id: origin.id } : {}),
+            ...(origin && actor.kind === "agent" && actor.run_id
+              ? { origin_run_id: actor.run_id }
+              : {}),
           })
+          if (origin && actor.kind === "agent")
+            repo.addNote({
+              work_item_id: w.id,
+              author: actor.actor_id,
+              content_markdown: `Nació de ${origin.dedupe_key === CONVERSATION_KEY ? "la conversación del proyecto" : origin.display_id}${actor.run_id ? ` (run ${actor.run_id})` : ""}.`,
+            })
           const view = repo.workItemView(w)
           uow.emit("work_item.created", agentRun(ctx), { ...view, actor: actorOf(ctx) })
           return view
@@ -824,6 +842,56 @@ export class Daemon {
           flow: this.flowViewOf(w.id) as TaskFlowView,
         }
       }),
+      // --- la conversación del proyecto (ADR-0024) ------------------------------------
+      "conversation.open": (params, ctx) => {
+        requireHuman(ctx, "abrir la conversación del proyecto")
+        const p = params as Params<"conversation.open">
+        const w = this.conversationFor(this.scopeOf(ctx, p.project_id))
+        const last = repo.lastRunFor(w.id)
+        return {
+          work_item: repo.workItemView(w),
+          run: last ? repo.runView(last) : null,
+          born: repo.bornFrom(w.id).map((x) => repo.workItemView(x)),
+          notes: repo.listNotes(w.id).map(noteView),
+        }
+      },
+      "conversation.ask": this.mutation<Params<"conversation.ask">>(
+        "conversation.ask",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "preguntar al proyecto")
+          const w = this.conversationFor(this.scopeOf(ctx, p.project_id))
+          const live = repo.liveRunFor(w.id)
+          if (live) {
+            if (p.fresh)
+              throw rpcError(
+                ErrorCode.conflict,
+                "el agente está respondiendo; espera a que termine o detenlo para empezar otra conversación",
+              )
+            if (!this.providerOf(live).sendMessage(live.id, p.text))
+              throw rpcError(ErrorCode.conflict, "el run ya no acepta mensajes; está terminando")
+            uow.emit("run.user_message", live.id, { text: p.text, actor: actorOf(ctx) })
+            return { delivered: "message" as const, run: repo.runView(live) }
+          }
+          // «Nueva conversación» no arrastra la sesión anterior: el contexto no crece sin límite.
+          const last = p.fresh ? null : repo.lastRunFor(w.id)
+          const manifest = last
+            ? (JSON.parse(last.context_manifest_json) as {
+                provider?: "claude" | "codex"
+                options?: Params<"runs.start">["options"]
+              })
+            : {}
+          const run = this.startRunIn(uow, {
+            work_item_id: w.id,
+            purpose: "plan",
+            prompt: p.text,
+            prompt_source: "human",
+            profile: p.profile ?? manifest.provider ?? "claude",
+            options: { ...manifest.options, ...p.options, permission_mode: "plan" },
+            parent_run_id: last?.id ?? null,
+          })
+          return { delivered: last ? ("continued" as const) : ("started" as const), run }
+        },
+      ),
       "tasks.flow": (params, ctx) => {
         const p = params as Params<"tasks.flow">
         this.requireOwnTask(ctx, p.work_item_id)
@@ -2003,7 +2071,10 @@ export class Daemon {
           // ADR-0017 §1: el prompt lleva sólo un encabezado; el resto lo pide el agente.
           // ADR-0021: con el método, el encabezado dice la etapa y cómo avanzar.
           if (Object.keys(mcp_servers).length > 0)
-            prompt = `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}` : ""}\n\n${prompt}`
+            prompt =
+              item.dedupe_key === CONVERSATION_KEY
+                ? `${conversationHeader()}\n\n${prompt}`
+                : `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}` : ""}\n\n${prompt}`
           // Planear y revisar son sólo lectura también para el SDK (ADR-0021 §3).
           const readOnly =
             run.purpose !== "execute" || (flow !== null && isReadOnlyStage(flow.stage))
@@ -2336,6 +2407,28 @@ export class Daemon {
     const out: DocSet = {}
     for (const d of this.repo.latestTaskDocs(workItemId)) out[d.kind] = this.repo.taskDocContent(d)
     return out
+  }
+
+  /**
+   * La conversación del proyecto (ADR-0024 §1): una tarea oculta que Keel crea la
+   * primera vez. No emite `work_item.created`: no va al tablero ni a las listas.
+   */
+  private conversationFor(projectId: string): WorkItemRow {
+    const found = this.repo.conversationOf(projectId)
+    if (found) return found
+    return this.repo.db.transaction(
+      () =>
+        this.repo.conversationOf(projectId) ??
+        this.repo.createWorkItem({
+          project_id: projectId,
+          title: "Conversación del proyecto",
+          kind: "research",
+          display_id: "CHAT",
+          dedupe_key: CONVERSATION_KEY,
+          spec_markdown:
+            "Consultas sobre el proyecto, de sólo lectura. Lo que haya que hacer nace aquí como tarea.",
+        }),
+    )()
   }
 
   /** Un agente sólo opera sobre la tarea de su run. */
@@ -3440,6 +3533,17 @@ function projectView(p: ReturnType<Repo["listProjects"]>[number]) {
 }
 
 /** Encabezado corto del prompt (ADR-0017 §1): tarea, id y cómo pedir el contexto. */
+/** ADR-0024: el encabezado de la conversación del proyecto. Aquí no hay tarea que trabajar. */
+export function conversationHeader(): string {
+  return [
+    "[Keel] Conversación del proyecto, de sólo lectura: responde preguntas sobre el código; no edites nada.",
+    "Si encuentras algo que hay que hacer (un bug, un issue de seguridad, una mejora), créalo con la tool task_create:",
+    "título, kind, priority (urgent si es de seguridad) y en context_markdown los archivos, la evidencia y por qué importa.",
+    "Antes, busca con context_search: puede que ya exista. Lo que valga guardar sin ser tarea, guárdalo con note_add.",
+    "Las tools de Keel funcionan aunque estés en modo plan.",
+  ].join(" ")
+}
+
 export function promptHeader(item: WorkItemRow): string {
   return [
     `[Keel] Tarea ${item.display_id} «${item.title}» (id ${item.id}).`,

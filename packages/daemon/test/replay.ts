@@ -468,3 +468,104 @@ export function methodQuery(daemon: Daemon): QueryFn {
     }) as never
   }
 }
+
+/**
+ * ADR-0024: el agente de la conversación del proyecto. Explora, responde y, como
+ * encontró un issue de seguridad, crea una tarea urgente por la puerta de agentes;
+ * los hooks dejan la tarjeta en el chat igual que el SDK real.
+ */
+export function conversationQuery(daemon: Daemon): QueryFn {
+  return ({ options }) => {
+    const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
+    const session = `s-conv-${runId}`
+    const signal = new AbortController().signal
+    let n = 0
+    const hook = async (name: string, input: Record<string, unknown>, id: string) => {
+      for (const m of options.hooks?.[name as keyof NonNullable<Options["hooks"]>] ?? [])
+        for (const cb of m.hooks as HookCallback[])
+          await cb(
+            {
+              hook_event_name: name,
+              session_id: session,
+              transcript_path: "",
+              cwd: options.cwd ?? "",
+              permission_mode: "plan",
+              tool_use_id: id,
+              ...input,
+            } as never,
+            id,
+            { signal },
+          )
+    }
+    const tool = async (tool_name: string, tool_input: unknown, tool_response: unknown) => {
+      const id = `toolu_conv_${runId}_${++n}`
+      await hook("PreToolUse", { tool_name, tool_input }, id)
+      await hook("PostToolUse", { tool_name, tool_input, tool_response, duration_ms: 30 }, id)
+    }
+    const say = (text: string) =>
+      ({
+        type: "assistant",
+        uuid: `u-conv-${runId}-${++n}`,
+        session_id: session,
+        parent_tool_use_id: null,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }) as unknown as SDKMessage
+    const run = (async function* () {
+      const row = daemon.repo.getRun(runId)
+      if (!row) return
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: session,
+        model: "claude-sonnet-5-5",
+        uuid: `u-conv-init-${runId}`,
+      } as unknown as SDKMessage
+      await tool(
+        "Grep",
+        { pattern: "requireRoles", path: "orders" },
+        { mode: "files_with_matches", numFiles: 1, filenames: ["orders/list.ts"] },
+      )
+      yield say(
+        "Exportar pedidos lo hace `orders/export.ts`, y **no pide rol**: cualquier sesión puede exportar. Lo dejo como tarea urgente.",
+      )
+      const { file } = daemon.agentTokens.issue({
+        run_id: runId,
+        project_id: row.project_id,
+        work_item_id: row.work_item_id,
+      })
+      const agent = await IpcClient.connect(daemon.agentServer.path)
+      await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+      const input = {
+        title: "Export de pedidos sin requireRoles",
+        kind: "bug",
+        priority: "urgent",
+        context_markdown: "`orders/export.ts:41` no llama a `requireRoles`.",
+      }
+      const view = await agent.call("work_items.create", {
+        request_id: "r",
+        idempotency_key: `conv-${runId}`,
+        title: input.title,
+        kind: input.kind,
+        priority: input.priority,
+        spec_markdown: input.context_markdown,
+      })
+      agent.close()
+      await tool("mcp__keel__task_create", input, JSON.stringify(view))
+      yield {
+        type: "result",
+        subtype: "success",
+        uuid: `u-conv-res-${runId}`,
+        session_id: session,
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.004,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      } as unknown as SDKMessage
+    })()
+    return Object.assign(run, {
+      setPermissionMode: async () => {},
+      setModel: async () => {},
+      applyFlagSettings: async () => {},
+    }) as never
+  }
+}

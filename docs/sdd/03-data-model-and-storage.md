@@ -1292,3 +1292,22 @@ CREATE TABLE project_profiles (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 ```
+
+### 0013 · La conversación del proyecto y el origen de las tareas (ADR-0024)
+
+Cada proyecto tiene una conversación de sólo lectura sobre una tarea oculta
+(`dedupe_key = 'keel:conversation'`, `display_id` `CHAT`). No hace falta tabla:
+es una fila de `work_items`.
+
+- **`origin_work_item_id` y `origin_run_id`.** De qué tarea y de qué run nació
+  una tarea que creó un agente fuera del plan: un hallazgo de la conversación,
+  un issue de seguridad. No es parentesco (eso es `parent_work_item_id`,
+  ADR-0022): la tarea nueva no depende de su origen.
+
+```sql
+-- migración: 0013-origen-de-las-tareas
+ALTER TABLE work_items ADD COLUMN origin_work_item_id TEXT REFERENCES work_items(id);
+ALTER TABLE work_items ADD COLUMN origin_run_id TEXT REFERENCES runs(id);
+CREATE INDEX idx_work_items_origin ON work_items(origin_work_item_id)
+    WHERE origin_work_item_id IS NOT NULL;
+```

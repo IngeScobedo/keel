@@ -8,6 +8,7 @@ import {
   FileSearch,
   ListChecks,
   NotebookPen,
+  Play,
   Search,
   SquarePlus,
   Telescope,
@@ -26,6 +27,7 @@ import {
   type ToolCall,
   text,
 } from "./chat-model.js"
+import { mutationMeta } from "./client.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -66,7 +68,10 @@ export function ToolCard({
   /** Llegó con el run en vivo: anima la entrada. */
   fresh?: boolean
 }) {
-  if (isKeelAction(t)) return <KeelCard t={t} fresh={fresh ?? false} onOpenTask={onOpenTask} />
+  if (isKeelAction(t))
+    return (
+      <KeelCard t={t} fresh={fresh ?? false} onOpenTask={onOpenTask} {...(call ? { call } : {})} />
+    )
   const lines = (t.diff ?? []).reduce((n, d) => n + d.added + d.removed, 0)
   const startOpen =
     density === "raw" ||
@@ -410,13 +415,27 @@ function KeelCard({
   t,
   fresh,
   onOpenTask,
+  call,
 }: {
   t: ToolCall
   fresh: boolean
   onOpenTask?: ((id: string) => void) | undefined
+  call?: Call
 }) {
   const res = keelResult(t)
   const item = res?.item
+  // ADR-0024 §2: «Trabajar» empieza el método de la tarea que nació aquí.
+  const [work, setWork] = useState<"idle" | "busy" | "started" | string>("idle")
+  async function startWork(id: string) {
+    if (!call) return
+    setWork("busy")
+    try {
+      await call("tasks.work", { ...mutationMeta(), work_item_id: id })
+      setWork("started")
+    } catch (e) {
+      setWork(e instanceof Error ? e.message : String(e))
+    }
+  }
   let icon = <SquarePlus size={15} />
   let action = t.name.replace(/^mcp__keel__/, "").replaceAll("_", " ")
   let body: ReactNode = null
@@ -441,12 +460,29 @@ function KeelCard({
       <div className="rc-keel-row">
         <span>
           <span className="mono muted">{item.display_id}</span> <strong>{item.title}</strong>{" "}
-          {item.lifecycle && <span className="rc-pill">{item.lifecycle}</span>}
+          {typeof t.input.priority === "string" && t.input.priority !== "medium" && (
+            <span className={`rc-pill priority-${t.input.priority}`}>{t.input.priority}</span>
+          )}
+          {item.kind && <span className="rc-pill">{item.kind}</span>}
         </span>
+        {call && work !== "started" && (
+          <button
+            type="button"
+            className="button primary"
+            disabled={work === "busy"}
+            onClick={() => void startWork(item.id)}
+          >
+            <Play size={13} /> Trabajar
+          </button>
+        )}
+        {work === "started" && <span className="rc-pill">trabajando</span>}
         {onOpenTask && (
           <button type="button" className="button" onClick={() => onOpenTask(item.id)}>
             <FileSearch size={13} /> Abrir al lado
           </button>
+        )}
+        {work !== "idle" && work !== "busy" && work !== "started" && (
+          <span className="error">{work}</span>
         )}
       </div>
     ) : (

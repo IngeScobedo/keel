@@ -48,7 +48,16 @@ export type WorkItemRow = {
   lifecycle: Lifecycle
   board_status: string
   revision: number
+  priority?: string
+  dedupe_key?: string | null
+  parent_work_item_id?: string | null
+  origin_work_item_id?: string | null
+  origin_run_id?: string | null
 }
+/** La tarea oculta de la conversación del proyecto (ADR-0024 §1). */
+export const CONVERSATION_KEY = "keel:conversation"
+const WORK_ITEM_COLS =
+  "id, project_id, display_id, title, kind, lifecycle, board_status, revision, priority, dedupe_key, parent_work_item_id, origin_work_item_id, origin_run_id"
 export type RunRow = {
   id: string
   project_id: string
@@ -736,19 +745,59 @@ export class Repo {
     kind: string
     spec_markdown?: string
     source?: string
+    priority?: string
+    /** Sólo la conversación del proyecto lleva un id propio (`CHAT`). */
+    display_id?: string
+    dedupe_key?: string
+    parent_work_item_id?: string
+    origin_work_item_id?: string
+    origin_run_id?: string
   }): WorkItemRow {
+    // La numeración KEEL-n no cuenta la conversación del proyecto.
     const n =
       this.db
-        .query<{ n: number }, [string]>("SELECT count(*) n FROM work_items WHERE project_id = ?")
-        .get(p.project_id)?.n ?? 0
+        .query<{ n: number }, [string, string]>(
+          "SELECT count(*) n FROM work_items WHERE project_id = ? AND coalesce(dedupe_key, '') <> ?",
+        )
+        .get(p.project_id, CONVERSATION_KEY)?.n ?? 0
     const id = ulid()
-    const display = `KEEL-${n + 1}`
+    const display = p.display_id ?? `KEEL-${n + 1}`
     this.db
       .query(
-        "INSERT INTO work_items(id, project_id, display_id, title, spec_markdown, kind, source) VALUES (?,?,?,?,?,?,?)",
+        `INSERT INTO work_items(id, project_id, display_id, title, spec_markdown, kind, source, priority, dedupe_key,
+           parent_work_item_id, origin_work_item_id, origin_run_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
-      .run(id, p.project_id, display, p.title, p.spec_markdown ?? "", p.kind, p.source ?? "human")
+      .run(
+        id,
+        p.project_id,
+        display,
+        p.title,
+        p.spec_markdown ?? "",
+        p.kind,
+        p.source ?? "human",
+        p.priority ?? "medium",
+        p.dedupe_key ?? null,
+        p.parent_work_item_id ?? null,
+        p.origin_work_item_id ?? null,
+        p.origin_run_id ?? null,
+      )
     return this.getWorkItem(id) as WorkItemRow
+  }
+  /** La conversación del proyecto, si ya existe (ADR-0024 §1). */
+  conversationOf(projectId: string): WorkItemRow | null {
+    return this.db
+      .query<WorkItemRow, [string, string]>(
+        `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE project_id = ? AND dedupe_key = ? ORDER BY created_at LIMIT 1`,
+      )
+      .get(projectId, CONVERSATION_KEY)
+  }
+  /** Las tareas que nacieron de otra (ADR-0024 §2), la más nueva primero. */
+  bornFrom(workItemId: string): WorkItemRow[] {
+    return this.db
+      .query<WorkItemRow, [string]>(
+        `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE origin_work_item_id = ? ORDER BY created_at DESC`,
+      )
+      .all(workItemId)
   }
   workItemSpec(id: string): string {
     return (
@@ -779,17 +828,16 @@ export class Repo {
   }
   getWorkItem(id: string): WorkItemRow | null {
     return this.db
-      .query<WorkItemRow, [string]>(
-        "SELECT id, project_id, display_id, title, kind, lifecycle, board_status, revision FROM work_items WHERE id = ?",
-      )
+      .query<WorkItemRow, [string]>(`SELECT ${WORK_ITEM_COLS} FROM work_items WHERE id = ?`)
       .get(id)
   }
+  /** Las tareas del proyecto, sin la conversación (ADR-0024 §1: no va al tablero ni a las listas). */
   listWorkItems(projectId: string): WorkItemRow[] {
     return this.db
-      .query<WorkItemRow, [string]>(
-        "SELECT id, project_id, display_id, title, kind, lifecycle, board_status, revision FROM work_items WHERE project_id = ? ORDER BY created_at",
+      .query<WorkItemRow, [string, string]>(
+        `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE project_id = ? AND coalesce(dedupe_key, '') <> ? ORDER BY created_at`,
       )
-      .all(projectId)
+      .all(projectId, CONVERSATION_KEY)
   }
   /**
    * Compare-and-set: cambia el lifecycle sólo si la fila sigue en `from` y, si
@@ -1459,6 +1507,9 @@ export class Repo {
       // la tabla no la escribía nadie y dejaba toda tarea en backlog.
       board_status: DEFAULT_BOARD[w.lifecycle as Lifecycle] ?? "backlog",
       revision: w.revision,
+      ...(w.priority ? { priority: w.priority } : {}),
+      ...(w.parent_work_item_id ? { parent_work_item_id: w.parent_work_item_id } : {}),
+      ...(w.origin_work_item_id ? { origin_work_item_id: w.origin_work_item_id } : {}),
       visual_state: visualForWorkItem(w.lifecycle, liveRun),
       ...flowFields(this.getFlow(w.id)),
     }

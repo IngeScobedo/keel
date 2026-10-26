@@ -11,6 +11,7 @@ import {
   GitBranch,
   Inbox as InboxIcon,
   LayoutGrid,
+  MessagesSquare,
   Moon,
   PenTool,
   Plug,
@@ -35,12 +36,14 @@ import { LiveProfile } from "./LiveProfile.js"
 import { LiveProviders } from "./LiveProviders.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
 import { Permissions } from "./Permissions.js"
+import { ProjectConversation } from "./ProjectConversation.js"
 import { RunsList, RunView } from "./RunView.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
 import { Button, Hint, Modal } from "./ui.js"
 import { useWorkspace } from "./useWorkspace.js"
 
 const nav = [
+  { id: "conversation", label: "Conversación", icon: MessagesSquare },
   { id: "board", label: "Board", icon: LayoutGrid },
   { id: "inbox", label: "Inbox", icon: InboxIcon },
   { id: "runs", label: "Runs", icon: Activity },
@@ -68,6 +71,8 @@ export function App() {
   const [selectedRun, setSelectedRun] = useState("")
   const [palette, setPalette] = useState(false)
   const [paletteQuery, setPaletteQuery] = useState("")
+  /** ADR-0024 §3: «preguntar al proyecto…» desde ⌘K. */
+  const [question, setQuestion] = useState("")
   const [newTask, setNewTask] = useState(false)
   const [connection, setConnection] = useState(false)
   const [title, setTitle] = useState("")
@@ -487,6 +492,26 @@ export function App() {
           ) : (
             <Connections demo={demo} />
           ))}
+        {page === "conversation" &&
+          (workspace.mode === "live" ? (
+            <ProjectConversation
+              call={workspace.call}
+              runs={workspace.runs}
+              events={workspace.events}
+              projectName={currentProject?.name || repoName(workspace.health?.project?.root_path)}
+              question={question}
+              onQuestionSent={() => setQuestion("")}
+              onOpenTask={(id) => {
+                const item = workspace.work_items.find((w) => w.id === id)
+                if (item) openTask(item)
+              }}
+              onBack={() => setPage("board")}
+            />
+          ) : (
+            <div className="padded">
+              <Hint>Conecta el daemon para preguntarle al proyecto.</Hint>
+            </div>
+          ))}
         {page === "workbench" && <Workbench demo={demo} />}
         {page === "design" && <DesignStudio />}
         {page === "settings" && (
@@ -534,6 +559,21 @@ export function App() {
             />
           </div>
           <div className="palette-results">
+            {live && paletteQuery.trim().length > 2 && (
+              <button
+                type="button"
+                data-testid="palette-ask"
+                onClick={() => {
+                  setQuestion(paletteQuery.trim())
+                  setPage("conversation")
+                  setPalette(false)
+                }}
+              >
+                <MessagesSquare size={15} />
+                Preguntar al proyecto: «{paletteQuery.trim()}»
+                <ArrowRight size={13} />
+              </button>
+            )}
             <h3>NAVIGATION</h3>
             {commandPages.map((item) => (
               <button
