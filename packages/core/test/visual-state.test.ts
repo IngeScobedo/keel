@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import {
+  BOARD_COLUMNS,
   conformanceTable,
+  DEFAULT_BOARD,
   isVisualState,
   LIFECYCLES,
   LIVE_RUN_STATUSES,
@@ -85,4 +87,13 @@ describe("ADR-0006: vocabulario de estados", () => {
         NODE_STATES.length,
     )
   })
+})
+
+test("ADR-0006 §4: cada lifecycle tiene su columna; la tarea se mueve sola", () => {
+  for (const l of LIFECYCLES) expect(BOARD_COLUMNS).toContain(DEFAULT_BOARD[l])
+  expect(DEFAULT_BOARD.triage).toBe("backlog")
+  expect(DEFAULT_BOARD.planned).toBe("todo")
+  expect(DEFAULT_BOARD.running).toBe("in_progress")
+  expect(DEFAULT_BOARD.needs_review).toBe("in_review")
+  expect(DEFAULT_BOARD.done).toBe("completed")
 })

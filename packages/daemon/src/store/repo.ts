@@ -4,6 +4,7 @@
  */
 import type { Database } from "bun:sqlite"
 import {
+  DEFAULT_BOARD,
   isLive,
   type Lifecycle,
   type LiveRun,
@@ -1261,7 +1262,9 @@ export class Repo {
       title: w.title,
       ...(w.kind ? { kind: w.kind } : {}),
       lifecycle: w.lifecycle,
-      board_status: w.board_status,
+      // ADR-0006 §4: la columna se proyecta del lifecycle. La columna guardada en
+      // la tabla no la escribía nadie y dejaba toda tarea en backlog.
+      board_status: DEFAULT_BOARD[w.lifecycle as Lifecycle] ?? "backlog",
       revision: w.revision,
       visual_state: visualForWorkItem(w.lifecycle, liveRun),
     }

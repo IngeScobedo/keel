@@ -123,7 +123,7 @@ async function boot(profile: Record<string, unknown> = {}) {
       work_item_id: w.id,
       purpose: "execute",
       options,
-    })) as { id: string }
+    })) as { id: string; work_item_id: string }
   }
   async function pending(runId: string): Promise<Approval> {
     for (;;) {
@@ -257,10 +257,19 @@ describe("ADR-0020 §2–§3: aprobaciones sin vencimiento y con patrón editabl
     expect(a.expires_at).toBeNull()
     await Bun.sleep(100)
     expect(s.daemon.repo.getRun(run.id)?.status).toBe("waiting_human")
+    // ADR-0006 §4: la tarjeta sigue al lifecycle; antes se quedaba en backlog.
+    const column = async () =>
+      (
+        (await s.human.call("work_items.get", { work_item_id: run.work_item_id })) as {
+          item: { board_status: string }
+        }
+      ).item.board_status
+    expect(await column()).toBe("in_progress")
     await s.resolve(a, { decision: "approve_once" })
     await s.finished(run.id)
     expect(ctl.results.map((r) => r.behavior)).toEqual(["allow"])
     expect(s.daemon.repo.getRun(run.id)?.status).toBe("completed")
+    expect(await column()).toBe("in_review")
   })
 
   test("el humano fija un límite en Ajustes; al vencer se niega", async () => {

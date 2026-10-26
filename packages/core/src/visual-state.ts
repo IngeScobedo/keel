@@ -218,3 +218,23 @@ export function conformanceTable(): ConformanceRow[] {
     rows.push({ entity: "node", state, visual_state: visualForNode(state) })
   return rows
 }
+
+/** Columnas por defecto del tablero (ADR-0006 §4, SDD 01 §3). */
+export const BOARD_COLUMNS = ["backlog", "todo", "in_progress", "in_review", "completed"] as const
+export type BoardColumn = (typeof BOARD_COLUMNS)[number]
+
+/**
+ * `board_status` es una proyección del `lifecycle`, no un estado propio: la
+ * tarjeta se mueve sola cuando la tarea cambia. Lo que espera al humano o falló
+ * se queda en «In Progress», donde se trabajó, con su estado visual.
+ */
+export const DEFAULT_BOARD: Record<Lifecycle, BoardColumn> = {
+  triage: "backlog",
+  planned: "todo",
+  running: "in_progress",
+  waiting_human: "in_progress",
+  blocked: "in_progress",
+  failed: "in_progress",
+  needs_review: "in_review",
+  done: "completed",
+}
