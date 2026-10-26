@@ -182,6 +182,30 @@ describe("ADR-0019 §3: conversación con Claude", () => {
     expect(daemon.repo.getRun(run.id)?.status).toBe("completed")
   })
 
+  test("ADR-0028: sin tope de turnos por defecto; el 12 de un run viejo no se hereda", async () => {
+    const seen: Seen = { options: [], inputs: [] }
+    const { daemon, human, task } = await boot(talking(seen, false))
+    const w = await task(false)
+    const parent = (await human.call("runs.start", {
+      ...meta(),
+      work_item_id: w.id,
+      purpose: "plan",
+    })) as { id: string }
+    await daemon.idle()
+    expect(seen.options[0]?.maxTurns).toBeUndefined()
+    // Un run de antes de ADR-0028: el 12 por defecto en sus opciones, sin elegirlo nadie.
+    const row = daemon.repo.getRun(parent.id)
+    const m = JSON.parse(row?.context_manifest_json ?? "{}")
+    m.options = { ...m.options, max_turns: 12 }
+    delete m.turns_explicit
+    daemon.store.db
+      .query("UPDATE runs SET context_manifest_json = ? WHERE id = ?")
+      .run(JSON.stringify(m), parent.id)
+    await human.call("runs.continue", { ...meta(), run_id: parent.id, text: "sigue" })
+    await daemon.idle()
+    expect(seen.options[1]?.maxTurns).toBeUndefined()
+  })
+
   test("continuar un plan crea un run hijo que retoma la sesión con las mismas opciones", async () => {
     const seen: Seen = { options: [], inputs: [] }
     const { daemon, human, task } = await boot(talking(seen, false))

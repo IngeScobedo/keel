@@ -1349,7 +1349,8 @@ export class Daemon {
           purpose: parent.purpose,
           prompt: p.text,
           profile: manifest.provider ?? "claude",
-          options: { ...manifest.options, ...p.options },
+          // ADR-0028: sólo se hereda el tope de turnos que eligió el humano.
+          options: { ...inheritedOptions(parent), ...p.options },
           parent_run_id: parent.id,
         })
         return run
@@ -2856,6 +2857,7 @@ export class Daemon {
         provider,
         options,
         ...(p.task_worktree ? { task_worktree: true } : {}),
+        ...(p.options?.max_turns !== undefined ? { turns_explicit: true } : {}),
         ...(p.worktree_base ? { worktree_base: p.worktree_base } : {}),
         ...(p.fresh_worktree ? { fresh_worktree: true } : {}),
       },
@@ -3121,7 +3123,8 @@ export class Daemon {
           keepWorkspaces: true,
         })
     }
-    const base = { ...lastManifest.options, ...o.options }
+    // ADR-0028: sólo se hereda el tope de turnos que eligió el humano, no el de antes por defecto.
+    const base = { ...inheritedOptions(last), ...o.options }
     // ADR-0022 §2: una subtarea sale de la rama de la feature; el padre revisa la feature
     // en un worktree nuevo sobre esa rama.
     const parentFeat = item.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null
@@ -4826,4 +4829,21 @@ function writeAskpass(path: string): void {
 function writeNoAskpass(path: string): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   writeFileSync(path, "#!/bin/sh\nexit 1\n", { mode: 0o700 })
+}
+
+/**
+ * Las opciones de un run anterior para el siguiente (ADR-0019 §3), con el tope de
+ * turnos sólo si lo eligió el humano (ADR-0028): el 12 de antes por defecto no viaja.
+ */
+function inheritedOptions(run: RunRow | null): Params<"runs.start">["options"] {
+  if (!run) return {}
+  const m = JSON.parse(run.context_manifest_json) as {
+    options?: Params<"runs.start">["options"] & { max_turns?: number | null }
+    turns_explicit?: boolean
+  }
+  const { max_turns, ...rest } = m.options ?? {}
+  return {
+    ...rest,
+    ...(m.turns_explicit && typeof max_turns === "number" ? { max_turns } : {}),
+  } as Params<"runs.start">["options"]
 }
