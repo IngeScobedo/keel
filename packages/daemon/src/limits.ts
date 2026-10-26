@@ -1,7 +1,8 @@
 /**
  * Límites antes del spawn (ADR-0002 regla 3, CLAUDE.md regla 5, SDD 04 Fase 1):
- * concurrencia y presupuesto con defaults bajos. Subirlos es una decisión
- * explícita del usuario (flags del daemon) y queda visible en `daemon.health`.
+ * concurrencia y presupuesto con defaults bajos. Subirlos, o quitar un tope de
+ * presupuesto (`null`), es una decisión explícita del usuario (flags del daemon o
+ * Ajustes) y queda visible en `daemon.health` y en Ajustes.
  *
  * El costo es siempre una estimación del proveedor (`cost_kind: estimated`,
  * ADR-0002 §3), también con la suscripción: el presupuesto acota lo que el SDK
@@ -12,10 +13,10 @@ import type { Repo, WorkItemRow } from "./store/repo.js"
 export type Limits = {
   /** Runs vivos a la vez en el daemon. */
   max_concurrent_runs: number
-  /** Tope estimado por run; se pasa al proveedor (`maxBudgetUsd`). */
-  run_budget_micro_usd: number
-  /** Tope estimado por proyecto y día local. */
-  daily_budget_micro_usd: number
+  /** Tope estimado por run; se pasa al proveedor (`maxBudgetUsd`). `null`: sin tope. */
+  run_budget_micro_usd: number | null
+  /** Tope estimado por proyecto y día local. `null`: sin tope. */
+  daily_budget_micro_usd: number | null
 }
 
 /** Defaults bajos, una persona trabajando (ADR-0002 regla 3). Decididos el 2026-10-23. */
@@ -26,7 +27,8 @@ export const DEFAULT_LIMITS: Limits = {
 }
 
 export type LimitCheck =
-  | { ok: true; runBudgetMicroUsd: number }
+  /** `runBudgetMicroUsd` null: ningún tope aplica y el proveedor corre sin `maxBudgetUsd`. */
+  | { ok: true; runBudgetMicroUsd: number | null }
   | {
       ok: false
       limit: "max_concurrent_runs" | "daily_budget" | "task_budget"
@@ -58,7 +60,10 @@ export function checkRunStart(
       details: { live, max_concurrent_runs: limits.max_concurrent_runs },
     }
   const spentToday = repo.spentSince(item.project_id, startOfLocalDay(now))
-  const dailyLeft = limits.daily_budget_micro_usd - spentToday
+  const dailyLeft =
+    limits.daily_budget_micro_usd === null
+      ? Number.POSITIVE_INFINITY
+      : limits.daily_budget_micro_usd - spentToday
   if (dailyLeft <= 0)
     return {
       ok: false,
@@ -67,7 +72,7 @@ export function checkRunStart(
       message: "se agotó el presupuesto estimado del día",
       details: {
         spent_today_micro_usd: spentToday,
-        daily_budget_micro_usd: limits.daily_budget_micro_usd,
+        daily_budget_micro_usd: limits.daily_budget_micro_usd ?? 0,
       },
     }
   const cap = repo.workItemBudgetCap(item.id)
@@ -80,5 +85,10 @@ export function checkRunStart(
       message: "se agotó el presupuesto estimado de la tarea",
       details: { task_budget_micro_usd: cap ?? 0, spent_micro_usd: repo.spentOnWorkItem(item.id) },
     }
-  return { ok: true, runBudgetMicroUsd: Math.min(limits.run_budget_micro_usd, dailyLeft, taskLeft) }
+  const budget = Math.min(
+    limits.run_budget_micro_usd ?? Number.POSITIVE_INFINITY,
+    dailyLeft,
+    taskLeft,
+  )
+  return { ok: true, runBudgetMicroUsd: Number.isFinite(budget) ? budget : null }
 }

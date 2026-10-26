@@ -3971,6 +3971,17 @@ button.rc-ledger-row:hover {
   gap: 4px;
   font-size: 12px;
 }
-.limits-row input {
+.limits-row input[type="number"] {
   width: 120px;
+}
+.limits-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-text-secondary);
+}
+.limits-off {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-status-waiting-human);
 }

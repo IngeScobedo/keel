@@ -35,7 +35,11 @@ export function LiveProviders({ call }: { call: Call }) {
   async function update(patch: {
     approvals_timeout_ms?: number | null
     prompt_suggestions?: boolean
-    limits?: { run_budget_usd?: number; daily_budget_usd?: number; max_concurrent_runs?: number }
+    limits?: {
+      run_budget_usd?: number | null
+      daily_budget_usd?: number | null
+      max_concurrent_runs?: number
+    }
   }) {
     setError("")
     try {
@@ -114,29 +118,32 @@ export function LiveProviders({ call }: { call: Call }) {
 }
 
 /**
- * ADR-0002 regla 5: presupuesto estimado y concurrencia, con defaults bajos. Subirlos es
- * esta acción del humano; con la suscripción, el costo es una estimación a precio de lista.
+ * ADR-0002 regla 3: presupuesto estimado y concurrencia, con defaults bajos. Subirlos, o
+ * quitar un tope de presupuesto, es esta acción del humano y queda a la vista; con la
+ * suscripción, el costo es una estimación a precio de lista.
  */
 function Limits({
   limits,
   onSave,
 }: {
   limits: {
-    run_budget_usd: number
-    daily_budget_usd: number
+    run_budget_usd: number | null
+    daily_budget_usd: number | null
     max_concurrent_runs: number
     source: "default" | "setting" | "flag"
     updated_by: string | null
     updated_at: string | null
   }
   onSave: (l: {
-    run_budget_usd: number
-    daily_budget_usd: number
+    run_budget_usd: number | null
+    daily_budget_usd: number | null
     max_concurrent_runs: number
   }) => void
 }) {
-  const [run, setRun] = useState(String(limits.run_budget_usd))
-  const [day, setDay] = useState(String(limits.daily_budget_usd))
+  const [run, setRun] = useState(String(limits.run_budget_usd ?? 2))
+  const [runOff, setRunOff] = useState(limits.run_budget_usd === null)
+  const [day, setDay] = useState(String(limits.daily_budget_usd ?? 10))
+  const [dayOff, setDayOff] = useState(limits.daily_budget_usd === null)
   const [conc, setConc] = useState(String(limits.max_concurrent_runs))
   const flag = limits.source === "flag"
   return (
@@ -146,40 +153,36 @@ function Limits({
       onSubmit={(e) => {
         e.preventDefault()
         onSave({
-          run_budget_usd: Number(run),
-          daily_budget_usd: Number(day),
+          run_budget_usd: runOff ? null : Number(run),
+          daily_budget_usd: dayOff ? null : Number(day),
           max_concurrent_runs: Number(conc),
         })
       }}
     >
       <strong>Presupuesto y concurrencia</strong>
       <div className="limits-row">
-        <label>
-          Por run (USD estimado)
-          <input
-            aria-label="Presupuesto por run"
-            type="number"
-            min={0.1}
-            max={1000}
-            step="0.5"
-            value={run}
-            disabled={flag}
-            onChange={(e) => setRun(e.target.value)}
-          />
-        </label>
-        <label>
-          Por día (USD estimado)
-          <input
-            aria-label="Presupuesto por día"
-            type="number"
-            min={1}
-            max={10000}
-            step="1"
-            value={day}
-            disabled={flag}
-            onChange={(e) => setDay(e.target.value)}
-          />
-        </label>
+        <Budget
+          label="Por run (USD estimado)"
+          aria="Presupuesto por run"
+          min={0.1}
+          max={1000}
+          value={run}
+          off={runOff}
+          disabled={flag}
+          onValue={setRun}
+          onOff={setRunOff}
+        />
+        <Budget
+          label="Por día (USD estimado)"
+          aria="Presupuesto por día"
+          min={1}
+          max={10000}
+          value={day}
+          off={dayOff}
+          disabled={flag}
+          onValue={setDay}
+          onOff={setDayOff}
+        />
         <label>
           Runs a la vez
           <input
@@ -187,6 +190,7 @@ function Limits({
             type="number"
             min={1}
             max={8}
+            step={1}
             value={conc}
             disabled={flag}
             onChange={(e) => setConc(e.target.value)}
@@ -196,15 +200,65 @@ function Limits({
           Guardar
         </button>
       </div>
+      {(limits.run_budget_usd === null || limits.daily_budget_usd === null) && (
+        <p className="limits-off" data-testid="limits-off">
+          Sin tope{" "}
+          {limits.run_budget_usd === null && limits.daily_budget_usd === null
+            ? "por run ni por día"
+            : limits.run_budget_usd === null
+              ? "por run"
+              : "por día"}
+          : un run sigue hasta terminar o hasta que lo detengas.
+        </p>
+      )}
       <p className="muted">
         {flag
           ? "Fijados con flags al arrancar el daemon: mandan sobre este ajuste."
           : limits.source === "setting"
             ? `Los cambió ${limits.updated_by} · ${limits.updated_at}.`
-            : "Valores bajos por defecto (ADR-0002): subirlos es decisión tuya."}{" "}
+            : "Valores bajos por defecto (ADR-0002): subirlos o quitarlos es decisión tuya."}{" "}
         Con la suscripción el costo es una estimación del SDK a precio de lista, no una factura; al
         agotarse el del día, no arranca otro run hasta mañana o hasta que lo subas.
       </p>
     </form>
+  )
+}
+
+function Budget(p: {
+  label: string
+  aria: string
+  min: number
+  max: number
+  value: string
+  off: boolean
+  disabled: boolean
+  onValue: (v: string) => void
+  onOff: (off: boolean) => void
+}) {
+  return (
+    <label>
+      {p.label}
+      <input
+        aria-label={p.aria}
+        type="number"
+        min={p.min}
+        max={p.max}
+        step="any"
+        value={p.value}
+        disabled={p.disabled || p.off}
+        required={!p.off}
+        onChange={(e) => p.onValue(e.target.value)}
+      />
+      <span className="limits-check">
+        <input
+          type="checkbox"
+          aria-label={`${p.aria}: sin tope`}
+          checked={p.off}
+          disabled={p.disabled}
+          onChange={(e) => p.onOff(e.target.checked)}
+        />
+        Sin tope
+      </span>
+    </label>
   )
 }

@@ -1,5 +1,5 @@
 /**
- * ADR-0002 regla 5 desde la GUI: el humano sube el presupuesto y la concurrencia; los
+ * ADR-0002 regla 3 desde la GUI: el humano sube el presupuesto y la concurrencia; los
  * flags del daemon mandan. Y una tarea del método en «esperando por ti» sigue al
  * escribirle (runs.continue).
  */
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Daemon, IpcClient } from "../src/index.ts"
+import { checkRunStart, Daemon, DEFAULT_LIMITS, IpcClient } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
 import { replayQuery } from "./replay.ts"
 
@@ -43,7 +43,7 @@ async function boot(limits?: Record<string, number>) {
   return { daemon, human }
 }
 
-describe("ADR-0002 regla 5: límites desde Ajustes", () => {
+describe("ADR-0002 regla 3: límites desde Ajustes", () => {
   test("el humano sube el presupuesto del día y queda a su nombre", async () => {
     const { daemon, human } = await boot()
     const before = (await human.call("settings.get", {})) as {
@@ -69,6 +69,51 @@ describe("ADR-0002 regla 5: límites desde Ajustes", () => {
     expect(after.limits.updated_by).toBeTruthy()
     expect(daemon.limits.daily_budget_micro_usd).toBe(60_000_000)
     expect(daemon.limits.max_concurrent_runs).toBe(1)
+  })
+
+  test("el humano quita los topes de presupuesto: el run arranca sin maxBudgetUsd", async () => {
+    const { daemon, human } = await boot()
+    const view = (await human.call("settings.update", {
+      ...meta(),
+      limits: { run_budget_usd: null, daily_budget_usd: null },
+    })) as { limits: { run_budget_usd: number | null; daily_budget_usd: number | null } }
+    expect(view.limits).toMatchObject({ run_budget_usd: null, daily_budget_usd: null })
+    expect(daemon.limits).toMatchObject({
+      run_budget_micro_usd: null,
+      daily_budget_micro_usd: null,
+    })
+    const w = (await human.call("work_items.create", { ...meta(), title: "t", kind: "chore" })) as {
+      id: string
+    }
+    await human.call("work_items.transition", { ...meta(), work_item_id: w.id, to: "planned" })
+    const run = (await human.call("runs.start", {
+      ...meta(),
+      work_item_id: w.id,
+      purpose: "execute",
+    })) as { id: string }
+    const manifest = JSON.parse(daemon.repo.getRun(run.id)?.context_manifest_json ?? "{}")
+    expect(manifest.budget_micro_usd).toBeNull()
+    await daemon.idle()
+    // Y se puede volver a poner.
+    await human.call("settings.update", { ...meta(), limits: { daily_budget_usd: 20 } })
+    expect(daemon.limits.daily_budget_micro_usd).toBe(20_000_000)
+  })
+
+  test("sin tope del día, checkRunStart no corta por gasto", () => {
+    const repo = {
+      liveRuns: () => [],
+      spentSince: () => 999_000_000,
+      workItemBudgetCap: () => null,
+      spentOnWorkItem: () => 0,
+    } as never
+    const item = { id: "w", project_id: "p" } as never
+    expect(
+      checkRunStart(repo, { ...DEFAULT_LIMITS, daily_budget_micro_usd: null }, item),
+    ).toMatchObject({ ok: true, runBudgetMicroUsd: 2_000_000 })
+    expect(checkRunStart(repo, DEFAULT_LIMITS, item)).toMatchObject({
+      ok: false,
+      limit: "daily_budget",
+    })
   })
 
   test("los flags del daemon mandan sobre el ajuste", async () => {

@@ -298,3 +298,19 @@ test("Codex con la suscripción: el humano lo enciende en Ajustes y queda a su n
   off.proc.stdin?.end()
   await new Promise((r) => off.proc.once("exit", r))
 })
+
+test("presupuesto: el humano pone 50 por run y quita el tope del día", async ({ page }) => {
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Project setup", exact: true }).click()
+  const form = page.getByTestId("limits")
+  // Con step 0.5 desde min 0.1, el navegador rechazaba 50 como «valor no válido».
+  await form.getByLabel("Presupuesto por run", { exact: true }).fill("50")
+  await form.getByLabel("Presupuesto por día: sin tope").check()
+  await expect(form.getByLabel("Presupuesto por día", { exact: true })).toBeDisabled()
+  await form.getByRole("button", { name: "Guardar" }).click()
+  await expect(page.getByTestId("limits-off")).toContainText("Sin tope por día")
+  await expect(form).toContainText("Los cambió")
+  await expect(form.getByLabel("Presupuesto por run", { exact: true })).toHaveValue("50")
+})

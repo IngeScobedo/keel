@@ -595,8 +595,9 @@ export const SettingsViewSchema = z.object({
    */
   limits: z
     .object({
-      run_budget_usd: z.number(),
-      daily_budget_usd: z.number(),
+      /** null: sin tope, por decisión del humano (ADR-0002 regla 3). */
+      run_budget_usd: z.number().nullable(),
+      daily_budget_usd: z.number().nullable(),
       max_concurrent_runs: z.number().int(),
       source: z.enum(["default", "setting", "flag"]),
       updated_by: z.string().nullable(),
@@ -1470,8 +1471,9 @@ export const Methods = {
       /** ADR-0002 regla 5: subir (o bajar) el presupuesto y la concurrencia. */
       limits: z
         .object({
-          run_budget_usd: z.number().min(0.1).max(1_000).optional(),
-          daily_budget_usd: z.number().min(1).max(10_000).optional(),
+          /** null quita el tope (ADR-0002 regla 3: decisión explícita y visible). */
+          run_budget_usd: z.number().min(0.1).max(1_000).nullable().optional(),
+          daily_budget_usd: z.number().min(1).max(10_000).nullable().optional(),
           max_concurrent_runs: z.number().int().min(1).max(8).optional(),
         })
         .optional(),
@@ -1531,8 +1533,8 @@ export const Methods = {
       limits: z
         .object({
           max_concurrent_runs: z.number().int(),
-          run_budget_micro_usd: z.number().int(),
-          daily_budget_micro_usd: z.number().int(),
+          run_budget_micro_usd: z.number().int().nullable(),
+          daily_budget_micro_usd: z.number().int().nullable(),
         })
         .optional(),
       spent_today_micro_usd: z.number().int().optional(),

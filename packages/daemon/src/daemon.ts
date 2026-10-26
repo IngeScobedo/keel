@@ -598,8 +598,9 @@ export class Daemon {
         const l = this.limits
         const set = this.repo.getSetting(LIMITS)
         return {
-          run_budget_usd: l.run_budget_micro_usd / 1e6,
-          daily_budget_usd: l.daily_budget_micro_usd / 1e6,
+          run_budget_usd: l.run_budget_micro_usd === null ? null : l.run_budget_micro_usd / 1e6,
+          daily_budget_usd:
+            l.daily_budget_micro_usd === null ? null : l.daily_budget_micro_usd / 1e6,
           max_concurrent_runs: l.max_concurrent_runs,
           source: (this.opts.limits && Object.keys(this.opts.limits).length
             ? "flag"
@@ -2461,18 +2462,19 @@ export class Daemon {
             repo.setSetting(APPROVALS_TIMEOUT, p.approvals_timeout_ms, uow.actorId)
           if (p.prompt_suggestions !== undefined)
             repo.setSetting(PROMPT_SUGGESTIONS, p.prompt_suggestions, uow.actorId)
-          // ADR-0002 regla 5: el humano sube (o baja) los límites; queda a su nombre.
+          // ADR-0002 regla 3: el humano sube, baja o quita (null) los límites; queda a su nombre.
           if (p.limits) {
             const prev = (repo.getSetting(LIMITS)?.value ?? {}) as Partial<Limits>
+            const micro = (usd: number | null) => (usd === null ? null : Math.round(usd * 1e6))
             repo.setSetting(
               LIMITS,
               {
                 ...prev,
                 ...(p.limits.run_budget_usd !== undefined
-                  ? { run_budget_micro_usd: Math.round(p.limits.run_budget_usd * 1e6) }
+                  ? { run_budget_micro_usd: micro(p.limits.run_budget_usd) }
                   : {}),
                 ...(p.limits.daily_budget_usd !== undefined
-                  ? { daily_budget_micro_usd: Math.round(p.limits.daily_budget_usd * 1e6) }
+                  ? { daily_budget_micro_usd: micro(p.limits.daily_budget_usd) }
                   : {}),
                 ...(p.limits.max_concurrent_runs !== undefined
                   ? { max_concurrent_runs: p.limits.max_concurrent_runs }
@@ -2646,7 +2648,7 @@ export class Daemon {
    */
   private async dispatchRun(run: RunRow, item: WorkItemRow, prompt: string): Promise<void> {
     const manifest = JSON.parse(run.context_manifest_json) as {
-      budget_micro_usd?: number
+      budget_micro_usd?: number | null
       provider?: string
       options?: RunOptionsRecord
     }
@@ -2681,7 +2683,7 @@ export class Daemon {
         if (current.status !== "queued") final = current
         else {
           const budget = (
-            JSON.parse(current.context_manifest_json) as { budget_micro_usd?: number }
+            JSON.parse(current.context_manifest_json) as { budget_micro_usd?: number | null }
           ).budget_micro_usd
           const mcp_servers = this.keelMcpServer(current)
           const flow = this.repo.getFlow(item.id)
@@ -2736,7 +2738,7 @@ export class Daemon {
                 sandbox,
                 env,
                 cwd: ws.cwd,
-                max_budget_usd: budget === undefined ? null : budget / 1_000_000,
+                max_budget_usd: budget == null ? null : budget / 1_000_000,
                 mcp_servers,
               })
         }

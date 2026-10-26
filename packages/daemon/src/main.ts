@@ -5,7 +5,8 @@
  * en $XDG_RUNTIME_DIR/keel/keel.sock (fallback ~/.keel/keel.sock), Named Pipe en Windows.
  *
  * Límites (ADR-0002 regla 3; defaults bajos en limits.ts). Subirlos es explícito:
- *   --max-concurrent-runs N   --run-budget-usd X   --daily-budget-usd Y
+ *   --max-concurrent-runs N   --run-budget-usd X|none   --daily-budget-usd Y|none
+ * (`none`: sin tope de presupuesto.)
  *
  * Codex (ADR-0008): los runs con `profile: "codex"` usan la sesión de `codex`
  * del usuario sólo si se habilita aquí, explícitamente:
@@ -48,20 +49,22 @@ function arg(name: string): string | undefined {
 }
 
 function limitsFromArgs(): Partial<Limits> {
-  const num = (name: string) => {
+  const num = (name: string, none = false) => {
     const v = arg(name)
     if (v === undefined) return undefined
+    if (none && v === "none") return null
     const n = Number(v)
     if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} necesita un número positivo`)
     return n
   }
   const out: Partial<Limits> = {}
   const runs = num("--max-concurrent-runs")
-  const run = num("--run-budget-usd")
-  const day = num("--daily-budget-usd")
-  if (runs !== undefined) out.max_concurrent_runs = Math.floor(runs)
-  if (run !== undefined) out.run_budget_micro_usd = Math.round(run * 1e6)
-  if (day !== undefined) out.daily_budget_micro_usd = Math.round(day * 1e6)
+  const run = num("--run-budget-usd", true)
+  const day = num("--daily-budget-usd", true)
+  const micro = (usd: number | null) => (usd === null ? null : Math.round(usd * 1e6))
+  if (runs != null) out.max_concurrent_runs = Math.floor(runs)
+  if (run !== undefined) out.run_budget_micro_usd = micro(run)
+  if (day !== undefined) out.daily_budget_micro_usd = micro(day)
   return out
 }
 
@@ -140,8 +143,9 @@ if (import.meta.main && process.argv[2] === "askpass") {
   // start() reconcilia una sola vez y libera los worktrees de lo interrumpido.
   const rec = daemon.start()
   const l = daemon.limits
+  const usd = (m: number | null) => (m === null ? "sin tope" : `$${m / 1e6} estimado`)
   console.log(
-    `límites · ${l.max_concurrent_runs} run(s) a la vez · $${l.run_budget_micro_usd / 1e6} estimado por run · $${l.daily_budget_micro_usd / 1e6} estimado por día`,
+    `límites · ${l.max_concurrent_runs} run(s) a la vez · ${usd(l.run_budget_micro_usd)} por run · ${usd(l.daily_budget_micro_usd)} por día`,
   )
   console.log(
     `keel daemon · db ${daemon.opts.dbPath} · socket ${daemon.server.path} · proyecto ${daemon.project.project_id}`,
