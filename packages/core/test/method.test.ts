@@ -3,13 +3,18 @@ import {
   canReturn,
   contractSection,
   lifecycleForStage,
+  parseTasks,
   purposeForStage,
   stageMove,
+  storyFor,
   validateBrief,
   validateDesign,
+  validateDoc,
   validateQa,
   validateSpec,
+  validateTasks,
   verifyDelta,
+  withinFrontier,
 } from "../src/index.ts"
 
 describe("ADR-0021: etapas y gates", () => {
@@ -131,5 +136,90 @@ describe("ADR-0021: validación determinista de documentos", () => {
         { name: "build", ok: true },
       ]),
     ).toEqual({ green: false, newRed: ["test"], stillRed: [], fixed: ["lint"] })
+  })
+})
+
+describe("ADR-0022: el plan de la feature", () => {
+  const SPEC2 = `## Requisitos
+### R1 — Capítulos en el API
+#### Escenario: lista
+- **Dado** un proyecto con capítulos
+- **Cuando** pido el detalle
+- **Entonces** vienen los capítulos
+### R2 — Capítulos en el backoffice
+#### Escenario: agrupado
+- **Dado** fotos con capítulo
+- **Cuando** abro el detalle
+- **Entonces** se agrupan
+`
+  const TASKS = `# Tareas
+## Fase 1 — API
+- [ ] T1 Contrato de capítulos → \`apps/api/src/chapters/**\` → R1
+- [ ] T2 Repositorio de capítulos → \`apps/api/src/repo/**\` → R1
+## Fase 2 — Backoffice
+- [ ] T3 Tarjeta por capítulos → \`apps/backoffice/src/photos/**\` → R2
+- [ ] T4 Pestaña de galería → \`apps/backoffice/src/gallery/**\` → R2 (después de T3)
+`
+  test("lee fases, fronteras, requisitos y dependencias entre fases", () => {
+    const tasks = parseTasks(TASKS)
+    expect(tasks.map((t) => [t.key, t.phase, t.title])).toEqual([
+      ["T1", 1, "Contrato de capítulos"],
+      ["T2", 1, "Repositorio de capítulos"],
+      ["T3", 2, "Tarjeta por capítulos"],
+      ["T4", 2, "Pestaña de galería"],
+    ])
+    expect(tasks[0]?.frontier).toEqual(["apps/api/src/chapters/**"])
+    expect(tasks[0]?.requirements).toEqual(["R1"])
+    expect(tasks[0]?.after).toEqual([])
+    expect(tasks[2]?.after).toEqual(["T1", "T2"])
+    expect(tasks[3]?.after).toEqual(["T1", "T2", "T3"])
+    expect(tasks[2]?.phase_title).toBe("Backoffice")
+    expect(validateTasks(TASKS, SPEC2).ok).toBe(true)
+  })
+
+  test("sin fases todo es la fase 1 y las llaves salen de la posición", () => {
+    const tasks = parseTasks("- [ ] Una → `a/**` → R1\n- [ ] Otra → `b/**` → R1\n")
+    expect(tasks.map((t) => [t.key, t.phase, t.after])).toEqual([
+      ["T1", 1, []],
+      ["T2", 1, []],
+    ])
+  })
+
+  test("bloquea fronteras solapadas, líneas sin frontera, requisitos inventados y ciclos", () => {
+    const bad = `- [ ] T1 A → \`a/**\` → R1 (después de T2)
+- [ ] T2 B → \`a/**\` → R9 (después de T1)
+- [ ] T3 C sin frontera → R1
+`
+    const r = validateTasks(bad, SPEC2)
+    expect(r.ok).toBe(false)
+    const failed = r.checks.filter((c) => !c.ok).map((c) => c.msg)
+    expect(failed).toContain("las fronteras de las subtareas no se solapan")
+    expect(failed).toContain("cada línea nombra su frontera de archivos")
+    expect(failed).toContain("los requisitos citados existen en la spec")
+    expect(failed).toContain("las dependencias no forman un ciclo")
+    expect(validateDoc("tasks", bad, { spec: SPEC2 }).ok).toBe(false)
+  })
+
+  test("la story sale de la línea, los escenarios citados y el contrato", () => {
+    const [t] = parseTasks(TASKS)
+    const story = storyFor(
+      t as NonNullable<typeof t>,
+      SPEC2,
+      "## Contrato congelado\n`GET /projects/:id` devuelve `chapters`.\n",
+    )
+    expect(story).toContain("# T1 — Contrato de capítulos")
+    expect(story).toContain("`apps/api/src/chapters/**`")
+    expect(story).toContain("#### Escenario: lista")
+    expect(story).not.toContain("agrupado")
+    expect(story).toContain("devuelve `chapters`")
+  })
+
+  test("la frontera casa por glob: ** cruza carpetas y * no", () => {
+    expect(withinFrontier("apps/api/src/chapters/a.ts", ["apps/api/src/chapters/**"])).toBe(true)
+    expect(withinFrontier("apps/api/src/chapters/x/y.ts", ["apps/api/src/chapters/**"])).toBe(true)
+    expect(withinFrontier("apps/api/src/other.ts", ["apps/api/src/chapters/**"])).toBe(false)
+    expect(withinFrontier("src/a.ts", ["src/*.ts"])).toBe(true)
+    expect(withinFrontier("src/x/a.ts", ["src/*.ts"])).toBe(false)
+    expect(withinFrontier("README.md", ["**/*.md"])).toBe(true)
   })
 })

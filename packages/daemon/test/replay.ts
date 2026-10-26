@@ -3,7 +3,7 @@
  * spike (fixtures redactados) en el orden en que llegaron, invocando los hooks
  * registrados en `options.hooks` igual que lo haría el SDK.
  */
-import { readFileSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { HookCallback, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { type Daemon, IpcClient, type QueryFn } from "../src/index.ts"
@@ -559,6 +559,105 @@ export function conversationQuery(daemon: Daemon): QueryFn {
         is_error: false,
         result: "ok",
         total_cost_usd: 0.004,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      } as unknown as SDKMessage
+    })()
+    return Object.assign(run, {
+      setPermissionMode: async () => {},
+      setModel: async () => {},
+      applyFlagSettings: async () => {},
+    }) as never
+  }
+}
+
+/**
+ * ADR-0022: el agente de una feature. En el padre escribe brief, spec, diseño y el plan
+ * (dos fases); en cada subtarea implementa en su frontera, revisa, verifica y propone
+ * sólo el commit, que Keel integra a la rama de la feature.
+ */
+export function featureQuery(daemon: Daemon): QueryFn {
+  return ({ options }) => {
+    const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
+    const session = `s-feature-${runId}`
+    let n = 0
+    const say = (text: string) =>
+      ({
+        type: "assistant",
+        uuid: `u-f-${runId}-${++n}`,
+        session_id: session,
+        parent_tool_use_id: null,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }) as unknown as SDKMessage
+    const run = (async function* () {
+      const row = daemon.repo.getRun(runId)
+      if (!row) return
+      const { file } = daemon.agentTokens.issue({
+        run_id: runId,
+        project_id: row.project_id,
+        work_item_id: row.work_item_id,
+      })
+      const agent = await IpcClient.connect(daemon.agentServer.path)
+      await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+      let k = 0
+      const m = () => ({ request_id: "r", idempotency_key: `${runId}-${++k}` })
+      const w = row.work_item_id
+      const put = (kind: string, content_markdown: string) =>
+        agent.call("task_docs.put", { ...m(), work_item_id: w, kind, content_markdown })
+      const advance = (to: string, extra: Record<string, unknown> = {}) =>
+        agent.call("stages.advance", { ...m(), work_item_id: w, to, ...extra })
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: session,
+        model: "claude-opus-5-5",
+        uuid: `u-f-init-${runId}`,
+      } as unknown as SDKMessage
+      const flow = daemon.repo.getFlow(w)
+      const sub = flow?.subtask_json
+        ? (JSON.parse(flow.subtask_json) as { key: string; frontier: string[] })
+        : null
+      if (flow?.stage === "brief") {
+        await put(
+          "brief",
+          "# Brief\n## Problema\nEl diseñador no ve los capítulos.\n## Alcance\nAPI y backoffice.\n## Fuera de alcance\nLa tienda.\n## Criterios de aceptación\n- se ven los capítulos\n",
+        )
+        await advance("design", { ceremony: "formal", reason: "toca API y backoffice" })
+        yield say("Es una feature de dos capas: ciclo formal. Te pido aprobar el brief.")
+      } else if (flow?.stage === "design") {
+        await put(
+          "spec",
+          "## Requisitos\n### R1 — Capítulos en el API\n#### Escenario: lista\n- **Dado** un proyecto con capítulos\n- **Cuando** pido el detalle\n- **Entonces** vienen\n### R2 — Capítulos en el backoffice\n#### Escenario: agrupado\n- **Dado** fotos con capítulo\n- **Cuando** abro el detalle\n- **Entonces** se agrupan\n",
+        )
+        await put(
+          "design",
+          "## Contrato congelado\n`GET /projects/:id` devuelve `chapters: Chapter[]`.\n## Fronteras de archivos\n| responsable | archivos |\n| --- | --- |\n| backend | `api/**` |\n| frontend | `web/**` |\n",
+        )
+        await put(
+          "tasks",
+          "## Fase 1 — API\n- [ ] T1 Contrato de capítulos → `api/contract/**` → R1\n- [ ] T2 Repositorio de capítulos → `api/repo/**` → R1\n## Fase 2 — Backoffice\n- [ ] T3 Tarjeta por capítulos → `web/photos/**` → R2\n",
+        )
+        await advance("implement")
+        yield say("Spec, diseño y plan listos: tres subtareas en dos fases.")
+      } else if (sub && flow?.stage === "implement") {
+        const dir = join(String(options.cwd), (sub.frontier[0] as string).replace("/**", ""))
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, `${sub.key}.ts`), `export const ${sub.key} = true\n`)
+        yield say(`${sub.key} implementada en su frontera.`)
+        await advance("review")
+        await put("qa", "## Veredicto: PASS\n## Evidencia\n- el escenario se cumple\n")
+        await agent.call("verify.run", { ...m(), work_item_id: w })
+        await advance("close")
+        await agent.call("git.propose", { ...m(), message: `${sub.key}: implementada` })
+      }
+      agent.close()
+      yield {
+        type: "result",
+        subtype: "success",
+        uuid: `u-f-res-${runId}`,
+        session_id: session,
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.01,
         usage: { input_tokens: 10, output_tokens: 10 },
       } as unknown as SDKMessage
     })()

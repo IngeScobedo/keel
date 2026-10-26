@@ -79,6 +79,15 @@ export type MethodItem =
       delta: { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] }
     }
   | { kind: "method"; key: string; event: "keel" | "stalled" | "closed" | "started"; text: string }
+  /** ADR-0022 §5: una línea por subtarea que nace, arranca, se integra o vuelve. */
+  | {
+      kind: "method"
+      key: string
+      event: "feature"
+      text: string
+      tone: "info" | "done" | "warn"
+      subtask_id: string | null
+    }
 
 export type ChatItem =
   | { kind: "prompt" | "human" | "agent" | "divider"; key: string; text: string }
@@ -183,6 +192,49 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
       }
       case "task.flow_started":
         items.push({ kind: "method", key, event: "started", text: String(p.stage) })
+        break
+      case "feature.planned": {
+        const subs = Array.isArray(p.subtasks) ? (p.subtasks as Loose[]) : []
+        const phases = new Set(subs.map((x) => x.phase)).size
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "info",
+          subtask_id: null,
+          text: `Nacieron ${subs.length} subtareas en ${phases} fase${phases === 1 ? "" : "s"} · rama ${String(p.branch)}${p.auto_integrate === true ? " · se integran solas" : ""}`,
+        })
+        break
+      }
+      case "feature.subtask_started":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "info",
+          subtask_id: typeof p.subtask_id === "string" ? p.subtask_id : null,
+          text: `Empezó ${p.key ?? ""} · ${String(p.title)}`,
+        })
+        break
+      case "feature.subtask_integrated":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "done",
+          subtask_id: typeof p.subtask_id === "string" ? p.subtask_id : null,
+          text: `Se integró ${p.key ?? ""} · ${String(p.title)} a ${String(p.branch)}`,
+        })
+        break
+      case "feature.subtask_returned":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "warn",
+          subtask_id: typeof p.subtask_id === "string" ? p.subtask_id : null,
+          text: `${p.key ?? ""} volvió a implementar: ${String(p.message)}${Array.isArray(p.conflicts) && p.conflicts.length ? ` (${(p.conflicts as string[]).join(", ")})` : ""}${Array.isArray(p.frontier_warning) ? " · el conflicto se repite: revisa las fronteras" : ""}`,
+        })
         break
       case "task.stage_changed":
         items.push({

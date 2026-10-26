@@ -14,7 +14,14 @@ import { join } from "node:path"
 import { Daemon } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
 import { CONVERSATION_KEY } from "../../src/store/repo.ts"
-import { chatQuery, conversationQuery, firstPrompt, methodQuery, replayQuery } from "../replay.ts"
+import {
+  chatQuery,
+  conversationQuery,
+  featureQuery,
+  firstPrompt,
+  methodQuery,
+  replayQuery,
+} from "../replay.ts"
 
 const dir = mkdtempSync(join(tmpdir(), "keel-e2e-"))
 initRepo(join(dir, "repo"))
@@ -33,6 +40,12 @@ const daemon: Daemon = new Daemon({
       const run = daemon.repo.getRun(runId)
       const task = run ? daemon.repo.getWorkItem(run.work_item_id) : null
       if (task?.title.startsWith("método")) return methodQuery(daemon)(a)
+      // «feature…» y sus subtareas las trabaja el agente de la feature (ADR-0022).
+      const parent = task?.parent_work_item_id
+        ? daemon.repo.getWorkItem(task.parent_work_item_id)
+        : null
+      if (task?.title.startsWith("feature") || parent?.title.startsWith("feature"))
+        return featureQuery(daemon)(a)
       // La conversación del proyecto (ADR-0024) la contesta su propio guion.
       if (task?.dedupe_key === CONVERSATION_KEY) return conversationQuery(daemon)(a)
       return firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a)

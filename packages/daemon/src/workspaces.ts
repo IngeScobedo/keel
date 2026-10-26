@@ -89,12 +89,18 @@ export class GitWorktreeDriver implements WorkspaceDriver {
     const rootPath = this.deps.rootOf(run.project_id)
     // ADR-0021 §3: una tarea en el método trabaja en su worktree desde el primer run,
     // también en las etapas de sólo lectura; así la sesión se retoma siempre.
-    const taskWorktree =
-      (JSON.parse(run.context_manifest_json) as { task_worktree?: boolean }).task_worktree === true
+    const manifest = JSON.parse(run.context_manifest_json) as {
+      task_worktree?: boolean
+      /** ADR-0022: de dónde sale el worktree (la rama de la feature); por defecto, HEAD. */
+      worktree_base?: string
+      /** ADR-0022: un worktree nuevo aunque haya conversación (el padre revisa la feature). */
+      fresh_worktree?: boolean
+    }
+    const taskWorktree = manifest.task_worktree === true
     if (run.purpose !== "execute" && !taskWorktree) return { ok: true, cwd: rootPath, events: [] }
     // Continuar una conversación (ADR-0019 §3): el run hijo se lleva el worktree del
     // padre si sigue en disco; así el agente retoma en la misma carpeta y rama.
-    if (run.parent_run_id) {
+    if (run.parent_run_id && !manifest.fresh_worktree) {
       const inherited = repo
         .runWorktrees(run.parent_run_id)
         .filter((w) => existsSync(w.worktree_path))
@@ -135,6 +141,7 @@ export class GitWorktreeDriver implements WorkspaceDriver {
       runId: key,
       path,
       owner: this.deps.owner ?? "keel-daemon",
+      ...(manifest.worktree_base ? { base: manifest.worktree_base } : {}),
     })
     const row = repo.addRunWorktree({
       project_id: run.project_id,

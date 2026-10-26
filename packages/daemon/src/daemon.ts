@@ -27,9 +27,11 @@ import {
   matchesPattern,
   type PermissionMode,
   type PermissionPattern,
+  type PlannedTask,
   type ProjectProfile,
   ProjectProfileSchema,
   parsePattern,
+  parseTasks,
   patternFor,
   purposeForStage,
   qaVerdict,
@@ -38,12 +40,14 @@ import {
   type SettingsView,
   type Stage,
   stageMove,
+  storyFor,
   type TaskDocKind,
   type TaskFlowView,
   type TransitionAuthority,
   type VerifyResult,
   validateDoc,
   verifyDelta,
+  withinFrontier,
 } from "@keel/core"
 import {
   changedFiles,
@@ -80,6 +84,7 @@ import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
+import { createFeatureBranch, featureBranchName, integrateInto } from "./features.js"
 import {
   continuationPrompt,
   type DocSet,
@@ -127,12 +132,14 @@ import { openStore, type Store } from "./store/db.js"
 import {
   CONVERSATION_KEY,
   type EvidenceRow,
+  type FeatureInfo,
   type NoteRow,
   type PairingRow,
   type PermissionRuleRow,
   Repo,
   type RunRequestRow,
   type RunRow,
+  type SubtaskInfo,
   type WorkItemRow,
 } from "./store/repo.js"
 import { runVerify } from "./verify.js"
@@ -582,6 +589,11 @@ export class Daemon {
       from: w.lifecycle,
       ...(opts.expectedRevision === undefined ? {} : { revision: opts.expectedRevision }),
     })
+    // ADR-0022 §3: integrada una subtarea, la feature sigue con la siguiente.
+    if (to === "done" && w.parent_work_item_id) {
+      const parentId = w.parent_work_item_id
+      uow.afterCommit(() => this.scheduleFeature(parentId))
+    }
     if (!updated)
       throw rpcError(ErrorCode.conflict, "otro escritor cambió la tarea; vuelve a leerla", {
         current_revision: this.repo.getWorkItem(w.id)?.revision ?? null,
@@ -1604,12 +1616,21 @@ export class Daemon {
         const p = params as Params<"git.propose">
         const { runId, worktree } = this.worktreeFor(ctx, p.run_id)
         const run = repo.getRun(runId) as RunRow
+        const item = repo.getWorkItem(run.work_item_id)
+        // ADR-0022 §2: una subtarea no se publica; su cierre es integrarla a la feature.
+        if (item?.parent_work_item_id && (p.push || p.pr))
+          throw rpcError(
+            ErrorCode.invalidParams,
+            "una subtarea no hace push ni PR: su cierre es integrarse a la rama de la feature; propone sólo el commit",
+          )
         let built: Awaited<ReturnType<typeof buildPlan>>
         try {
           built = await buildPlan(this.gitPlanDeps(), run, worktree, p)
         } catch (e) {
           throw rpcError(ErrorCode.invalidParams, e instanceof Error ? e.message : String(e))
         }
+        const autoBlocker = item ? this.autoIntegrable(item, built.plan) : "sin tarea"
+        const feat = item?.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null
         return this.mutation<Params<"git.propose">>("git.propose", (_p, uow) => {
           const expires = new Date(Date.now() + PLAN_TTL_MS).toISOString()
           const planId = repo.createApproval({
@@ -1631,6 +1652,27 @@ export class Daemon {
             plan_hash: built.plan_hash,
             operations: built.plan.operations.map((o) => o.op),
           })
+          // ADR-0022 §2: con las tres condiciones comprobadas, se integra sin preguntar a
+          // nombre de quien eligió la integración automática al aprobar el diseño.
+          if (feat?.auto_integrate && autoBlocker === null) {
+            repo.setApproval(planId, "approved", feat.approved_by)
+            uow.emit("approval.resolved", run.id, {
+              approval_id: planId,
+              decision: "approved",
+              auto: "feature.auto_integrate",
+            })
+            uow.emit("git.plan.approved", run.id, {
+              plan_id: planId,
+              plan_hash: built.plan_hash,
+              auto: true,
+            })
+            uow.afterCommit(() => this.track(this.runGitPlan(planId, built.plan)))
+          } else if (feat?.auto_integrate)
+            uow.emit("feature.auto_integrate_skipped", run.id, {
+              work_item_id: item?.parent_work_item_id,
+              subtask_id: item?.id,
+              reason: autoBlocker,
+            })
           return { plan_id: planId, plan_hash: built.plan_hash, plan: built.plan }
         })(params, ctx)
       },
@@ -2074,7 +2116,7 @@ export class Daemon {
             prompt =
               item.dedupe_key === CONVERSATION_KEY
                 ? `${conversationHeader()}\n\n${prompt}`
-                : `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}` : ""}\n\n${prompt}`
+                : `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}` : ""}${featureHeader(this.featureOf(item.id), item.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null)}\n\n${prompt}`
           // Planear y revisar son sólo lectura también para el SDK (ADR-0021 §3).
           const readOnly =
             run.purpose !== "execute" || (flow !== null && isReadOnlyStage(flow.stage))
@@ -2228,6 +2270,10 @@ export class Daemon {
       prompt_source?: "human" | "keel"
       /** ADR-0021 §3: el run trabaja en el worktree de la tarea aunque no ejecute. */
       task_worktree?: boolean
+      /** ADR-0022: el worktree sale de la rama de la feature, no de HEAD. */
+      worktree_base?: string
+      /** ADR-0022: worktree nuevo aunque siga la conversación. */
+      fresh_worktree?: boolean
     },
   ): ReturnType<Repo["runView"]> {
     const repo = this.repo
@@ -2275,6 +2321,8 @@ export class Daemon {
         provider,
         options,
         ...(p.task_worktree ? { task_worktree: true } : {}),
+        ...(p.worktree_base ? { worktree_base: p.worktree_base } : {}),
+        ...(p.fresh_worktree ? { fresh_worktree: true } : {}),
       },
       parent_run_id: p.parent_run_id ?? null,
     })
@@ -2476,6 +2524,15 @@ export class Daemon {
         })
     }
     const base = { ...lastManifest.options, ...o.options }
+    // ADR-0022 §2: una subtarea sale de la rama de la feature; el padre revisa la feature
+    // en un worktree nuevo sobre esa rama.
+    const parentFeat = item.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null
+    const ownFeat = this.featureOf(item.id)
+    const featureBase =
+      parentFeat?.branch ?? (ownFeat && purpose === "execute" ? ownFeat.branch : null)
+    const lastBase = last
+      ? (JSON.parse(last.context_manifest_json) as { worktree_base?: string }).worktree_base
+      : undefined
     return this.startRunIn(uow, {
       work_item_id: item.id,
       purpose,
@@ -2494,6 +2551,8 @@ export class Daemon {
       },
       parent_run_id: last?.id ?? null,
       task_worktree: true,
+      ...(featureBase ? { worktree_base: featureBase } : {}),
+      ...(featureBase && lastBase !== featureBase ? { fresh_worktree: true } : {}),
     })
   }
 
@@ -2533,6 +2592,8 @@ export class Daemon {
     const flow = this.repo.getFlow(final.work_item_id)
     if (!flow || final.status !== "completed") return
     if (this.repo.pendingStageGate(final.work_item_id)) return
+    // ADR-0022 §4: el padre espera a sus hijas sin run vivo; Keel lo despierta al final.
+    if (this.repo.getWorkItem(final.work_item_id)?.lifecycle === "blocked") return
     if (purposeForStage(flow.stage) !== final.purpose)
       this.continueFlow(final.work_item_id, `La tarea pasó a la etapa ${flow.stage}.`)
   }
@@ -2708,10 +2769,391 @@ export class Daemon {
       return { approval_id: a.id, state: "approved" as const }
     }
     this.applyStage(uow, w, g.to, { authorizedBy: uow.actorId, delegated: false, reason })
+    // ADR-0022 §1: aprobar el contrato aprueba también el árbol de subtareas.
+    const planned = g.gate === "design" ? this.plannedSubtasks(w) : []
+    if (planned.length > 0) {
+      this.bornSubtasks(uow, w, planned, {
+        approver: uow.actorId,
+        autoIntegrate: p.auto_integrate === true,
+      })
+      uow.afterCommit(() => {
+        const live = this.repo.liveRunFor(w.id)
+        const text = `El humano aprobó el diseño: nacieron ${planned.length} subtareas que Keel trabaja en orden en la rama de la feature. Cierra este turno con un resumen breve.`
+        if (live && this.providerOf(live).sendMessage(live.id, text))
+          this.emitSystem("run.keel_message", live.id, { text })
+      })
+      return { approval_id: a.id, state: "approved" as const }
+    }
     uow.afterCommit(() =>
       this.continueFlow(w.id, `El humano aprobó el ${label}${reason ? ` («${reason}»)` : ""}.`),
     )
     return { approval_id: a.id, state: "approved" as const }
+  }
+
+  // --- feature y subtareas (ADR-0022) ------------------------------------------------
+
+  /** La feature de un padre, si sus subtareas ya nacieron. */
+  private featureOf(workItemId: string): FeatureInfo | null {
+    const raw = this.repo.getFlow(workItemId)?.feature_json
+    return raw ? (JSON.parse(raw) as FeatureInfo) : null
+  }
+
+  private subtaskOf(workItemId: string): SubtaskInfo | null {
+    const raw = this.repo.getFlow(workItemId)?.subtask_json
+    return raw ? (JSON.parse(raw) as SubtaskInfo) : null
+  }
+
+  /** El plan de una tarea formal, si da para subtareas: dos líneas o más y sin abuelo. */
+  private plannedSubtasks(w: WorkItemRow): PlannedTask[] {
+    if (w.parent_work_item_id) return []
+    const flow = this.repo.getFlow(w.id)
+    if (flow?.ceremony !== "formal") return []
+    const tasks = parseTasks(this.docSet(w.id).tasks ?? "")
+    return tasks.length >= 2 ? tasks : []
+  }
+
+  /**
+   * Al aprobar el diseño, el documento `tasks` se convierte en subtareas (ADR-0022 §1):
+   * cada una en `planned`, en implementar, con la ceremonia y el contrato del padre y
+   * su story; las de fases siguientes esperan a las anteriores. El padre queda
+   * `blocked` con su avance. La rama de la feature se crea al confirmar.
+   */
+  private bornSubtasks(
+    uow: UnitOfWork,
+    parent: WorkItemRow,
+    tasks: PlannedTask[],
+    o: { approver: string; autoIntegrate: boolean },
+  ): void {
+    const repo = this.repo
+    const docs = this.docSet(parent.id)
+    const flow = repo.getFlow(parent.id) as NonNullable<ReturnType<Repo["getFlow"]>>
+    const profile = this.profileOf(parent.project_id)
+    const branch = featureBranchName(
+      profile?.branch_prefixes.feature ?? "feat/",
+      parent.display_id,
+      parent.title,
+    )
+    const ids: Record<string, string> = {}
+    const born: WorkItemRow[] = []
+    for (const t of tasks) {
+      const story = storyFor(t, docs.spec ?? "", docs.design ?? "")
+      let child = repo.createWorkItem({
+        project_id: parent.project_id,
+        title: t.title,
+        kind: parent.kind ?? "feature",
+        source: "agent",
+        spec_markdown: story,
+        ...(parent.priority ? { priority: parent.priority } : {}),
+        parent_work_item_id: parent.id,
+      })
+      ids[t.key] = child.id
+      child = this.transition(uow, child, "planned", "human", {
+        reason: `nació del diseño de ${parent.display_id}, que aprobó ${o.approver}`,
+      })
+      repo.createFlow(child.id, "implement", o.approver)
+      repo.updateFlow(child.id, {
+        ceremony: flow.ceremony,
+        contract_sha256: flow.contract_sha256,
+        subtask_json: JSON.stringify({
+          key: t.key,
+          phase: t.phase,
+          phase_title: t.phase_title,
+          frontier: t.frontier,
+          requirements: t.requirements,
+        } satisfies SubtaskInfo),
+      })
+      repo.putTaskDoc({
+        work_item_id: child.id,
+        kind: "story",
+        content: story,
+        author: "system:keel",
+      })
+      born.push(child)
+    }
+    for (const t of tasks)
+      for (const dep of t.after) {
+        const waiting = ids[t.key] as string
+        const blocking = ids[dep]
+        if (!blocking) continue
+        repo.addDependency({ project_id: parent.project_id, waiting, blocking })
+        repo.addBlock({
+          work_item_id: waiting,
+          kind: "dependency",
+          reason_key: `task:${blocking}`,
+          details: { blocking, key: dep },
+        })
+      }
+    for (const c of born) {
+      let row = repo.getWorkItem(c.id) as WorkItemRow
+      if (repo.openBlocks(c.id).length > 0)
+        row = this.transition(uow, row, "blocked", "system", {
+          reason: "espera a las subtareas de la fase anterior",
+        })
+      uow.emit("work_item.created", null, { ...repo.workItemView(row), actor: { id: o.approver } })
+    }
+    repo.updateFlow(parent.id, {
+      feature_json: JSON.stringify({
+        branch,
+        base: "HEAD",
+        base_sha: null,
+        auto_integrate: o.autoIntegrate,
+        approved_by: o.approver,
+        subtasks: ids,
+      } satisfies FeatureInfo),
+    })
+    repo.addBlock({
+      work_item_id: parent.id,
+      kind: "dependency",
+      reason_key: "subtasks",
+      details: { done: 0, total: tasks.length },
+    })
+    const p = this.transition(
+      uow,
+      repo.getWorkItem(parent.id) as WorkItemRow,
+      "blocked",
+      "system",
+      {
+        reason: `0/${tasks.length} subtareas`,
+      },
+    )
+    uow.emit("work_item.updated", null, repo.workItemView(p))
+    uow.emit("feature.planned", repo.lastRunFor(parent.id)?.id ?? null, {
+      work_item_id: parent.id,
+      branch,
+      auto_integrate: o.autoIntegrate,
+      subtasks: tasks.map((t) => ({
+        id: ids[t.key],
+        key: t.key,
+        title: t.title,
+        phase: t.phase,
+        phase_title: t.phase_title,
+        after: t.after,
+        frontier: t.frontier,
+      })),
+    })
+    uow.afterCommit(() => this.track(this.prepareFeature(parent.id)))
+  }
+
+  /** Crea la rama de la feature desde la rama actual del proyecto y arranca la primera hija. */
+  private async prepareFeature(parentId: string): Promise<void> {
+    const parent = this.repo.getWorkItem(parentId)
+    const feat = this.featureOf(parentId)
+    if (!parent || !feat) return
+    const root = this.repo.projectRoot(parent.project_id) ?? this.rootPath
+    try {
+      const base = (await currentBranch(root).catch(() => null)) ?? "HEAD"
+      const r = await createFeatureBranch(root, feat.branch, base)
+      this.repo.updateFlow(parentId, {
+        feature_json: JSON.stringify({ ...feat, base, base_sha: r.sha } satisfies FeatureInfo),
+      })
+      this.emitSystem("feature.branch_created", this.repo.lastRunFor(parentId)?.id ?? null, {
+        work_item_id: parentId,
+        branch: feat.branch,
+        base,
+        sha: r.sha,
+        created: r.created,
+      })
+    } catch (e) {
+      this.emitSystem("task.flow_stalled", this.repo.lastRunFor(parentId)?.id ?? null, {
+        work_item_id: parentId,
+        stage: "implement",
+        message: `no se pudo crear la rama de la feature: ${e instanceof Error ? e.message : String(e)}`,
+      })
+      return
+    }
+    this.scheduleFeature(parentId)
+  }
+
+  /**
+   * El orden de la feature (ADR-0022 §3), con código: desbloquea las hijas cuyas
+   * dependencias terminaron, actualiza el «n/m» del padre y arranca la siguiente lista
+   * si no hay otra trabajando. Con todas integradas, el padre revisa la feature.
+   */
+  private scheduleFeature(parentId: string): void {
+    const repo = this.repo
+    const parent = repo.getWorkItem(parentId)
+    const feat = this.featureOf(parentId)
+    if (!parent || !feat?.base_sha) return
+    const children = repo.childrenOf(parentId)
+    runUnitOfWork(this.uowDeps(), this.systemScope(parent.project_id), (uow) => {
+      for (const c of children) {
+        for (const d of repo.dependenciesOf(c.id))
+          if (repo.getWorkItem(d.blocking)?.lifecycle === "done")
+            repo.clearBlock(c.id, "dependency", `task:${d.blocking}`)
+        const row = repo.getWorkItem(c.id) as WorkItemRow
+        if (row.lifecycle === "blocked" && repo.openBlocks(c.id).length === 0) {
+          const ready = this.transition(uow, row, "planned", "system", {
+            reason: "sus dependencias ya se integraron",
+          })
+          uow.emit("work_item.updated", null, repo.workItemView(ready))
+        }
+      }
+      const done = children.filter((c) => repo.getWorkItem(c.id)?.lifecycle === "done").length
+      repo.setBlockDetails(parentId, "dependency", "subtasks", { done, total: children.length })
+      uow.emit(
+        "work_item.updated",
+        null,
+        repo.workItemView(repo.getWorkItem(parentId) as WorkItemRow),
+      )
+    })
+    const now = repo.childrenOf(parentId)
+    if (now.length > 0 && now.every((c) => c.lifecycle === "done")) {
+      this.finishFeature(parentId)
+      return
+    }
+    // Una a la vez por defecto (ADR-0002 regla 5): nada nuevo mientras otra trabaja o espera.
+    const busy = now.some(
+      (c) =>
+        repo.liveRunFor(c.id) !== null ||
+        ["running", "waiting_human", "needs_review", "failed"].includes(c.lifecycle),
+    )
+    if (busy) return
+    const next = now.find((c) => c.lifecycle === "planned" && repo.openBlocks(c.id).length === 0)
+    if (!next) return
+    try {
+      runUnitOfWork(this.uowDeps(), this.systemScope(parent.project_id), (uow) => {
+        const run = this.startFlowRun(uow, next, workPrompt(next, "implement"), { source: "keel" })
+        uow.emit("feature.subtask_started", repo.lastRunFor(parentId)?.id ?? null, {
+          work_item_id: parentId,
+          subtask_id: next.id,
+          key: this.subtaskOf(next.id)?.key ?? null,
+          title: next.title,
+          run_id: run.id,
+        })
+      })
+    } catch (e) {
+      // Sin lugar de concurrencia o sin presupuesto: arranca cuando se libere.
+      this.emitSystem("feature.waiting", repo.lastRunFor(parentId)?.id ?? null, {
+        work_item_id: parentId,
+        subtask_id: next.id,
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  /** Todas integradas: el padre vuelve a `planned` y revisa la feature entera (ADR-0022 §4). */
+  private finishFeature(parentId: string): void {
+    const repo = this.repo
+    const parent = repo.getWorkItem(parentId)
+    if (parent?.lifecycle !== "blocked") return
+    try {
+      runUnitOfWork(this.uowDeps(), this.systemScope(parent.project_id), (uow) => {
+        repo.clearBlock(parentId, "dependency", "subtasks")
+        const row = this.transition(uow, parent, "planned", "system", {
+          reason: "todas las subtareas se integraron",
+        })
+        const flow = repo.getFlow(parentId) as NonNullable<ReturnType<Repo["getFlow"]>>
+        repo.updateFlow(parentId, { stage: "review" })
+        const last = repo.lastRunFor(parentId)
+        uow.emit("task.stage_changed", last?.id ?? null, {
+          work_item_id: parentId,
+          from: flow.stage,
+          to: "review",
+          ceremony: flow.ceremony,
+          authorized_by: "system:keel",
+          delegated: true,
+          reason: "todas las subtareas se integraron a la feature",
+        })
+        uow.emit("work_item.updated", last?.id ?? null, repo.workItemView(row))
+        this.startFlowRun(
+          uow,
+          row,
+          continuationPrompt(
+            row,
+            "review",
+            `Todas las subtareas se integraron en la rama ${this.featureOf(parentId)?.branch}. Revisa la feature entera contra la spec: corre verify_run y escribe el QA.`,
+            flow.ceremony,
+          ),
+          { source: "keel" },
+        )
+      })
+    } catch (e) {
+      this.emitSystem("task.flow_stalled", repo.lastRunFor(parentId)?.id ?? null, {
+        work_item_id: parentId,
+        stage: "review",
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  /**
+   * Integrar una subtarea es su cierre (ADR-0022 §2): su rama entra en la de la
+   * feature. Un conflicto la devuelve a implementar con los archivos; si se repite en
+   * el mismo archivo, se marca en el padre (fronteras mal puestas).
+   */
+  private async integrateSubtask(
+    item: WorkItemRow,
+    plan: GitPlan,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const parentId = item.parent_work_item_id as string
+    const feat = this.featureOf(parentId)
+    if (!feat) return { ok: false, message: "el padre no tiene rama de feature" }
+    const root = this.repo.projectRoot(item.project_id) ?? this.rootPath
+    const key = this.subtaskOf(item.id)?.key ?? item.display_id
+    const r = await integrateInto(root, feat.branch, `refs/heads/${plan.branch}`, {
+      message: `Integra ${key} · ${item.title} (${item.display_id})`,
+      env: {
+        GIT_AUTHOR_NAME: "Keel",
+        GIT_AUTHOR_EMAIL: "keel@agents.keel.local",
+        GIT_COMMITTER_NAME: "Keel",
+        GIT_COMMITTER_EMAIL: "keel@agents.keel.local",
+      },
+    })
+    const parentRun = this.repo.lastRunFor(parentId)?.id ?? null
+    if (r.ok) {
+      this.emitSystem("feature.subtask_integrated", parentRun, {
+        work_item_id: parentId,
+        subtask_id: item.id,
+        key,
+        title: item.title,
+        branch: feat.branch,
+        sha: r.sha,
+        mode: r.mode,
+      })
+      return { ok: true }
+    }
+    const before = this.repo
+      .eventsAbout("feature.subtask_returned", parentId)
+      .flatMap((e) => (JSON.parse(e.payload_json) as { conflicts?: string[] }).conflicts ?? [])
+    const repeated = r.conflicts.filter((f) => before.includes(f))
+    this.emitSystem("feature.subtask_returned", parentRun, {
+      work_item_id: parentId,
+      subtask_id: item.id,
+      key,
+      title: item.title,
+      conflicts: r.conflicts,
+      message: r.message,
+      ...(repeated.length ? { frontier_warning: repeated } : {}),
+    })
+    return {
+      ok: false,
+      message: `${r.message}${r.conflicts.length ? `: ${r.conflicts.join(", ")}` : ""}`,
+    }
+  }
+
+  /**
+   * La integración automática que el humano eligió en el gate (b) (ADR-0022 §2): sólo
+   * con QA PASS, verificación sin rojo nuevo y un diff dentro de la frontera.
+   */
+  private autoIntegrable(item: WorkItemRow, plan: GitPlan): string | null {
+    if (!item.parent_work_item_id) return "no es una subtarea"
+    const feat = this.featureOf(item.parent_work_item_id)
+    if (!feat?.auto_integrate) return "el humano no eligió la integración automática"
+    const flow = this.repo.getFlow(item.id)
+    if (flow?.stage !== "close") return "la subtarea no está en el cierre"
+    if (plan.operations.some((o) => o.op !== "commit")) return "el plan publica algo"
+    const qa = this.docSet(item.id).qa
+    if (!qa || qaVerdict(qa) !== "PASS") return "el QA no es PASS"
+    const last = flow.last_verify_json
+      ? (JSON.parse(flow.last_verify_json) as VerifyResult[])
+      : null
+    if (!last) return "no hay verificación"
+    const base = flow.baseline_json ? (JSON.parse(flow.baseline_json) as VerifyResult[]) : null
+    if (!verifyDelta(base, last).green) return "la verificación tiene rojo nuevo"
+    const frontier = this.subtaskOf(item.id)?.frontier ?? []
+    const outside = plan.files.filter((f) => !withinFrontier(f.path, frontier)).map((f) => f.path)
+    if (outside.length) return `toca archivos fuera de su frontera: ${outside.join(", ")}`
+    return null
   }
 
   /** Dónde verificar la tarea: el worktree de su último run, o la raíz. */
@@ -3171,6 +3613,30 @@ export class Daemon {
     const approver = this.repo.getApproval(planId)?.decision_actor ?? null
     const r = await executePlan(this.gitPlanDeps(), planId, plan, env)
     this.repo.setApproval(planId, r.ok ? "consumed" : "expired", null)
+    // ADR-0022 §2: el cierre de una subtarea es integrarla a la feature; si choca, vuelve.
+    if (r.ok && item.parent_work_item_id && this.repo.getFlow(item.id)?.stage === "close") {
+      const integrated = await this.integrateSubtask(item, plan)
+      if (!integrated.ok) {
+        runUnitOfWork(this.uowDeps(), this.systemScope(run.project_id), (uow) => {
+          this.repo.updateFlow(item.id, { stage: "implement" })
+          uow.emit("task.stage_changed", run.id, {
+            work_item_id: item.id,
+            from: "close",
+            to: "implement",
+            ceremony: this.repo.getFlow(item.id)?.ceremony ?? null,
+            authorized_by: "system:keel",
+            delegated: true,
+            reason: integrated.message,
+          })
+        })
+        this.closedByPlan.delete(item.id)
+        this.continueFlow(
+          item.id,
+          `No se pudo integrar a la feature: ${integrated.message}. Resuelve el conflicto en tu frontera y vuelve a cerrar.`,
+        )
+        return
+      }
+    }
     // ADR-0021 §4: en el cierre del método, el plan aprobado es el gate (c): la tarea termina.
     const flow = this.repo.getFlow(item.id)
     const current = this.repo.getWorkItem(item.id)
@@ -3533,6 +3999,15 @@ function projectView(p: ReturnType<Repo["listProjects"]>[number]) {
 }
 
 /** Encabezado corto del prompt (ADR-0017 §1): tarea, id y cómo pedir el contexto. */
+/** ADR-0022: lo que el agente de una feature o de una subtarea tiene que saber de su rama. */
+export function featureHeader(own: FeatureInfo | null, parent: FeatureInfo | null): string {
+  if (parent)
+    return `\n[Keel] Es una subtarea de la feature (rama ${parent.branch}): trabaja sólo en su frontera (la story la nombra) y lee los documentos del padre con task_doc_get. Al cerrar, propone con git_propose sólo el commit: Keel la integra a la rama de la feature; no hagas push ni PR.`
+  if (own)
+    return `\n[Keel] Es una feature: sus subtareas ya se integraron en la rama ${own.branch}, que es tu worktree. Revisa la feature entera contra la spec. Al cerrar, propone con git_propose el push a ${own.branch} y la PR a ${own.base}.`
+  return ""
+}
+
 /** ADR-0024: el encabezado de la conversación del proyecto. Aquí no hay tarea que trabajar. */
 export function conversationHeader(): string {
   return [

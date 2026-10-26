@@ -52,4 +52,19 @@ diseño (gate b) y Keel fija el hash del contrato: cambiarlo después reabre el
 gate.
 
 Escribe también `tasks`: una línea por frontera, cada una ligada a un
-requisito (`R1`, `R2`…).
+requisito (`R1`, `R2`…). Con dos líneas o más, al aprobar el diseño cada línea
+nace como subtarea con su rama, y Keel las trabaja en orden. Agrupa por fases;
+una fase espera a la anterior entera:
+
+```markdown
+## Fase 1 — API
+- [ ] T1 Contrato de capítulos → `apps/api/src/chapters/**` → R1
+- [ ] T2 Repositorio → `apps/api/src/repo/**` → R1
+## Fase 2 — Backoffice
+- [ ] T3 Tarjeta por capítulos → `apps/backoffice/src/photos/**` → R2
+- [ ] T4 Pestaña de galería → `apps/backoffice/src/gallery/**` → R2 (después de T3)
+```
+
+Keel valida que cada línea tenga frontera, que las fronteras no se solapen, que
+los requisitos existan en la spec y que las dependencias no formen un ciclo.
+Una subtarea que resulte grande vuelve al diseño: no crece hacia abajo.

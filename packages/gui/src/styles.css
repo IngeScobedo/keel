@@ -3523,3 +3523,81 @@ button.rc-ledger-row:hover {
 .conv-empty textarea {
   min-height: 90px;
 }
+
+/* ADR-0022: la feature en el tablero. */
+.feature-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.feature-progress .tiny-progress {
+  width: 100%;
+}
+.card-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.subtask-fold {
+  font-size: 12px;
+  padding: 2px 8px 6px;
+  color: var(--color-text-secondary);
+}
+.subtask-fold summary {
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+}
+.subtask-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.subtask-row:hover {
+  background: var(--color-surface-raised);
+}
+.subtask-row > span:nth-child(3) {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.feature-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.feature-tree h4 {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.feature-tree ol {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.feature-tree li {
+  font-size: 12px;
+}
+.feature-tree code {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.auto-integrate {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+}

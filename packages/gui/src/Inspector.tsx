@@ -22,7 +22,7 @@ import {
   type WorkItem,
 } from "./model.js"
 import { ResearchPanel } from "./Research.js"
-import { TaskWork } from "./TaskWork.js"
+import { FeaturePlan, TaskWork } from "./TaskWork.js"
 import { Button, Empty, Hint, Modal, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -50,6 +50,8 @@ export function Inspector({
   notes,
   onAddNote,
   call,
+  tasks,
+  onOpenTask,
 }: {
   task: WorkItem
   details?: TaskDetails
@@ -63,6 +65,9 @@ export function Inspector({
   onAddNote: (text: string) => void
   /** Sólo en modo live: lectura y acciones contra el daemon. */
   call?: Call
+  /** ADR-0022: todas las tareas, para el plan de una feature. */
+  tasks?: WorkItem[]
+  onOpenTask?: (item: WorkItem) => void
 }) {
   const [tab, setTab] = useState<(typeof taskTabs)[number]>("Activity")
   const [draft, setDraft] = useState("")
@@ -168,6 +173,13 @@ export function Inspector({
           )}
         </section>
         {!demo && call && <TaskWork task={task} runs={taskRuns} call={call} onRun={onRun} />}
+        {task.feature && tasks && (
+          <FeaturePlan
+            task={task}
+            subtasks={tasks.filter((t) => t.parent_work_item_id === task.id)}
+            {...(onOpenTask ? { onOpen: onOpenTask } : {})}
+          />
+        )}
         <section>
           <h3>Human review</h3>
           <Button icon={ShieldCheck} disabled={!canComplete} onClick={() => setConfirmDone(true)}>

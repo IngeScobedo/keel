@@ -1,4 +1,4 @@
-import type { Methods } from "@keel/core"
+import { type Methods, parseTasks } from "@keel/core"
 import {
   ArrowLeft,
   Check,
@@ -129,6 +129,15 @@ export function MethodRow({
           <GitMerge size={13} /> Tarea cerrada: el plan de cierre se aplicó.
         </p>
       )
+    case "feature":
+      return (
+        <p
+          className={`rc-method ${item.tone === "warn" ? "warn" : item.tone === "done" ? "done" : ""}`}
+          data-testid="chat-feature"
+        >
+          <GitMerge size={13} /> {item.text}
+        </p>
+      )
   }
 }
 
@@ -206,6 +215,22 @@ export function GateCard({ a, call, active }: { a: Approval; call?: Call; active
   const gate = input.gate ?? "brief"
   const { busy, error, resolve } = useResolve(a, call)
   const [why, setWhy] = useState("")
+  // ADR-0022 §1: aprobar el contrato aprueba también el árbol de subtareas que va a nacer.
+  const tasksDoc = (input.docs ?? []).find((d) => d.kind === "tasks")
+  const plan = useDoc(
+    call,
+    input.work_item_id ?? "",
+    "tasks",
+    tasksDoc?.version,
+    gate === "design" && input.reason !== "contract" && !!tasksDoc && !!input.work_item_id,
+  )
+  const tree = plan ? parseTasks(plan.content_markdown ?? "") : []
+  const [autoIntegrate, setAutoIntegrate] = useState(false)
+  const approve = () =>
+    resolve({
+      decision: "approve_once",
+      ...(tree.length >= 2 && autoIntegrate ? { auto_integrate: true } : {}),
+    })
   const [asking, setAsking] = useState(false)
   const pending = a.decision === null
   const kinds = gate === "brief" ? ["brief"] : ["spec", "design"]
@@ -216,7 +241,7 @@ export function GateCard({ a, call, active }: { a: Approval; call?: Call; active
   useKeys(active && pending && !!call && !asking, (e) => {
     if (e.key.toLowerCase() !== "y") return
     e.preventDefault()
-    void resolve({ decision: "approve_once" })
+    void approve()
   })
   return (
     <div className="rc-gate" data-state={a.decision ?? "pending"} data-testid="chat-gate">
@@ -257,13 +282,27 @@ export function GateCard({ a, call, active }: { a: Approval; call?: Call; active
             {...(call ? { call } : {})}
           />
         ))}
+      {tree.length >= 2 && <FeatureTree tree={tree} />}
+      {pending && tree.length >= 2 && (
+        <label className="auto-integrate">
+          <input
+            type="checkbox"
+            checked={autoIntegrate}
+            onChange={(e) => setAutoIntegrate(e.target.checked)}
+          />
+          <span>
+            Integrar solas las subtareas con QA PASS, sin rojo nuevo y con el diff dentro de su
+            frontera. Si no cumplen, te pregunto.
+          </span>
+        </label>
+      )}
       {pending && (
         <div className="rc-actions">
           <button
             type="button"
             className="button primary"
             disabled={busy || !call}
-            onClick={() => void resolve({ decision: "approve_once" })}
+            onClick={() => void approve()}
           >
             {input.reason === "contract" ? "Aceptar el contrato nuevo" : "Aprobar"} <kbd>Y</kbd>
           </button>
@@ -307,6 +346,46 @@ export function GateCard({ a, call, active }: { a: Approval; call?: Call; active
 }
 
 /** Un documento de la tarea, plegable, con su validación. */
+/** El árbol que nace al aprobar el diseño: fases, subtareas, fronteras y dependencias. */
+function FeatureTree({ tree }: { tree: ReturnType<typeof parseTasks> }) {
+  const phases = [...new Set(tree.map((t) => t.phase))].sort((x, y) => x - y)
+  return (
+    <div className="feature-tree" data-testid="feature-tree">
+      <p className="muted">
+        Al aprobar nacen <strong>{tree.length} subtareas</strong> en la rama de la feature. Keel las
+        trabaja una a la vez, en este orden.
+      </p>
+      {phases.map((ph) => {
+        const items = tree.filter((t) => t.phase === ph)
+        return (
+          <div key={ph}>
+            <h4>
+              Fase {ph}
+              {items[0]?.phase_title ? ` — ${items[0].phase_title}` : ""}
+            </h4>
+            <ol>
+              {items.map((t) => (
+                <li key={t.key}>
+                  <span className="mono muted">{t.key}</span> {t.title}{" "}
+                  {t.frontier.map((g) => (
+                    <code key={g}>{g} </code>
+                  ))}
+                  {t.requirements.length > 0 && (
+                    <span className="muted"> · {t.requirements.join(", ")}</span>
+                  )}
+                  {t.after.length > 0 && (
+                    <span className="muted"> · después de {t.after.join(", ")}</span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function DocBlock({
   workItemId,
   kind,

@@ -212,6 +212,28 @@ export type TaskFlowRow = {
   last_verify_json: string | null
   started_by: string
   updated_at: string
+  /** ADR-0022: en el padre, su rama y cómo se integran las hijas. */
+  feature_json?: string | null
+  /** ADR-0022: en la hija, su línea del plan. */
+  subtask_json?: string | null
+}
+/** La feature de un padre (ADR-0022 §2). */
+export type FeatureInfo = {
+  branch: string
+  base: string
+  base_sha: string | null
+  auto_integrate: boolean
+  approved_by: string
+  /** Llave del plan → id de la subtarea. */
+  subtasks: Record<string, string>
+}
+/** La línea del plan de una subtarea (ADR-0022 §1). */
+export type SubtaskInfo = {
+  key: string
+  phase: number
+  phase_title: string
+  frontier: string[]
+  requirements: string[]
 }
 export type TaskDocRow = {
   id: string
@@ -732,6 +754,14 @@ export class Repo {
           )
           .all(seq, upTo, limit)
   }
+  /** Eventos de un tipo que nombran una tarea en su payload, en orden. */
+  eventsAbout(kind: string, workItemId: string): EventRow[] {
+    return this.db
+      .query<EventRow, [string, string]>(
+        "SELECT * FROM events WHERE kind = ? AND json_extract(payload_json, '$.work_item_id') = ? ORDER BY event_seq",
+      )
+      .all(kind, workItemId)
+  }
   lastEventSeq(): number {
     return (
       this.db.query<{ s: number | null }, []>("SELECT max(event_seq) s FROM events").get()?.s ?? 0
@@ -878,6 +908,80 @@ export class Repo {
       .run(ulid(), p.work_item_id, p.kind, p.reason_key, JSON.stringify(p.details ?? {}))
   }
 
+  /** Cierra un bloqueo abierto; devuelve si había uno. */
+  clearBlock(workItemId: string, kind: string, reasonKey: string): boolean {
+    return (
+      this.db
+        .query(
+          "UPDATE work_item_blocks SET cleared_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE work_item_id = ? AND kind = ? AND reason_key = ? AND cleared_at IS NULL",
+        )
+        .run(workItemId, kind, reasonKey).changes > 0
+    )
+  }
+  /** Actualiza los detalles de un bloqueo abierto (el «12/40» del padre). */
+  setBlockDetails(
+    workItemId: string,
+    kind: string,
+    reasonKey: string,
+    details: Record<string, unknown>,
+  ): void {
+    this.db
+      .query(
+        "UPDATE work_item_blocks SET details_json = ? WHERE work_item_id = ? AND kind = ? AND reason_key = ? AND cleared_at IS NULL",
+      )
+      .run(JSON.stringify(details), workItemId, kind, reasonKey)
+  }
+  blockDetails(
+    workItemId: string,
+    kind: string,
+    reasonKey: string,
+  ): Record<string, unknown> | null {
+    const row = this.db
+      .query<{ details_json: string }, [string, string, string]>(
+        "SELECT details_json FROM work_item_blocks WHERE work_item_id = ? AND kind = ? AND reason_key = ? AND cleared_at IS NULL",
+      )
+      .get(workItemId, kind, reasonKey)
+    return row ? (JSON.parse(row.details_json) as Record<string, unknown>) : null
+  }
+
+  // --- dependencias y subtareas (ADR-0022) ----------------------------------------
+  addDependency(p: {
+    project_id: string
+    waiting: string
+    blocking: string
+    required_lifecycle?: "needs_review" | "done"
+  }): void {
+    this.db
+      .query(
+        "INSERT OR IGNORE INTO work_item_dependencies(project_id, waiting_work_item_id, blocking_work_item_id, required_lifecycle) VALUES (?,?,?,?)",
+      )
+      .run(p.project_id, p.waiting, p.blocking, p.required_lifecycle ?? "done")
+  }
+  /** Lo que espera esta tarea: ids que bloquean y el lifecycle que piden. */
+  dependenciesOf(workItemId: string): { blocking: string; required_lifecycle: string }[] {
+    return this.db
+      .query<{ blocking: string; required_lifecycle: string }, [string]>(
+        "SELECT blocking_work_item_id blocking, required_lifecycle FROM work_item_dependencies WHERE waiting_work_item_id = ?",
+      )
+      .all(workItemId)
+  }
+  /** Las tareas que esperan a esta. */
+  dependentsOf(workItemId: string): string[] {
+    return this.db
+      .query<{ id: string }, [string]>(
+        "SELECT waiting_work_item_id id FROM work_item_dependencies WHERE blocking_work_item_id = ?",
+      )
+      .all(workItemId)
+      .map((r) => r.id)
+  }
+  /** Las subtareas de una feature, en el orden en que nacieron. */
+  childrenOf(parentId: string): WorkItemRow[] {
+    return this.db
+      .query<WorkItemRow, [string]>(
+        `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE parent_work_item_id = ? ORDER BY created_at, id`,
+      )
+      .all(parentId)
+  }
   // --- runs -----------------------------------------------------------------------
   createRun(p: {
     project_id: string
@@ -1329,6 +1433,8 @@ export class Repo {
         | "baseline_json"
         | "last_verify_json"
         | "started_by"
+        | "feature_json"
+        | "subtask_json"
       >
     >,
   ): TaskFlowRow {
@@ -1512,7 +1618,38 @@ export class Repo {
       ...(w.origin_work_item_id ? { origin_work_item_id: w.origin_work_item_id } : {}),
       visual_state: visualForWorkItem(w.lifecycle, liveRun),
       ...flowFields(this.getFlow(w.id)),
+      ...this.featureFields(w.id),
     }
+  }
+  /** ADR-0022 §5: el avance de una feature, o la línea del plan de una subtarea. */
+  private featureFields(id: string) {
+    const f = this.getFlow(id)
+    if (f?.feature_json) {
+      const feat = JSON.parse(f.feature_json) as FeatureInfo
+      const kids = this.childrenOf(id)
+      const pending = kids
+        .filter((k) => k.lifecycle !== "done")
+        .map((k) => (JSON.parse(this.getFlow(k.id)?.subtask_json ?? "{}") as SubtaskInfo).phase)
+        .filter((n) => typeof n === "number")
+      return {
+        feature: {
+          branch: feat.branch,
+          auto_integrate: feat.auto_integrate,
+          done: kids.filter((k) => k.lifecycle === "done").length,
+          working: kids.filter((k) =>
+            ["running", "waiting_human", "needs_review"].includes(k.lifecycle),
+          ).length,
+          blocked: kids.filter((k) => k.lifecycle === "blocked" || k.lifecycle === "failed").length,
+          total: kids.length,
+          phase: pending.length ? Math.min(...pending) : null,
+        },
+      }
+    }
+    if (f?.subtask_json) {
+      const sub = JSON.parse(f.subtask_json) as SubtaskInfo
+      return { subtask: { key: sub.key, phase: sub.phase, phase_title: sub.phase_title } }
+    }
+    return {}
   }
   runView(r: RunRow) {
     return {

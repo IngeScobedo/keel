@@ -277,6 +277,221 @@ export function validateDesign(
   ])
 }
 
+// --- el plan de la feature (ADR-0022) ------------------------------------------------
+
+/** Una línea del documento `tasks`: una subtarea con su frontera y sus requisitos. */
+export type PlannedTask = {
+  /** `T<n>`: el que escribió el agente o el de su posición. */
+  key: string
+  phase: number
+  phase_title: string
+  title: string
+  frontier: string[]
+  requirements: string[]
+  /** Dependencias: todas las de la fase anterior más las explícitas («después de T3»). */
+  after: string[]
+  line: string
+}
+
+/**
+ * Lee `tasks` con código (ADR-0022 §1): secciones `## Fase N — título` y líneas
+ * `- [ ] T1 título → \`glob\` → R1`. Sin secciones de fase, todo es la fase 1.
+ */
+export function parseTasks(md: string): PlannedTask[] {
+  const out: PlannedTask[] = []
+  let phase = 1
+  let phaseTitle = ""
+  let sawPhase = false
+  for (const raw of md.split("\n")) {
+    const ph = /^##\s+Fase\s+(\d+)\s*(?:[—:–-]\s*(.*))?$/i.exec(raw.trim())
+    if (ph) {
+      phase = Number(ph[1])
+      phaseTitle = (ph[2] ?? "").trim()
+      sawPhase = true
+      continue
+    }
+    const item = /^\s*[-*]\s*\[[ xX]\]\s*(.+)$/.exec(raw)
+    if (!item) continue
+    const body = (item[1] as string).trim()
+    const parts = body.split(/\s*(?:→|->)\s*/)
+    let head = (parts[0] ?? "").trim()
+    const keyMatch = /^(T\d+)\b[.:)]?\s*/.exec(head)
+    const key = keyMatch ? (keyMatch[1] as string) : `T${out.length + 1}`
+    if (keyMatch) head = head.slice(keyMatch[0].length)
+    const rest = parts.slice(1).join(" ")
+    const frontier = [...rest.matchAll(/`([^`]+)`/g)].map((m) => m[1] as string)
+    const requirements = [...new Set([...rest.matchAll(/\bR\d+\b/g)].map((m) => m[0]))]
+    const explicit = /(?:despu[eé]s de|after)\s+((?:T\d+[\s,y]*)+)/i.exec(body)
+    const after = explicit ? [...(explicit[1] as string).matchAll(/T\d+/g)].map((m) => m[0]) : []
+    out.push({
+      key,
+      phase: sawPhase ? phase : 1,
+      phase_title: phaseTitle,
+      title: head.replace(/\s*\((?:despu[eé]s de|after)[^)]*\)\s*$/i, "").trim(),
+      frontier,
+      requirements,
+      after,
+      line: raw.trim(),
+    })
+  }
+  // Una fase depende de la anterior entera.
+  const phases = [...new Set(out.map((t) => t.phase))].sort((a, b) => a - b)
+  for (const t of out) {
+    const prev = phases[phases.indexOf(t.phase) - 1]
+    const before = prev === undefined ? [] : out.filter((x) => x.phase === prev).map((x) => x.key)
+    t.after = [...new Set([...before, ...t.after])]
+  }
+  return out
+}
+
+/** Hay un ciclo en las dependencias del plan; devuelve las llaves que lo forman. */
+function cycleIn(tasks: PlannedTask[]): string[] {
+  const deps = new Map(tasks.map((t) => [t.key, t.after]))
+  const state = new Map<string, 1 | 2>()
+  const stack: string[] = []
+  const visit = (k: string): string[] | null => {
+    if (state.get(k) === 2) return null
+    if (state.get(k) === 1) return stack.slice(stack.indexOf(k))
+    state.set(k, 1)
+    stack.push(k)
+    for (const d of deps.get(k) ?? []) {
+      const c = visit(d)
+      if (c) return c
+    }
+    stack.pop()
+    state.set(k, 2)
+    return null
+  }
+  for (const t of tasks) {
+    const c = visit(t.key)
+    if (c) return c
+  }
+  return []
+}
+
+/** El plan: cada línea con frontera, fronteras disjuntas, requisitos de la spec y sin ciclos. */
+export function validateTasks(md: string, specMd = ""): DocReport {
+  const tasks = parseTasks(md)
+  const keys = new Set(tasks.map((t) => t.key))
+  const dupKeys = tasks.filter((t, i) => tasks.findIndex((x) => x.key === t.key) !== i)
+  const noFrontier = tasks.filter((t) => t.frontier.length === 0).map((t) => t.key)
+  const owner = new Map<string, string>()
+  const overlap: string[] = []
+  for (const t of tasks)
+    for (const g of t.frontier) {
+      const other = owner.get(g)
+      if (other && other !== t.key) overlap.push(`${g} (${other}, ${t.key})`)
+      owner.set(g, t.key)
+    }
+  const known = new Set(parseSpec(specMd).map((r) => r.id))
+  const unknownReq = specMd
+    ? tasks.flatMap((t) => t.requirements.filter((r) => !known.has(r)).map((r) => `${t.key}→${r}`))
+    : []
+  const noReq = tasks.filter((t) => t.requirements.length === 0).map((t) => t.key)
+  const badDeps = tasks.flatMap((t) =>
+    t.after.filter((d) => !keys.has(d)).map((d) => `${t.key}→${d}`),
+  )
+  const cycle = cycleIn(tasks)
+  return report([
+    { ok: tasks.length > 0, level: "block", msg: "al menos una línea `- [ ] … → `glob` → R1`" },
+    {
+      ok: dupKeys.length === 0,
+      level: "block",
+      msg: "cada subtarea tiene una llave distinta",
+      ...(dupKeys.length ? { detail: dupKeys.map((t) => t.key).join(", ") } : {}),
+    },
+    {
+      ok: noFrontier.length === 0,
+      level: "block",
+      msg: "cada línea nombra su frontera de archivos",
+      ...(noFrontier.length ? { detail: noFrontier.join(", ") } : {}),
+    },
+    {
+      ok: overlap.length === 0,
+      level: "block",
+      msg: "las fronteras de las subtareas no se solapan",
+      ...(overlap.length ? { detail: overlap.join("; ") } : {}),
+    },
+    {
+      ok: badDeps.length === 0,
+      level: "block",
+      msg: "las dependencias explícitas nombran subtareas del plan",
+      ...(badDeps.length ? { detail: badDeps.join(", ") } : {}),
+    },
+    {
+      ok: cycle.length === 0,
+      level: "block",
+      msg: "las dependencias no forman un ciclo",
+      ...(cycle.length ? { detail: cycle.join(" → ") } : {}),
+    },
+    {
+      ok: noReq.length === 0,
+      level: "warn",
+      msg: "cada línea cita un requisito de la spec",
+      ...(noReq.length ? { detail: noReq.join(", ") } : {}),
+    },
+    {
+      ok: unknownReq.length === 0,
+      level: "block",
+      msg: "los requisitos citados existen en la spec",
+      ...(unknownReq.length ? { detail: unknownReq.join(", ") } : {}),
+    },
+  ])
+}
+
+/**
+ * La story de una subtarea, sin agente: su línea, los escenarios de la spec que
+ * cita y el contrato congelado del padre (ADR-0022 §1).
+ */
+export function storyFor(task: PlannedTask, specMd: string, designMd: string): string {
+  const reqs = parseSpec(specMd).filter((r) => task.requirements.includes(r.id))
+  const scenarios = reqs
+    .map(
+      (r) =>
+        `### ${r.id} — ${r.title}\n${r.scenarios
+          .map(
+            (s) =>
+              `#### Escenario: ${s.title}\n- **Dado** ${s.clauses.dado ?? ""}\n- **Cuando** ${s.clauses.cuando ?? ""}\n- **Entonces** ${s.clauses.entonces ?? ""}`,
+          )
+          .join("\n")}`,
+    )
+    .join("\n\n")
+  return [
+    `# ${task.key} — ${task.title}`,
+    "## Qué",
+    task.title,
+    "## Frontera",
+    task.frontier.map((g) => `- \`${g}\``).join("\n") || "- (sin frontera)",
+    "## Escenarios",
+    scenarios || "(la línea no cita requisitos)",
+    "## Contrato congelado",
+    contractSection(designMd)?.trim() || "(el diseño no tiene contrato)",
+    "## Cómo se cierra",
+    "Sólo se tocan archivos de la frontera. Se cierra con QA PASS y sin rojo nuevo; integrar es llevar esta rama a la de la feature.",
+  ].join("\n\n")
+}
+
+/** Un archivo cae dentro de la frontera si casa con alguno de sus globs. */
+export function withinFrontier(path: string, frontier: readonly string[]): boolean {
+  return frontier.some((g) => globToRegExp(g).test(path))
+}
+
+/** `**` cruza carpetas, `*` no; `?` es un carácter. Suficiente para fronteras de archivos. */
+export function globToRegExp(glob: string): RegExp {
+  let re = ""
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i] as string
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        re += glob[i + 2] === "/" ? "(?:.*/)?" : ".*"
+        i += glob[i + 2] === "/" ? 2 : 1
+      } else re += "[^/]*"
+    } else if (c === "?") re += "[^/]"
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+  }
+  return new RegExp(`^${re}$`)
+}
+
 export const QA_VERDICTS = ["PASS", "CONCERNS", "FAIL", "WAIVED"] as const
 export type QaVerdict = (typeof QA_VERDICTS)[number]
 
@@ -319,6 +534,8 @@ export function validateDoc(
       return validateDesign(md, others.spec ?? "", ctx)
     case "qa":
       return validateQa(md)
+    case "tasks":
+      return validateTasks(md, others.spec ?? "")
     default:
       return { ok: md.trim().length > 0, checks: [] }
   }

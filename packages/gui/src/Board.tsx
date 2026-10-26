@@ -51,6 +51,12 @@ export function TaskCard({
         <Status state={item.visual_state} />
       </span>
       <span className="card-title">{item.title}</span>
+      {item.feature && <FeatureProgress feature={item.feature} />}
+      {item.subtask && (
+        <span className="card-stage mono" data-testid="card-subtask">
+          {item.subtask.key} · fase {item.subtask.phase}
+        </span>
+      )}
       {item.stage && (
         <span className="card-stage" data-testid="card-stage">
           {STAGE_LABEL[item.stage] ?? item.stage}
@@ -94,6 +100,55 @@ export function TaskCard({
         ))}
       </span>
     </button>
+  )
+}
+
+/** ADR-0022 §5: el avance de la feature en su tarjeta; esperar a las hijas no es un problema. */
+function FeatureProgress({ feature }: { feature: NonNullable<WorkItem["feature"]> }) {
+  const pct = feature.total ? (feature.done / feature.total) * 100 : 0
+  return (
+    <span className="feature-progress" data-testid="feature-progress">
+      <span className="mono">
+        {feature.done}/{feature.total} subtareas
+        {feature.phase !== null ? ` · fase ${feature.phase}` : ""}
+      </span>
+      <span className="tiny-progress">
+        <span style={{ width: `${pct}%` }} />
+      </span>
+      <span className="muted">
+        {feature.working > 0 ? `${feature.working} en curso` : ""}
+        {feature.blocked > 0 ? ` · ${feature.blocked} esperando` : ""}
+      </span>
+    </span>
+  )
+}
+
+/** Las hijas plegadas bajo su feature (ADR-0022 §5). */
+function SubtaskFold({
+  items,
+  onSelect,
+}: {
+  items: WorkItem[]
+  onSelect: (item: WorkItem) => void
+}) {
+  return (
+    <details className="subtask-fold" data-testid="subtask-fold">
+      <summary>{items.length} subtareas</summary>
+      {items.map((c) => (
+        <button type="button" key={c.id} className="subtask-row" onClick={() => onSelect(c)}>
+          <Status state={c.visual_state} dot />
+          <span className="mono muted">{c.subtask?.key ?? c.display_id}</span>
+          <span>{c.title}</span>
+          <span className="rc-pill">
+            {c.lifecycle === "done"
+              ? "integrada"
+              : c.stage
+                ? (STAGE_LABEL[c.stage] ?? c.stage)
+                : c.lifecycle}
+          </span>
+        </button>
+      ))}
+    </details>
   )
 }
 
@@ -157,7 +212,12 @@ export function Board({
   const [query, setQuery] = useState("")
   const [needsYou, setNeedsYou] = useState(false)
   const [repo, setRepo] = useState("all")
-  const visible = filterTasks(tasks, query, needsYou, repo)
+  // Las subtareas se pliegan bajo su feature; sueltas sólo si el padre no está.
+  const ids = new Set(tasks.map((t) => t.id))
+  const childrenOf = (id: string) => tasks.filter((t) => t.parent_work_item_id === id)
+  const visible = filterTasks(tasks, query, needsYou, repo).filter(
+    (t) => !t.parent_work_item_id || !ids.has(t.parent_work_item_id),
+  )
   return (
     <div className="page board-page">
       <div className="toolbar">
@@ -253,13 +313,17 @@ export function Board({
                     </header>
                     <div className="card-list">
                       {items.map((item) => (
-                        <TaskCard
-                          key={item.id}
-                          item={item}
-                          {...(details[item.id] ? { details: details[item.id] } : {})}
-                          runs={runs}
-                          onSelect={() => onSelect(item)}
-                        />
+                        <div className="card-group" key={item.id}>
+                          <TaskCard
+                            item={item}
+                            {...(details[item.id] ? { details: details[item.id] } : {})}
+                            runs={runs}
+                            onSelect={() => onSelect(item)}
+                          />
+                          {item.feature && (
+                            <SubtaskFold items={childrenOf(item.id)} onSelect={onSelect} />
+                          )}
+                        </div>
                       ))}
                       {items.length === 0 && <div className="empty-column">No tasks</div>}
                     </div>

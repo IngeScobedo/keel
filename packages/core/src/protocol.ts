@@ -175,6 +175,22 @@ export const WorkItemViewSchema = z.object({
   parent_work_item_id: z.string().optional(),
   /** La tarea de la que nació, si la creó un agente fuera del plan (ADR-0024 §2). */
   origin_work_item_id: z.string().optional(),
+  /** ADR-0022 §5: el avance de una feature con subtareas. */
+  feature: z
+    .object({
+      branch: z.string(),
+      auto_integrate: z.boolean(),
+      done: z.number().int(),
+      working: z.number().int(),
+      blocked: z.number().int(),
+      total: z.number().int(),
+      phase: z.number().int().nullable(),
+    })
+    .optional(),
+  /** ADR-0022: su línea del plan de la feature. */
+  subtask: z
+    .object({ key: z.string(), phase: z.number().int(), phase_title: z.string() })
+    .optional(),
   ...projected,
 })
 /** Resultado de un comando de verificación del proyecto, recortado para el agente. */
@@ -863,6 +879,11 @@ export const Methods = {
       annotations: QuestionAnnotationsSchema.optional(),
       /** Al aprobar un plan (`ExitPlanMode`), el modo con el que sigue el run. */
       then_mode: PermissionModeSchema.optional(),
+      /**
+       * ADR-0022 §2: al aprobar el diseño de una feature, si las subtareas se integran
+       * solas cuando tienen QA PASS, verificación sin rojo nuevo y diff en su frontera.
+       */
+      auto_integrate: z.boolean().optional(),
     }),
     result: z.object({
       approval_id: z.string(),

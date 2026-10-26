@@ -411,6 +411,8 @@ export function App() {
               onUpdate={workspace.updateDemo}
               notes={sessionNotes[task.id] ?? []}
               {...(workspace.mode === "live" ? { call: workspace.call } : {})}
+              tasks={workspace.work_items}
+              onOpenTask={openTask}
               onAddNote={(text) =>
                 setSessionNotes((old) => ({
                   ...old,

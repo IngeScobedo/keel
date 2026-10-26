@@ -91,11 +91,15 @@ export async function buildPlan(
   if (!branch) throw new Error("el worktree no está en una rama (HEAD separado)")
   const all = await changedFiles(worktree)
   const wanted = p.paths?.length ? all.filter((f) => p.paths?.includes(f.path)) : all
-  if (wanted.length === 0) throw new Error("no hay cambios que confirmar en esos archivos")
-  const files = await numstat(worktree, wanted)
+  // Sin cambios sólo vale publicar lo que ya está confirmado (el cierre de una feature, ADR-0022 §4).
+  if (wanted.length === 0 && !p.push && !p.pr)
+    throw new Error("no hay cambios que confirmar en esos archivos")
+  const files = wanted.length ? await numstat(worktree, wanted) : []
   const paths = files.map((f) => f.path)
   const protectedList = await protectedBranches(repo.root, p.push?.remote ?? "origin")
-  const operations: GitPlan["operations"] = [{ op: "commit", message: p.message, paths }]
+  const operations: GitPlan["operations"] = paths.length
+    ? [{ op: "commit", message: p.message, paths }]
+    : []
   if (p.push || p.pr) {
     const target = p.push?.branch ?? branch
     // Sólo a la rama del run o a la que nombre el plan, y nunca a una protegida.
@@ -113,7 +117,7 @@ export async function buildPlan(
         body: p.pr.body ?? "",
       })
   }
-  const diff = await unifiedDiff(worktree, wanted)
+  const diff = wanted.length ? await unifiedDiff(worktree, wanted) : ""
   const diffRef = diff ? deps.artifacts.put(diff, "text/x-diff").ref : null
   const plan: GitPlan = GitPlanSchema.parse({
     version: 1,
@@ -172,7 +176,8 @@ export async function executePlan(
         })
         steps.push({ op: "commit", state: "done", detail: { sha: c.sha, files: c.files } })
       } else if (op.op === "push") {
-        if ((await headSha(wt)) !== commitSha) return expire("HEAD cambió antes del push")
+        if ((await headSha(wt)) !== (commitSha ?? plan.expected_head_sha))
+          return expire("HEAD cambió antes del push")
         const r = await pushBranch(wt, { remote: op.remote, branch: op.branch })
         deps.emit(plan.run_id, "git.push.completed", {
           remote: op.remote,

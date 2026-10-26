@@ -6,7 +6,7 @@ import { mutationMeta } from "./client.js"
 import { LiveTaskActions } from "./LiveTaskActions.js"
 import { StageTrack } from "./MethodCards.js"
 import type { Run, WorkItem } from "./model.js"
-import { Button } from "./ui.js"
+import { Button, Status } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -209,5 +209,62 @@ function ReturnStage({ task, flow, call }: { task: WorkItem; flow: TaskFlowView;
       </button>
       {error && <p className="deleted">{error}</p>}
     </form>
+  )
+}
+
+/** ADR-0022 §5: el plan de la feature por fases, con el estado de cada subtarea. */
+export function FeaturePlan({
+  task,
+  subtasks,
+  onOpen,
+}: {
+  task: WorkItem
+  subtasks: WorkItem[]
+  onOpen?: (item: WorkItem) => void
+}) {
+  const feature = task.feature
+  if (!feature) return null
+  const phases = [...new Set(subtasks.map((t) => t.subtask?.phase ?? 1))].sort((a, b) => a - b)
+  return (
+    <section className="feature-plan" data-testid="feature-plan">
+      <h3>
+        Feature · {feature.done}/{feature.total} integradas
+      </h3>
+      <p className="mono muted">
+        {feature.branch}
+        {feature.auto_integrate ? " · se integran solas" : " · cada integración te pregunta"}
+      </p>
+      {phases.map((ph) => {
+        const items = subtasks.filter((t) => (t.subtask?.phase ?? 1) === ph)
+        return (
+          <div key={ph} className="feature-tree">
+            <h4>
+              Fase {ph}
+              {items[0]?.subtask?.phase_title ? ` — ${items[0].subtask.phase_title}` : ""}
+            </h4>
+            {items.map((c) => (
+              <button
+                type="button"
+                key={c.id}
+                className="subtask-row"
+                onClick={() => onOpen?.(c)}
+                disabled={!onOpen}
+              >
+                <Status state={c.visual_state} dot />
+                <span className="mono muted">{c.subtask?.key ?? c.display_id}</span>
+                <span>{c.title}</span>
+                <span className="rc-pill">
+                  {c.lifecycle === "done"
+                    ? "integrada"
+                    : c.stage
+                      ? (STAGE_LABEL[c.stage] ?? c.stage)
+                      : c.lifecycle}
+                </span>
+              </button>
+            ))}
+          </div>
+        )
+      })}
+    </section>
   )
 }

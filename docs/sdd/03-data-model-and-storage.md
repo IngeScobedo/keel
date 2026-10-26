@@ -1311,3 +1311,25 @@ ALTER TABLE work_items ADD COLUMN origin_run_id TEXT REFERENCES runs(id);
 CREATE INDEX idx_work_items_origin ON work_items(origin_work_item_id)
     WHERE origin_work_item_id IS NOT NULL;
 ```
+
+### 0014 · Feature y subtareas (ADR-0022)
+
+Al aprobar el diseño de una tarea formal, su documento `tasks` se convierte en
+subtareas (`work_items.parent_work_item_id`) con sus dependencias
+(`work_item_dependencies`); el padre queda `blocked` con un bloqueo de
+dependencia que cuenta el avance.
+
+- **`task_flows.feature_json`** (en el padre): la rama de la feature, la base de
+  la que salió, si el humano eligió la integración automática y quién aprobó.
+- **`task_flows.subtask_json`** (en cada hija): su llave del plan (`T3`), su
+  fase, su frontera de archivos y los requisitos que cubre.
+
+```sql
+-- migración: 0014-feature-y-subtareas
+ALTER TABLE task_flows ADD COLUMN feature_json TEXT
+    CHECK (feature_json IS NULL OR json_valid(feature_json));
+ALTER TABLE task_flows ADD COLUMN subtask_json TEXT
+    CHECK (subtask_json IS NULL OR json_valid(subtask_json));
+CREATE INDEX idx_work_items_parent ON work_items(parent_work_item_id)
+    WHERE parent_work_item_id IS NOT NULL;
+```
