@@ -38,25 +38,27 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0026](./0026-prod-pregunta-y-se-puede-quitar.md)               | En producción Keel pregunta, y el humano puede quitar la pregunta asumiendo el riesgo                                | Propuesto              | Alta       |
 | [0027](./0027-cerrar-a-mano-con-evidencia.md)                   | Cerrar a mano una tarea, con su motivo y su evidencia                                                                | Aceptado (2026-10-26)  | Media      |
 | [0028](./0028-base-al-dia-y-sin-tope-de-turnos.md)              | La rama base al día antes de trabajar, y sin tope de turnos ni de tiempo por defecto                                 | Aceptado (2026-10-26)  | Media      |
+| [0029](./0029-volver-a-implementar-desde-el-cierre.md)          | Volver a implementar desde el cierre, y el cierre sólo escribe el canon                                              | Propuesto              | Media      |
+| [0030](./0030-el-navegador-del-agente-en-vivo.md)               | El navegador del agente, de primer nivel y en vivo en la GUI                                                         | Propuesto              | Alta       |
 
 ## Estado
 
 Están **Aceptados**: 0008, 0009 y 0010 el 2026-10-22; 0001 a 0007 y 0011 a 0019
-el 2026-10-23; 0020, 0021, 0022, 0024 y 0025 el 2026-10-26, por el humano. 0023
-quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0026 y 0027 están
-**Propuestos**. Los escribió Claude a petición del humano a partir del SDD, los
-ADRs de Mirador, el canvas de pen.dev y los docs oficiales de Anthropic
-verificados en su fecha. Uno nuevo nace como **Propuesto** y sólo el humano lo
-acepta; uno aceptado no se edita: se supersede, y las desviaciones que se
-encuentren al implementarlo van a `../reviews/`.
+el 2026-10-23; 0020, 0021, 0022, 0024, 0025, 0027 y 0028 el 2026-10-26, por el
+humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0026, 0029 y
+0030 están **Propuestos**. Los escribió Claude a petición del humano a partir
+del SDD, los ADRs de Mirador, el canvas de pen.dev y los docs oficiales de
+Anthropic verificados en su fecha. Uno nuevo nace como **Propuesto** y sólo el
+humano lo acepta; uno aceptado no se edita: se supersede, y las desviaciones que
+se encuentren al implementarlo van a `../reviews/`.
 
 ## Orden de lectura
 
 0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0018 → 0008 → 0010 →
 0011 → 0012 → 0013 → 0015 → 0014 → 0016 → 0017 → 0019 → 0020 → 0021 → 0022 →
-0023 → 0024 → 0025 → 0026 → 0027 → 0028. Los dos primeros son el porqué; 0006 es
-lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son consecuencias;
-0007 reparte el código en librerías reutilizables y producto.
+0023 → 0024 → 0025 → 0026 → 0027 → 0028 → 0029 → 0030. Los dos primeros son el
+porqué; 0006 es lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son
+consecuencias; 0007 reparte el código en librerías reutilizables y producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 

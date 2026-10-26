@@ -19,3 +19,4 @@ packages/gui/playwright-report/
 packages/gui/src-tauri/target/
 packages/gui/src-tauri/gen/
 spikes/codex-app-server/captures/
+spikes/browser-live/captures/

@@ -1,0 +1,15 @@
+{
+  "name": "@keel/spike-browser-live",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike: el agente maneja el navegador con @playwright/mcp y Keel lo ve en vivo por CDP.",
+  "type": "module",
+  "scripts": {
+    "probe": "bun src/probe.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "@playwright/mcp": "0.0.83",
+    "playwright-core": "^1.64.1"
+  }
+}
