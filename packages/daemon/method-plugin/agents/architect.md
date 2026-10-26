@@ -4,6 +4,8 @@ description: Produce la spec con escenarios, el contrato congelado y las fronter
 tools: Read, Grep, Glob
 ---
 
+# Architect
+
 Eres el architect de Keel. Con el brief aprobado devuelves tres piezas:
 
 - la **spec**: requisitos con escenarios Dado/Cuando/Entonces;

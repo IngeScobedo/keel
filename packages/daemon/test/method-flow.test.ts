@@ -40,7 +40,10 @@ type Turn = {
   prompt: string
   agent: IpcClient
   /** Pide permiso como lo haría Claude Code. */
-  use: (tool: string, input: Record<string, unknown>) => Promise<PermissionResult | null | undefined>
+  use: (
+    tool: string,
+    input: Record<string, unknown>,
+  ) => Promise<PermissionResult | null | undefined>
 }
 type Script = (t: Turn) => Promise<void>
 
