@@ -4,6 +4,7 @@
  */
 import type { Database } from "bun:sqlite"
 import {
+  type Ceremony,
   DEFAULT_BOARD,
   isLive,
   type Lifecycle,
@@ -11,6 +12,8 @@ import {
   type NodeState,
   type RunPurpose,
   type RunStatus,
+  type Stage,
+  type TaskDocKind,
   type VisualState,
   visualForNode,
   visualForRun,
@@ -190,6 +193,35 @@ export type ProjectVcs = {
 const SNAPSHOT_COLS =
   "id, project_id, run_id, root_path, snapshot_dir, manifest_sha256, file_count, total_bytes, released_at, restored_at"
 
+export type TaskFlowRow = {
+  work_item_id: string
+  stage: Stage
+  ceremony: Ceremony | null
+  ceremony_reason: string | null
+  contract_sha256: string | null
+  baseline_json: string | null
+  last_verify_json: string | null
+  started_by: string
+  updated_at: string
+}
+export type TaskDocRow = {
+  id: string
+  work_item_id: string
+  kind: TaskDocKind
+  version: number
+  artifact_ref: string
+  sha256: string
+  size: number
+  author: string
+  created_at: string
+}
+export type ProjectProfileRow = {
+  project_id: string
+  profile_json: string
+  confirmed_by: string | null
+  confirmed_at: string | null
+  updated_at: string
+}
 export class Repo {
   readonly db: Database
   /** Almacén de artefactos (ADR-0012); sin él, los cuerpos grandes no salen de la base. */
@@ -1051,6 +1083,7 @@ export class Repo {
     operation_json: string
     state: string
     expires_at: string | null
+    decision_actor: string | null
   } | null {
     return this.db
       .query<
@@ -1062,6 +1095,7 @@ export class Repo {
           operation_json: string
           state: string
           expires_at: string | null
+          decision_actor: string | null
         },
         [string]
       >("SELECT * FROM approval_requests WHERE id = ?")
@@ -1218,6 +1252,165 @@ export class Repo {
     return this.getPermissionRule(id)
   }
 
+  // --- flujo de la tarea, documentos y perfil del proyecto (ADR-0021) --------------
+
+  getFlow(workItemId: string): TaskFlowRow | null {
+    return (
+      this.db
+        .query<TaskFlowRow, [string]>("SELECT * FROM task_flows WHERE work_item_id = ?")
+        .get(workItemId) ?? null
+    )
+  }
+
+  createFlow(workItemId: string, stage: Stage, startedBy: string): TaskFlowRow {
+    this.db
+      .query("INSERT INTO task_flows(work_item_id, stage, started_by) VALUES (?,?,?)")
+      .run(workItemId, stage, startedBy)
+    return this.getFlow(workItemId) as TaskFlowRow
+  }
+
+  updateFlow(
+    workItemId: string,
+    patch: Partial<
+      Pick<
+        TaskFlowRow,
+        | "stage"
+        | "ceremony"
+        | "ceremony_reason"
+        | "contract_sha256"
+        | "baseline_json"
+        | "last_verify_json"
+        | "started_by"
+      >
+    >,
+  ): TaskFlowRow {
+    const keys = Object.keys(patch) as (keyof typeof patch)[]
+    if (keys.length > 0)
+      this.db
+        .query(
+          `UPDATE task_flows SET ${keys.map((k) => `${k} = ?`).join(", ")},
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE work_item_id = ?`,
+        )
+        .run(...keys.map((k) => patch[k] ?? null), workItemId)
+    return this.getFlow(workItemId) as TaskFlowRow
+  }
+
+  /** Guarda una versión nueva del documento; el contenido va al almacén de artefactos. */
+  putTaskDoc(p: {
+    work_item_id: string
+    kind: TaskDocKind
+    content: string
+    author: string
+  }): TaskDocRow {
+    const store = this.artifacts
+    if (!store) throw new Error("el repo no tiene almacén de artefactos")
+    const a = store.put(p.content, "text/markdown")
+    const last = this.db
+      .query<{ v: number | null }, [string, string]>(
+        "SELECT max(version) v FROM task_docs WHERE work_item_id = ? AND kind = ?",
+      )
+      .get(p.work_item_id, p.kind)
+    const id = ulid()
+    this.db
+      .query(
+        "INSERT INTO task_docs(id, work_item_id, kind, version, artifact_ref, sha256, size, author) VALUES (?,?,?,?,?,?,?,?)",
+      )
+      .run(id, p.work_item_id, p.kind, (last?.v ?? 0) + 1, a.ref, a.sha256, a.size, p.author)
+    return this.db
+      .query<TaskDocRow, [string]>("SELECT * FROM task_docs WHERE id = ?")
+      .get(id) as TaskDocRow
+  }
+
+  getTaskDoc(workItemId: string, kind: TaskDocKind, version?: number): TaskDocRow | null {
+    return (
+      (version === undefined
+        ? this.db
+            .query<TaskDocRow, [string, string]>(
+              "SELECT * FROM task_docs WHERE work_item_id = ? AND kind = ? ORDER BY version DESC LIMIT 1",
+            )
+            .get(workItemId, kind)
+        : this.db
+            .query<TaskDocRow, [string, string, number]>(
+              "SELECT * FROM task_docs WHERE work_item_id = ? AND kind = ? AND version = ?",
+            )
+            .get(workItemId, kind, version)) ?? null
+    )
+  }
+
+  /** La última versión de cada documento de la tarea. */
+  latestTaskDocs(workItemId: string): TaskDocRow[] {
+    return this.db
+      .query<TaskDocRow, [string]>(
+        `SELECT d.* FROM task_docs d
+          WHERE d.work_item_id = ? AND d.version =
+            (SELECT max(version) FROM task_docs x WHERE x.work_item_id = d.work_item_id AND x.kind = d.kind)
+          ORDER BY d.kind`,
+      )
+      .all(workItemId)
+  }
+
+  taskDocContent(doc: TaskDocRow): string {
+    const store = this.artifacts
+    if (!store) throw new Error("el repo no tiene almacén de artefactos")
+    return store.readAll(doc.sha256).toString("utf8")
+  }
+
+  getProfile(projectId: string): ProjectProfileRow | null {
+    return (
+      this.db
+        .query<ProjectProfileRow, [string]>("SELECT * FROM project_profiles WHERE project_id = ?")
+        .get(projectId) ?? null
+    )
+  }
+
+  setProfile(projectId: string, profile: unknown, confirmedBy: string | null): ProjectProfileRow {
+    this.db
+      .query(
+        `INSERT INTO project_profiles(project_id, profile_json, confirmed_by, confirmed_at)
+         VALUES (?, ?, ?, CASE WHEN ? IS NULL THEN NULL ELSE strftime('%Y-%m-%dT%H:%M:%fZ', 'now') END)
+         ON CONFLICT(project_id) DO UPDATE SET profile_json = excluded.profile_json,
+           confirmed_by = coalesce(excluded.confirmed_by, project_profiles.confirmed_by),
+           confirmed_at = coalesce(excluded.confirmed_at, project_profiles.confirmed_at),
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
+      )
+      .run(projectId, JSON.stringify(profile), confirmedBy, confirmedBy)
+    return this.getProfile(projectId) as ProjectProfileRow
+  }
+
+  /** El gate del método que espera al humano en esta tarea, si hay uno (ADR-0021). */
+  pendingStageGate(workItemId: string): {
+    id: string
+    run_id: string
+    operation_hash: string
+    operation_json: string
+  } | null {
+    return (
+      this.db
+        .query<
+          { id: string; run_id: string; operation_hash: string; operation_json: string },
+          [string]
+        >(
+          `SELECT a.id, a.run_id, a.operation_hash, a.operation_json FROM approval_requests a
+             JOIN runs r ON r.id = a.run_id
+            WHERE r.work_item_id = ? AND a.state = 'pending'
+              AND json_extract(a.operation_json, '$.tool') = 'stage.gate'
+            ORDER BY a.id DESC LIMIT 1`,
+        )
+        .get(workItemId) ?? null
+    )
+  }
+
+  /** El run más reciente de la tarea, vivo o no: la conversación sigue desde él. */
+  lastRunFor(workItemId: string): RunRow | null {
+    return (
+      this.db
+        .query<RunRow, [string]>(
+          "SELECT * FROM runs WHERE work_item_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .get(workItemId) ?? null
+    )
+  }
+
   getSetting(key: string): { value: unknown; updated_by: string; updated_at: string } | null {
     const r = this.db
       .query<{ value_json: string; updated_by: string; updated_at: string }, [string]>(
@@ -1267,6 +1460,7 @@ export class Repo {
       board_status: DEFAULT_BOARD[w.lifecycle as Lifecycle] ?? "backlog",
       revision: w.revision,
       visual_state: visualForWorkItem(w.lifecycle, liveRun),
+      ...flowFields(this.getFlow(w.id)),
     }
   }
   runView(r: RunRow) {
@@ -1326,6 +1520,11 @@ export type ApprovalListRow = {
   state: string
   expires_at: string | null
   decision_actor: string | null
+}
+
+/** Etapa y ceremonia de una tarea que se está trabajando (ADR-0021). */
+function flowFields(f: TaskFlowRow | null): { stage?: Stage; ceremony?: Ceremony | null } {
+  return f ? { stage: f.stage, ceremony: f.ceremony } : {}
 }
 
 /** Opciones efectivas del run, del manifest; los runs viejos no las tienen. */

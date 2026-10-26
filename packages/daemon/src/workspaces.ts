@@ -87,7 +87,11 @@ export class GitWorktreeDriver implements WorkspaceDriver {
   async provision(run: RunRow, item: WorkItemRow): Promise<Provisioned> {
     const { repo, worktreesDir } = this.deps
     const rootPath = this.deps.rootOf(run.project_id)
-    if (run.purpose !== "execute") return { ok: true, cwd: rootPath, events: [] }
+    // ADR-0021 §3: una tarea en el método trabaja en su worktree desde el primer run,
+    // también en las etapas de sólo lectura; así la sesión se retoma siempre.
+    const taskWorktree =
+      (JSON.parse(run.context_manifest_json) as { task_worktree?: boolean }).task_worktree === true
+    if (run.purpose !== "execute" && !taskWorktree) return { ok: true, cwd: rootPath, events: [] }
     // Continuar una conversación (ADR-0019 §3): el run hijo se lleva el worktree del
     // padre si sigue en disco; así el agente retoma en la misma carpeta y rama.
     if (run.parent_run_id) {

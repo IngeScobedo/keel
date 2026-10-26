@@ -13,7 +13,7 @@
  */
 import { randomUUID } from "node:crypto"
 import { readFileSync, rmSync } from "node:fs"
-import { LifecycleSchema, RunPurposeSchema } from "@keel/core"
+import { CEREMONIES, LifecycleSchema, RunPurposeSchema, STAGES, TASK_DOC_KINDS } from "@keel/core"
 import { z } from "zod"
 import { IpcClient } from "../ipc/client.js"
 import { agentDoorPath, defaultEndpoint } from "../ipc/endpoint.js"
@@ -167,6 +167,116 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       "Estado de un plan de git: pendiente, ejecutándose, completado (con sha, push y PR) o caducado con su motivo.",
       z.object({ plan_id: z.string() }),
       (a) => client.call("git.plan_status", a),
+    ),
+    // --- el método (ADR-0021): Keel valida y verifica; el agente recibe lo justo ---
+    tool(
+      "stage_current",
+      "Etapa del método en que está tu tarea (brief, design, implement, review, close), su ceremonia, si hay un gate esperando al humano y el baseline de la verificación.",
+      z.object({}),
+      async (_a, b) =>
+        ((await client.call("tasks.flow", { work_item_id: linkedTask(b) })) as { flow: unknown })
+          .flow,
+    ),
+    tool(
+      "stage_advance",
+      "Avanza tu tarea a la siguiente etapa del método. Keel valida la transición y los documentos que exige; si falta algo te dice exactamente qué. Al cerrar el brief declara ceremony: direct (trabajo directo) o formal (toca contrato o invariante, dos responsables en paralelo o módulo grande sin SDD), con reason en una frase. Si la transición tiene gate, queda esperando al humano: termina tu turno con un resumen.",
+      z.object({
+        to: z.enum(STAGES),
+        ceremony: z.enum(CEREMONIES).optional(),
+        reason: z.string().max(4_000).optional(),
+      }),
+      async (a, b) => {
+        const r = (await client.call("stages.advance", {
+          ...mutation(),
+          work_item_id: linkedTask(b),
+          ...a,
+        })) as { flow: { stage: string }; gate: { gate: string } | null }
+        return r.gate
+          ? `Gate «${r.gate.gate}» pedido al humano. Termina tu turno con un resumen breve; Keel te avisa cuando decida.`
+          : `Etapa: ${r.flow.stage}.`
+      },
+    ),
+    tool(
+      "task_doc_put",
+      "Guarda una versión nueva de un documento de tu tarea (brief, spec, design, tasks, story, qa) en Keel, no en el repo. Devuelve la validación del método: lo que falta para avanzar.",
+      z.object({ kind: z.enum(TASK_DOC_KINDS), content_markdown: z.string().min(1) }),
+      async (a, b) => {
+        const d = (await client.call("task_docs.put", {
+          ...mutation(),
+          work_item_id: linkedTask(b),
+          ...a,
+        })) as {
+          version: number
+          report: { ok: boolean; checks: { ok: boolean; msg: string; detail?: string }[] }
+        }
+        const missing = d.report.checks.filter((c) => !c.ok)
+        return missing.length
+          ? `Guardado ${a.kind} v${d.version}. Falta: ${missing.map((c) => `${c.msg}${c.detail ? ` (${c.detail})` : ""}`).join("; ")}.`
+          : `Guardado ${a.kind} v${d.version}. Valida.`
+      },
+    ),
+    tool(
+      "task_doc_get",
+      "Lee un documento de tu tarea (la última versión, o una concreta).",
+      z.object({ kind: z.enum(TASK_DOC_KINDS), version: z.number().int().positive().optional() }),
+      async (a, b) => {
+        const r = (await client.call("task_docs.get", { work_item_id: linkedTask(b), ...a })) as {
+          doc: { content_markdown?: string; version: number } | null
+        }
+        return r.doc ? r.doc.content_markdown : `No hay ${a.kind} todavía.`
+      },
+    ),
+    tool(
+      "task_docs_list",
+      "Qué documentos tiene tu tarea, su versión y si validan.",
+      z.object({}),
+      async (_a, b) => {
+        const r = (await client.call("task_docs.list", { work_item_id: linkedTask(b) })) as {
+          docs: { kind: string; version: number; report: { ok: boolean } }[]
+        }
+        return r.docs.map((d) => `${d.kind} v${d.version} ${d.report.ok ? "valida" : "no valida"}`)
+      },
+    ),
+    tool(
+      "verify_run",
+      "Keel corre la verificación del proyecto (lint, typecheck, test, build según el perfil) en tu worktree y devuelve sólo el delta contra el baseline y las últimas líneas de lo que falló. No corras esos comandos tú.",
+      z.object({}),
+      async (_a, b) => {
+        const r = (await client.call("verify.run", {
+          ...mutation(),
+          work_item_id: linkedTask(b),
+        })) as {
+          results: { name: string; ok: boolean; duration_ms: number; tail: string }[]
+          delta: { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] }
+          baseline: boolean
+        }
+        if (r.results.length === 0)
+          return "El proyecto no tiene comandos de verificación en su perfil."
+        return {
+          green: r.delta.green,
+          new_red: r.delta.newRed,
+          already_red: r.delta.stillRed,
+          fixed: r.delta.fixed,
+          baseline: r.baseline,
+          // Sólo lo que falló trae salida: lo verde no gasta contexto.
+          checks: r.results.map((c) =>
+            c.ok
+              ? { name: c.name, ok: true, seconds: Math.round(c.duration_ms / 1000) }
+              : {
+                  name: c.name,
+                  ok: false,
+                  seconds: Math.round(c.duration_ms / 1000),
+                  tail: c.tail,
+                },
+          ),
+        }
+      },
+    ),
+    tool(
+      "project_profile",
+      "Perfil del proyecto según Keel: stack, comandos de verificación, ramas protegidas y prefijos, rutas generadas, dónde vive su canon (ADR, SDD, roadmap) e invariantes.",
+      z.object({}),
+      async () => ((await client.call("projects.profile_get", {})) as { profile: unknown }).profile,
     ),
     tool(
       "context_search",

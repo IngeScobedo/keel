@@ -1,0 +1,6 @@
+{
+  "name": "keel-method",
+  "version": "0.1.0",
+  "description": "El método con el que Keel conduce una tarea: brief con grilling, diseño con contrato congelado, implementación contra el contrato, revisión adversarial y cierre al canon (ADR-0021).",
+  "author": { "name": "Keel" }
+}

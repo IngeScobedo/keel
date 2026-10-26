@@ -10,6 +10,7 @@
  * `z.infer`, nunca se escriben a mano.
  */
 import { z } from "zod"
+import { CEREMONIES, STAGES, TASK_DOC_KINDS } from "./method.js"
 import { PluginManifestSchema } from "./plugins.js"
 import { ClaimKindSchema, ClaimViewSchema } from "./research.js"
 import { SemanticEventViewSchema } from "./semantic.js"
@@ -153,6 +154,9 @@ export type CostKind = z.infer<typeof CostKindSchema>
 /** Toda entidad proyectada que viaja por el protocolo lleva su visual ya resuelto (ADR-0006 §3). */
 const projected = { visual_state: VisualStateSchema, revision: z.number().int().nonnegative() }
 
+export const StageSchema = z.enum(STAGES)
+export const CeremonySchema = z.enum(CEREMONIES)
+export const TaskDocKindSchema = z.enum(TASK_DOC_KINDS)
 export const WorkItemViewSchema = z.object({
   id: z.string(),
   project_id: z.string(),
@@ -161,7 +165,110 @@ export const WorkItemViewSchema = z.object({
   kind: z.string().optional(),
   lifecycle: LifecycleSchema,
   board_status: z.string(),
+  /** Etapa del método si la tarea se está trabajando (ADR-0021). */
+  stage: StageSchema.optional(),
+  ceremony: CeremonySchema.nullable().optional(),
   ...projected,
+})
+/** Resultado de un comando de verificación del proyecto, recortado para el agente. */
+export const VerifyResultSchema = z.object({
+  name: z.string(),
+  command: z.string(),
+  ok: z.boolean(),
+  exit_code: z.number().int().nullable(),
+  duration_ms: z.number().int(),
+  /** Las últimas líneas de la salida; la salida entera queda como artefacto. */
+  tail: z.string(),
+  output_ref: z.string().nullable(),
+})
+export type VerifyResult = z.infer<typeof VerifyResultSchema>
+export const VerifyDeltaSchema = z.object({
+  green: z.boolean(),
+  newRed: z.array(z.string()),
+  stillRed: z.array(z.string()),
+  fixed: z.array(z.string()),
+})
+export const DocReportSchema = z.object({
+  ok: z.boolean(),
+  checks: z.array(
+    z.object({
+      ok: z.boolean(),
+      level: z.enum(["block", "warn"]),
+      msg: z.string(),
+      detail: z.string().optional(),
+    }),
+  ),
+})
+/** El flujo de una tarea que se está trabajando (ADR-0021 §2). */
+export const TaskFlowViewSchema = z.object({
+  work_item_id: z.string(),
+  stage: StageSchema,
+  ceremony: CeremonySchema.nullable(),
+  ceremony_reason: z.string().nullable(),
+  contract_sha256: z.string().nullable(),
+  baseline: z.array(VerifyResultSchema).nullable(),
+  started_by: z.string(),
+  updated_at: z.string(),
+  /** El gate humano que espera, si hay uno. */
+  pending_gate: z
+    .object({
+      approval_id: z.string(),
+      operation_hash: z.string(),
+      gate: z.enum(["brief", "design", "close"]),
+      to: StageSchema,
+    })
+    .nullable(),
+})
+export type TaskFlowView = z.infer<typeof TaskFlowViewSchema>
+export const TaskDocViewSchema = z.object({
+  id: z.string(),
+  work_item_id: z.string(),
+  kind: TaskDocKindSchema,
+  version: z.number().int(),
+  sha256: z.string(),
+  size: z.number().int(),
+  author: z.string(),
+  created_at: z.string(),
+  /** Validación determinista del documento contra el método (ADR-0021). */
+  report: DocReportSchema,
+  content_markdown: z.string().optional(),
+})
+export type TaskDocView = z.infer<typeof TaskDocViewSchema>
+/** Lo que Keel sabe del proyecto para conducir el método (ADR-0021 §5). */
+export const ProjectProfileSchema = z.object({
+  stack: z.array(z.string()),
+  /** Comandos de verificación en el orden en que se corren; el delta-verde los compara. */
+  verify: z.array(
+    z.object({
+      name: z.string().min(1).max(40),
+      command: z.string().min(1).max(2_000),
+      timeout_ms: z.number().int().positive().max(3_600_000).optional(),
+    }),
+  ),
+  protected_branches: z.array(z.string()),
+  /** Prefijos de rama por tipo de trabajo (`feat/`, `fix/`…). */
+  branch_prefixes: z.record(z.string(), z.string()),
+  generated_paths: z.array(z.string()),
+  /** Dónde vive el canon del proyecto; puede haber un ADR y un SDD por contexto. */
+  canon: z.object({
+    adr_dirs: z.array(z.string()),
+    sdd_dirs: z.array(z.string()),
+    roadmap: z.string().nullable(),
+  }),
+  /** Fuentes de RegExp: tocar uno exige ADR en el diseño. */
+  invariants: z.array(z.string()),
+  adr_pattern: z.string().nullable(),
+  /** El repo trae su propio harness (`.claude/`, `AGENTS.md`). */
+  harness: z.object({ claude_dir: z.boolean(), agents_md: z.boolean(), claude_md: z.boolean() }),
+})
+export type ProjectProfile = z.infer<typeof ProjectProfileSchema>
+export const ProjectProfileViewSchema = z.object({
+  project_id: z.string(),
+  profile: ProjectProfileSchema,
+  /** Lo que detectó Keel, para comparar con lo confirmado. */
+  detected: ProjectProfileSchema,
+  confirmed_by: z.string().nullable(),
+  confirmed_at: z.string().nullable(),
 })
 /** Lo que un agente externo puede hacer, por grupos de métodos (ADR-0009 §4). */
 export const AgentScopeSchema = z.enum([
@@ -588,6 +695,95 @@ export const Methods = {
       effort: EffortSchema.optional(),
     }),
     result: z.object({ run: RunViewSchema, applies: z.enum(["now", "next_turn"]) }),
+  },
+  /**
+   * ADR-0021 §3: «Trabajar» en una tarea. El daemon decide: escribirle al run
+   * vivo, continuar la conversación o arrancarla en la etapa que toca.
+   */
+  "tasks.work": {
+    params: MutationMeta.extend({
+      work_item_id: z.string(),
+      text: z.string().max(20_000).optional(),
+      profile: z.enum(["claude", "codex"]).optional(),
+      options: RunOptionsSchema.optional(),
+    }),
+    result: z.object({
+      delivered: z.enum(["message", "continued", "started"]),
+      run: RunViewSchema,
+      flow: TaskFlowViewSchema,
+    }),
+  },
+  "tasks.flow": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({ flow: TaskFlowViewSchema.nullable() }),
+  },
+  /**
+   * ADR-0021 §2: el agente avanza la etapa; Keel valida la transición y sus
+   * documentos, y abre el gate humano si lo hay.
+   */
+  "stages.advance": {
+    params: MutationMeta.extend({
+      work_item_id: z.string(),
+      to: StageSchema,
+      ceremony: CeremonySchema.optional(),
+      reason: z.string().max(4_000).optional(),
+    }),
+    result: z.object({
+      flow: TaskFlowViewSchema,
+      /** null si avanzó; si no, el gate que quedó esperando al humano. */
+      gate: z
+        .object({ approval_id: z.string(), gate: z.enum(["brief", "design", "close"]) })
+        .nullable(),
+    }),
+  },
+  /** Un humano devuelve la tarea a una etapa anterior. */
+  "stages.return": {
+    params: MutationMeta.extend({
+      work_item_id: z.string(),
+      to: StageSchema,
+      reason: z.string().min(1).max(4_000),
+    }),
+    result: TaskFlowViewSchema,
+  },
+  "task_docs.put": {
+    params: MutationMeta.extend({
+      work_item_id: z.string(),
+      kind: TaskDocKindSchema,
+      content_markdown: z.string().min(1).max(400_000),
+    }),
+    result: TaskDocViewSchema,
+  },
+  "task_docs.get": {
+    params: z.object({
+      work_item_id: z.string(),
+      kind: TaskDocKindSchema,
+      version: z.number().int().positive().optional(),
+    }),
+    result: z.object({ doc: TaskDocViewSchema.nullable() }),
+  },
+  "task_docs.list": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({ docs: z.array(TaskDocViewSchema) }),
+  },
+  /** ADR-0021 §4: corre la verificación del proyecto y compara contra el baseline. */
+  "verify.run": {
+    params: MutationMeta.extend({ work_item_id: z.string() }),
+    result: z.object({
+      results: z.array(VerifyResultSchema),
+      delta: VerifyDeltaSchema,
+      baseline: z.boolean(),
+    }),
+  },
+  "projects.profile_get": {
+    params: z.object({ project_id: z.string().optional() }),
+    result: ProjectProfileViewSchema,
+  },
+  "projects.profile_set": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      profile: ProjectProfileSchema,
+    }),
+    result: ProjectProfileViewSchema,
   },
   /** ADR-0020 §5: los modelos y esfuerzos que el proveedor ofrece a esta cuenta. */
   "providers.models": {
@@ -1058,6 +1254,13 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "research.claims_list",
   "git.propose",
   "git.plan_status",
+  "tasks.flow",
+  "stages.advance",
+  "task_docs.put",
+  "task_docs.get",
+  "task_docs.list",
+  "verify.run",
+  "projects.profile_get",
 ]
 
 /** El scope que exige cada método de agente; los demás no necesitan scope. */
@@ -1076,6 +1279,13 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "research.claim_add": "notes:write",
   "research.claims_list": "tasks:read",
   "resources.execute": "resources:use",
+  "tasks.flow": "tasks:read",
+  "stages.advance": "tasks:write",
+  "task_docs.put": "tasks:write",
+  "task_docs.get": "tasks:read",
+  "task_docs.list": "tasks:read",
+  "verify.run": "tasks:write",
+  "projects.profile_get": "tasks:read",
 }
 
 /**

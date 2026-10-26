@@ -53,6 +53,15 @@ export type ApprovalGateDeps = {
   timeoutMs: number | null | (() => number | null)
   /** Dónde trabaja el run: una regla nunca cubre archivos fuera de ahí (ADR-0019 §4). */
   cwdOf?: (runId: string) => string | null
+  /**
+   * ADR-0021 §3: la etapa de la tarea del run. En una de sólo lectura Keel niega
+   * sin preguntar; `inMethod` dice si la tarea la conduce el método.
+   */
+  stageOf?: (run: RunContext["run"]) => {
+    stage: string | null
+    readOnly: boolean
+    inMethod: boolean
+  }
 }
 
 const GIT_PUSH = /(?:^|[\s;&|(])git(?:\s+-C\s+\S+)?\s+push\b/
@@ -125,9 +134,42 @@ export class ApprovalGate implements ToolGate {
     return null
   }
 
+  /** Una negación que no pregunta: queda como `approval.auto` para verla en el chat. */
+  private refuse(ctx: RunContext, req: ToolRequest, source: string, message: string): ToolDecision {
+    ctx.record(
+      "approval.auto",
+      `approval.auto:${ctx.run.id}:${ulid()}`,
+      {
+        tool: req.tool,
+        input: (redact({ input: req.input }).value as { input: unknown }).input,
+        effect: "deny",
+        source,
+        label: source === "stage" ? "etapa de sólo lectura" : source,
+      },
+      null,
+    )
+    return { behavior: "deny", message }
+  }
+
   async decide(ctx: RunContext, req: ToolRequest): Promise<ToolDecision> {
     const { repo, waitApproval } = this.deps
     const run = ctx.run
+    const stage = this.deps.stageOf?.(run) ?? { stage: null, readOnly: false, inMethod: false }
+    // En el método, salir de plan es avanzar de etapa: lo decide Keel, no un permiso.
+    if (stage.inMethod && req.tool === "ExitPlanMode")
+      return this.refuse(
+        ctx,
+        req,
+        "stage",
+        "Keel: en el método no se sale de plan con ExitPlanMode. Guarda el documento de la etapa con task_doc_put y avanza con stage_advance; Keel valida y, si hay gate, se lo pide al humano.",
+      )
+    if (stage.readOnly && !QUESTION_TOOLS.has(req.tool))
+      return this.refuse(
+        ctx,
+        req,
+        "stage",
+        `Keel: la etapa ${stage.stage ?? "de planeación"} es de sólo lectura (ADR-0021). No edites ni corras comandos que cambien algo; guarda lo que produces con task_doc_put y avanza con stage_advance.`,
+      )
     const question = QUESTION_TOOLS.has(req.tool)
     // Una pregunta espera siempre: el tiempo no contesta por el humano.
     const limit =

@@ -32,7 +32,8 @@ import type {
   SpawnOptions,
 } from "@anthropic-ai/claude-agent-sdk"
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk"
-import type { Effort, ModelOption, PermissionMode } from "@keel/core"
+import type { Effort, ModelOption, PermissionMode, PermissionPattern } from "@keel/core"
+import { projectWouldAllow } from "../flows.js"
 import { nowIso, ulid } from "../ids.js"
 import { defaultProcessTable, type ProcessTable } from "../processes.js"
 import { RunProjector } from "../projector.js"
@@ -82,6 +83,18 @@ export type ClaudeProfile = {
   effort: Effort | null
   /** Sugerencias de mensaje tras cada turno (ADR-0020 §6). */
   prompt_suggestions: boolean
+  /**
+   * Cargar el harness del proyecto: su CLAUDE.md, reglas, skills, agentes y
+   * hooks de `.claude/` (ADR-0021 §5). La configuración del usuario no.
+   */
+  project_settings: boolean
+  /** El plugin local con el método de Keel: skills y agentes (ADR-0021 §1). */
+  method_plugin: string | null
+  /**
+   * Reglas `allow` del proyecto: lo que casen vuelve al gate de Keel con
+   * `ask` en vez de aprobarse solo (spike del 2026-10-26).
+   */
+  ask_rules: PermissionPattern[]
   /** Variables extra del proceso del agente (atribución en git, ADR-0018 §1). */
   env: Record<string, string>
   /** Sesión del proveedor que retoma este run (continuar una conversación, ADR-0019 §3). */
@@ -113,6 +126,9 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   allow_bypass: false,
   effort: null,
   prompt_suggestions: false,
+  project_settings: false,
+  method_plugin: null,
+  ask_rules: [],
   env: {},
   resume_session_id: null,
   sandbox: null,
@@ -419,6 +435,22 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
         null,
       )
       notifyProjection(key, projector.onHook(name, payload, toolUseID, eventId))
+      if (
+        name === "PreToolUse" &&
+        profile.ask_rules.length > 0 &&
+        projectWouldAllow(
+          profile.ask_rules,
+          String((input as { tool_name?: unknown }).tool_name),
+          (input as { tool_input?: unknown }).tool_input,
+        )
+      )
+        return {
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "ask",
+            permissionDecisionReason: "Keel: una regla del proyecto no se salta el gate",
+          },
+        }
       return {}
     }
     const hooks = Object.fromEntries(
@@ -474,7 +506,10 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       spawnClaudeCodeProcess,
       model: profile.model,
       cwd: profile.cwd,
-      settingSources: [],
+      settingSources: profile.project_settings ? ["project"] : [],
+      ...(profile.method_plugin
+        ? { plugins: [{ type: "local", path: profile.method_plugin }] }
+        : {}),
       maxTurns: profile.max_turns,
       ...(profile.max_budget_usd === null ? {} : { maxBudgetUsd: profile.max_budget_usd }),
       allowedTools: [
@@ -501,6 +536,8 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       binary,
       model: profile.model,
       effort: profile.effort,
+      project_settings: profile.project_settings,
+      method_plugin: profile.method_plugin !== null,
       mcp_servers: Object.keys(profile.mcp_servers),
       cwd: profile.cwd,
       isolation: profile.sandbox ? "sandbox" : "none",

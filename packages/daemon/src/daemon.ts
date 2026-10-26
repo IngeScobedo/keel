@@ -2,7 +2,7 @@
  * Cableado del daemon: store + bus + servidor IPC + adaptadores. Reconcilia
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
-import { randomBytes } from "node:crypto"
+import { createHash, randomBytes } from "node:crypto"
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path"
@@ -10,25 +10,40 @@ import {
   AGENT_SCOPES,
   type AgentScope,
   allowedTransitions,
+  canReturn,
   checkTransition,
+  contractSection,
   describePattern,
   type Effort,
   ErrorCode,
   type GitPlan,
   GitPlanSchema,
+  isReadOnlyStage,
   type Lifecycle,
+  lifecycleForStage,
   type MethodName,
   type Methods,
   type MutationMeta,
   matchesPattern,
   type PermissionMode,
   type PermissionPattern,
+  type ProjectProfile,
+  ProjectProfileSchema,
   parsePattern,
   patternFor,
+  purposeForStage,
+  qaVerdict,
   RUN_START_RULES,
   redact,
   type SettingsView,
+  type Stage,
+  stageMove,
+  type TaskDocKind,
+  type TaskFlowView,
   type TransitionAuthority,
+  type VerifyResult,
+  validateDoc,
+  verifyDelta,
 } from "@keel/core"
 import {
   changedFiles,
@@ -66,6 +81,16 @@ import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
 import {
+  continuationPrompt,
+  type DocSet,
+  docView,
+  flowView,
+  projectAllowRules,
+  stageInstructions,
+  validationContext,
+  workPrompt,
+} from "./flows.js"
+import {
   buildPlan,
   DIFF_INLINE_MAX,
   executePlan,
@@ -91,6 +116,7 @@ import {
   type RecordedProcess,
   sameProcess,
 } from "./processes.js"
+import { detectProfile } from "./project-profile.js"
 import { Research, ResearchError } from "./research.js"
 import { BrokerError, ResourceBroker } from "./resources/broker.js"
 import { createRunContext } from "./run-context.js"
@@ -107,6 +133,7 @@ import {
   type RunRow,
   type WorkItemRow,
 } from "./store/repo.js"
+import { runVerify } from "./verify.js"
 import type { WorkspaceDriver } from "./workspace-driver.js"
 import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
 
@@ -145,6 +172,11 @@ export type DaemonOptions = {
    * defecto, este mismo runtime con `main.ts mcp`.
    */
   mcpBridge?: { command: string; args: string[] } | false
+  /**
+   * El plugin con el método de Keel (ADR-0021 §1); `false` no lo carga. Por
+   * defecto, `packages/daemon/method-plugin`.
+   */
+  methodPlugin?: string | false
   /** Tabla de procesos para reconciliar; por defecto la de la plataforma (processes.ts). */
   processes?: ProcessTable
   /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
@@ -192,6 +224,10 @@ export class Daemon {
   private readonly runCwd = new Map<string, string>()
   /** Trabajo en segundo plano (runs, liberaciones); `idle()` espera a que termine. */
   private readonly background = new Set<Promise<unknown>>()
+  /** El perfil detectado de cada proyecto, mientras el humano no confirme uno (ADR-0021 §5). */
+  private readonly detectedProfiles = new Map<string, ProjectProfile>()
+  /** Una verificación a la vez por tarea: la segunda espera a la primera. */
+  private readonly verifying = new Map<string, Promise<unknown>>()
   private lagMs = 0
   private lagTimer: ReturnType<typeof setInterval> | null = null
 
@@ -283,6 +319,7 @@ export class Daemon {
       waitApproval: (id, ms) => this.waitApproval(id, ms),
       timeoutMs: () => this.settingsView().approvals.timeout_ms,
       cwdOf: (runId) => this.runCwd.get(runId) ?? null,
+      stageOf: (run) => this.stagePolicy(run),
     })
     // El vínculo de una sesión externa dura lo que dura su conexión (ADR-0009 §4).
     const onClose = (client: ClientState) => {
@@ -730,6 +767,270 @@ export class Daemon {
         )
         return repo.runView(run)
       }),
+      // --- el método (ADR-0021) ---------------------------------------------------
+      "tasks.work": this.mutation<Params<"tasks.work">>("tasks.work", (p, uow, ctx) => {
+        requireHuman(ctx, "trabajar una tarea")
+        const w = this.requireWorkItem(p.work_item_id)
+        if (w.lifecycle === "done")
+          throw rpcError(ErrorCode.invalidTransition, "la tarea está terminada")
+        if (!repo.getFlow(w.id)) {
+          const stage: Stage =
+            w.lifecycle === "triage"
+              ? "brief"
+              : w.lifecycle === "needs_review"
+                ? "close"
+                : "implement"
+          repo.createFlow(w.id, stage, uow.actorId)
+          uow.emit("task.flow_started", null, { work_item_id: w.id, stage, actor: actorOf(ctx) })
+          uow.emit("work_item.updated", null, repo.workItemView(w))
+        }
+        const live = repo.liveRunFor(w.id)
+        if (live) {
+          // Con el agente trabajando, «trabajar» es escribirle.
+          if (!p.text?.trim())
+            throw rpcError(ErrorCode.conflict, "el agente ya está trabajando; escríbele un mensaje")
+          if (!this.providerOf(live).sendMessage(live.id, p.text))
+            throw rpcError(ErrorCode.conflict, "el run ya no acepta mensajes; está terminando")
+          uow.emit("run.user_message", live.id, { text: p.text, actor: actorOf(ctx) })
+          return {
+            delivered: "message" as const,
+            run: repo.runView(live),
+            flow: this.flowViewOf(w.id) as TaskFlowView,
+          }
+        }
+        const hadRun = repo.lastRunFor(w.id) !== null
+        const flow = repo.getFlow(w.id) as NonNullable<ReturnType<Repo["getFlow"]>>
+        const run = this.startFlowRun(uow, w, p.text?.trim() || workPrompt(w, flow.stage), {
+          source: "human",
+          profile: p.profile,
+          ...(p.options ? { options: p.options } : {}),
+        })
+        return {
+          delivered: hadRun ? ("continued" as const) : ("started" as const),
+          run,
+          flow: this.flowViewOf(w.id) as TaskFlowView,
+        }
+      }),
+      "tasks.flow": (params, ctx) => {
+        const p = params as Params<"tasks.flow">
+        this.requireOwnTask(ctx, p.work_item_id)
+        return { flow: this.flowViewOf(p.work_item_id) }
+      },
+      "stages.advance": this.mutation<Params<"stages.advance">>("stages.advance", (p, uow, ctx) => {
+        // ADR-0021 §2: avanza el agente; el humano decide los gates y puede devolver.
+        if (ctx.actor.kind !== "agent")
+          throw rpcError(
+            ErrorCode.unauthorized,
+            "la etapa la avanza el agente; un humano la devuelve con stages.return o decide su gate",
+          )
+        const w = this.requireOwnTask(ctx, p.work_item_id)
+        const flow = repo.getFlow(w.id)
+        if (!flow)
+          throw rpcError(ErrorCode.notFound, "la tarea no se está trabajando con el método")
+        const pending = repo.pendingStageGate(w.id)
+        if (pending)
+          throw rpcError(
+            ErrorCode.conflict,
+            "hay un gate esperando al humano; espera su decisión antes de avanzar",
+            { approval_id: pending.id },
+          )
+        const ceremony = flow.stage === "brief" ? (p.ceremony ?? flow.ceremony) : flow.ceremony
+        const move = stageMove(flow.stage, p.to, ceremony)
+        if (!move.ok) throw rpcError(ErrorCode.invalidParams, move.reason)
+        if (flow.stage === "brief" && p.ceremony)
+          repo.updateFlow(w.id, { ceremony: p.ceremony, ceremony_reason: p.reason ?? null })
+        // Lo mecánico lo valida Keel: el agente recibe sólo lo que falta.
+        const docs = this.docSet(w.id)
+        const vctx = validationContext(this.profileOf(w.project_id))
+        const missing: string[] = []
+        for (const kind of move.requires) {
+          const md = docs[kind]
+          if (md === undefined) {
+            missing.push(`${kind}: falta; guárdalo con task_doc_put`)
+            continue
+          }
+          for (const c of validateDoc(kind, md, docs, vctx).checks)
+            if (!c.ok && c.level === "block")
+              missing.push(`${kind}: ${c.msg}${c.detail ? ` (${c.detail})` : ""}`)
+        }
+        if (flow.stage === "review" && p.to === "close") {
+          const profile = this.profileOf(w.project_id)
+          if (profile?.verify.length) {
+            const last = flow.last_verify_json
+              ? (JSON.parse(flow.last_verify_json) as VerifyResult[])
+              : null
+            const base = flow.baseline_json
+              ? (JSON.parse(flow.baseline_json) as VerifyResult[])
+              : null
+            if (!last) missing.push("verificación: corre verify_run antes de cerrar")
+            else {
+              const delta = verifyDelta(base, last)
+              if (!delta.green && qaVerdict(docs.qa ?? "") !== "WAIVED")
+                missing.push(
+                  `verificación: rojo nuevo en ${delta.newRed.join(", ")}; arréglalo o deja el QA en WAIVED con su justificación`,
+                )
+            }
+          }
+        }
+        if (missing.length > 0)
+          throw rpcError(
+            ErrorCode.invalidParams,
+            `no se puede pasar a ${p.to}: ${missing.join("; ")}`,
+            { missing },
+          )
+        if (move.gate) {
+          const gate = this.openStageGate(uow, w, move.gate, flow.stage, p.to, "stage")
+          return {
+            flow: this.flowViewOf(w.id) as TaskFlowView,
+            gate,
+          }
+        }
+        this.applyStage(uow, w, p.to, {
+          authorizedBy: flow.started_by,
+          delegated: true,
+          reason: p.reason,
+        })
+        return {
+          flow: this.flowViewOf(w.id) as TaskFlowView,
+          gate: null,
+        }
+      }),
+      "stages.return": this.mutation<Params<"stages.return">>("stages.return", (p, uow, ctx) => {
+        requireHuman(ctx, "devolver una tarea a una etapa anterior")
+        const w = this.requireWorkItem(p.work_item_id)
+        const flow = repo.getFlow(w.id)
+        if (!flow)
+          throw rpcError(ErrorCode.notFound, "la tarea no se está trabajando con el método")
+        if (!canReturn(flow.stage, p.to))
+          throw rpcError(
+            ErrorCode.invalidParams,
+            `de ${flow.stage} sólo se vuelve a una etapa anterior`,
+          )
+        // El lifecycle no vuelve a triage: brief y diseño sólo se reabren antes de implementar.
+        if (lifecycleForStage(p.to) === "triage" && w.lifecycle !== "triage")
+          throw rpcError(
+            ErrorCode.invalidTransition,
+            "la tarea ya pasó a implementación; para cambiar el diseño, pide al agente un cambio de contrato",
+          )
+        let item = w
+        if (item.lifecycle === "needs_review")
+          item = this.transition(uow, item, "planned", "human", {
+            reason: p.reason,
+            keepWorkspaces: true,
+          })
+        const pending = repo.pendingStageGate(w.id)
+        if (pending) repo.setApproval(pending.id, "expired", null)
+        repo.updateFlow(w.id, { stage: p.to })
+        const run = repo.lastRunFor(w.id)
+        uow.emit("task.stage_changed", run?.id ?? null, {
+          work_item_id: w.id,
+          from: flow.stage,
+          to: p.to,
+          ceremony: flow.ceremony,
+          authorized_by: uow.actorId,
+          delegated: false,
+          reason: p.reason,
+          returned: true,
+        })
+        uow.emit("work_item.updated", run?.id ?? null, repo.workItemView(item))
+        uow.afterCommit(() =>
+          this.continueFlow(w.id, `El humano devolvió la tarea a ${p.to}: ${p.reason}`),
+        )
+        return this.flowViewOf(w.id) as TaskFlowView
+      }),
+      "task_docs.put": this.mutation<Params<"task_docs.put">>("task_docs.put", (p, uow, ctx) => {
+        const w = this.requireOwnTask(ctx, p.work_item_id)
+        const flow = repo.getFlow(w.id)
+        const row = repo.putTaskDoc({
+          work_item_id: w.id,
+          kind: p.kind,
+          content: p.content_markdown,
+          author: uow.actorId,
+        })
+        const docs = this.docSet(w.id)
+        const report = validateDoc(
+          p.kind,
+          p.content_markdown,
+          docs,
+          validationContext(this.profileOf(w.project_id)),
+        )
+        const run = repo.lastRunFor(w.id)
+        uow.emit("task.doc_put", run?.id ?? null, {
+          work_item_id: w.id,
+          kind: p.kind,
+          version: row.version,
+          sha256: row.sha256,
+          size: row.size,
+          author: row.author,
+          report,
+        })
+        // ADR-0021 §4: cambiar el contrato congelado durante la implementación reabre el gate (b).
+        if (
+          p.kind === "design" &&
+          flow?.contract_sha256 &&
+          (flow.stage === "implement" || flow.stage === "review") &&
+          !repo.pendingStageGate(w.id)
+        ) {
+          const now = createHash("sha256")
+            .update(contractSection(p.content_markdown) ?? "")
+            .digest("hex")
+          if (now !== flow.contract_sha256)
+            this.openStageGate(uow, w, "design", flow.stage, flow.stage, "contract")
+        }
+        return docView(row, report)
+      }),
+      "task_docs.get": (params, ctx) => {
+        const p = params as Params<"task_docs.get">
+        const w = this.requireOwnTask(ctx, p.work_item_id)
+        const row = repo.getTaskDoc(w.id, p.kind, p.version)
+        if (!row) return { doc: null }
+        const content = repo.taskDocContent(row)
+        const report = validateDoc(
+          p.kind,
+          content,
+          this.docSet(w.id),
+          validationContext(this.profileOf(w.project_id)),
+        )
+        return { doc: docView(row, report, content) }
+      },
+      "task_docs.list": (params, ctx) => {
+        const p = params as Params<"task_docs.list">
+        const w = this.requireOwnTask(ctx, p.work_item_id)
+        const docs = this.docSet(w.id)
+        const vctx = validationContext(this.profileOf(w.project_id))
+        return {
+          docs: repo
+            .latestTaskDocs(w.id)
+            .map((d) => docView(d, validateDoc(d.kind, docs[d.kind] ?? "", docs, vctx))),
+        }
+      },
+      "verify.run": async (params, ctx) => {
+        const p = params as Params<"verify.run">
+        const w = this.requireOwnTask(ctx, p.work_item_id)
+        const r = await this.taskVerify(w.id)
+        return { results: r.results, delta: r.delta, baseline: r.baseline }
+      },
+      "projects.profile_get": async (params, ctx) => {
+        const p = params as Params<"projects.profile_get">
+        return this.profileView(this.scopeOf(ctx, p.project_id))
+      },
+      "projects.profile_set": this.mutation<Params<"projects.profile_set">>(
+        "projects.profile_set",
+        (p, uow, ctx) => {
+          requireHuman(ctx, "confirmar el perfil del proyecto")
+          const projectId = this.scopeOf(ctx, p.project_id)
+          const row = repo.setProfile(projectId, p.profile, uow.actorId)
+          uow.emit("project.profile_set", null, { project_id: projectId, profile: p.profile })
+          const detected = this.detectedProfiles.get(projectId) ?? p.profile
+          return {
+            project_id: projectId,
+            profile: p.profile,
+            detected,
+            confirmed_by: row.confirmed_by,
+            confirmed_at: row.confirmed_at,
+          }
+        },
+      ),
       "runs.set_mode": this.mutation<Params<"runs.set_mode">>("runs.set_mode", (p, uow, ctx) => {
         requireHuman(ctx, "cambiar el modo de un run")
         const run = this.requireLiveRun(p.run_id)
@@ -1548,7 +1849,7 @@ export class Daemon {
       },
       "approvals.resolve": this.mutation<Params<"approvals.resolve">>(
         "approvals.resolve",
-        (p, uow) => {
+        (p, uow, ctx) => {
           const a = repo.getApproval(p.approval_id)
           if (!a) throw rpcError(ErrorCode.notFound, "aprobación no existe")
           if (a.operation_hash !== p.operation_hash)
@@ -1561,6 +1862,11 @@ export class Daemon {
           // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
           const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
           if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
+          // ADR-0021: un gate del método mueve la etapa; no es un permiso de herramienta.
+          if (op.tool === "stage.gate") {
+            requireHuman(ctx, "decidir un gate del método")
+            return this.resolveStageGate(uow, a, op.input, p)
+          }
           // ADR-0020 §7: una pregunta se contesta o se rechaza; no hay «sesión» ni «siempre».
           if (op.tool && QUESTION_TOOLS.has(op.tool))
             return this.resolveQuestion(uow, a, op.tool, p)
@@ -1678,8 +1984,16 @@ export class Daemon {
             JSON.parse(current.context_manifest_json) as { budget_micro_usd?: number }
           ).budget_micro_usd
           const mcp_servers = this.keelMcpServer(current)
+          const flow = this.repo.getFlow(item.id)
+          const profile =
+            this.profileOf(run.project_id) ?? (await this.detectedProfile(run.project_id))
           // ADR-0017 §1: el prompt lleva sólo un encabezado; el resto lo pide el agente.
-          if (Object.keys(mcp_servers).length > 0) prompt = `${promptHeader(item)}\n\n${prompt}`
+          // ADR-0021: con el método, el encabezado dice la etapa y cómo avanzar.
+          if (Object.keys(mcp_servers).length > 0)
+            prompt = `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}` : ""}\n\n${prompt}`
+          // Planear y revisar son sólo lectura también para el SDK (ADR-0021 §3).
+          const readOnly =
+            run.purpose !== "execute" || (flow !== null && isReadOnlyStage(flow.stage))
           // ADR-0008 §7: el presupuesto en USD no aplica a Codex (sólo reporta tokens).
           this.runCwd.set(run.id, ws.cwd)
           const sandbox = useCodex ? null : await this.sandboxFor(run, ws.cwd)
@@ -1704,6 +2018,12 @@ export class Daemon {
                       effort: opt.effort ?? null,
                     }
                   : {}),
+                ...(readOnly ? { permission_mode: "plan" as const } : {}),
+                // ADR-0021 §5: el harness del proyecto y el método de Keel; las reglas
+                // `allow` del proyecto vuelven al gate.
+                project_settings: true,
+                method_plugin: this.methodPluginDir(),
+                ask_rules: projectAllowRules(ws.cwd),
                 // ADR-0020 §4: el humano puede pasar a bypass en vivo donde arrancar en bypass vale.
                 allow_bypass:
                   run.purpose === "execute" &&
@@ -1730,12 +2050,20 @@ export class Daemon {
     this.runCwd.delete(run.id)
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
+    this.afterFlowRun(final)
   }
 
   /**
    * El puente `keel mcp` del run: el proveedor lo lanza con la ruta del token de
    * un solo uso, nunca con su valor (ADR-0009 §3).
    */
+  /** El plugin del método (ADR-0021 §1): junto al paquete del daemon. */
+  private methodPluginDir(): string | null {
+    if (this.opts.methodPlugin === false) return null
+    const dir = this.opts.methodPlugin ?? join(import.meta.dir, "..", "method-plugin")
+    return existsSync(join(dir, ".claude-plugin", "plugin.json")) ? dir : null
+  }
+
   private keelMcpServer(run: RunRow): ClaudeProfile["mcp_servers"] {
     const bridge = this.opts.mcpBridge ?? defaultBridge()
     if (bridge === false) return {}
@@ -1812,6 +2140,10 @@ export class Daemon {
       expected_revision?: number | undefined
       options?: Params<"runs.start">["options"]
       parent_run_id?: string | null
+      /** Quién escribió la instrucción: el humano, la tarea o Keel al cambiar de etapa. */
+      prompt_source?: "human" | "keel"
+      /** ADR-0021 §3: el run trabaja en el worktree de la tarea aunque no ejecute. */
+      task_worktree?: boolean
     },
   ): ReturnType<Repo["runView"]> {
     const repo = this.repo
@@ -1854,7 +2186,12 @@ export class Daemon {
       purpose: p.purpose,
       // Va en el manifest para que el despacho, aunque llegue tras una caída, use el
       // mismo tope, el mismo proveedor y las mismas opciones.
-      manifest: { budget_micro_usd: lim.runBudgetMicroUsd, provider, options },
+      manifest: {
+        budget_micro_usd: lim.runBudgetMicroUsd,
+        provider,
+        options,
+        ...(p.task_worktree ? { task_worktree: true } : {}),
+      },
       parent_run_id: p.parent_run_id ?? null,
     })
     if (rule.to !== w.lifecycle) this.transition(uow, w, rule.to, "system", { runId: run.id })
@@ -1864,7 +2201,7 @@ export class Daemon {
     // El chat del run empieza con lo que se le pidió al agente, venga de quien venga.
     uow.emit("run.prompt", run.id, {
       text: prompt,
-      source: p.prompt ? "human" : "task",
+      source: p.prompt_source ?? (p.prompt ? "human" : "task"),
       actor: { id: uow.actorId },
     })
     // Despacho durable: si el daemon cae tras el commit, se entrega al arrancar.
@@ -1911,6 +2248,427 @@ export class Daemon {
           permission_mode: mode,
           effort,
         }
+  }
+
+  // --- el método (ADR-0021) ----------------------------------------------------------
+
+  /** Cómo trata el gate a un run según la etapa de su tarea. */
+  private stagePolicy(run: RunRow): { stage: string | null; readOnly: boolean; inMethod: boolean } {
+    const flow = this.repo.getFlow(run.work_item_id)
+    // Un run que no ejecuta es de sólo lectura, esté o no en el método (ADR-0021 §3).
+    if (run.purpose !== "execute")
+      return { stage: flow?.stage ?? null, readOnly: true, inMethod: flow !== null }
+    if (!flow) return { stage: null, readOnly: false, inMethod: false }
+    // Un cambio de contrato esperando al humano congela la escritura.
+    const gate = this.repo.pendingStageGate(run.work_item_id)
+    const frozen = gate !== null && JSON.parse(gate.operation_json).input?.reason === "contract"
+    return { stage: flow.stage, readOnly: isReadOnlyStage(flow.stage) || frozen, inMethod: true }
+  }
+
+  /** El perfil confirmado o, si no hay, el detectado. */
+  private profileOf(projectId: string): ProjectProfile | null {
+    const row = this.repo.getProfile(projectId)
+    if (row) {
+      const parsed = ProjectProfileSchema.safeParse(JSON.parse(row.profile_json))
+      if (parsed.success) return parsed.data
+    }
+    return this.detectedProfiles.get(projectId) ?? null
+  }
+
+  private async detectedProfile(projectId: string): Promise<ProjectProfile> {
+    const root = this.repo.projectRoot(projectId) ?? this.rootPath
+    const detected = await detectProfile(root)
+    this.detectedProfiles.set(projectId, detected)
+    return detected
+  }
+
+  private async profileView(projectId: string) {
+    const detected = await this.detectedProfile(projectId)
+    const row = this.repo.getProfile(projectId)
+    return {
+      project_id: projectId,
+      profile: this.profileOf(projectId) ?? detected,
+      detected,
+      confirmed_by: row?.confirmed_by ?? null,
+      confirmed_at: row?.confirmed_at ?? null,
+    }
+  }
+
+  private flowViewOf(workItemId: string) {
+    const flow = this.repo.getFlow(workItemId)
+    if (!flow) return null
+    const gate = this.repo.pendingStageGate(workItemId)
+    const input = gate
+      ? (
+          JSON.parse(gate.operation_json) as {
+            input: { gate: "brief" | "design" | "close"; to: Stage }
+          }
+        ).input
+      : null
+    return flowView(
+      flow,
+      gate && input
+        ? {
+            approval_id: gate.id,
+            operation_hash: gate.operation_hash,
+            gate: input.gate,
+            to: input.to,
+          }
+        : null,
+    )
+  }
+
+  /** La última versión de cada documento, con su contenido. */
+  private docSet(workItemId: string): DocSet {
+    const out: DocSet = {}
+    for (const d of this.repo.latestTaskDocs(workItemId)) out[d.kind] = this.repo.taskDocContent(d)
+    return out
+  }
+
+  /** Un agente sólo opera sobre la tarea de su run. */
+  private requireOwnTask(ctx: HandlerContext, workItemId: string): WorkItemRow {
+    if (ctx.actor.kind === "agent" && ctx.actor.work_item_id !== workItemId)
+      throw rpcError(ErrorCode.unauthorized, "el agente sólo opera sobre la tarea de su run")
+    return this.requireWorkItem(workItemId)
+  }
+
+  /**
+   * Arranca el siguiente run de la conversación de la tarea, con el propósito
+   * que pide su etapa, como hijo del último: misma carpeta, misma sesión.
+   */
+  private startFlowRun(
+    uow: UnitOfWork,
+    w: WorkItemRow,
+    prompt: string,
+    o: {
+      source: "human" | "keel"
+      profile?: "claude" | "codex" | undefined
+      options?: Params<"runs.start">["options"]
+    },
+  ): ReturnType<Repo["runView"]> {
+    const flow = this.repo.getFlow(w.id) as NonNullable<ReturnType<Repo["getFlow"]>>
+    const purpose = purposeForStage(flow.stage)
+    const last = this.repo.lastRunFor(w.id)
+    const lastManifest = last
+      ? (JSON.parse(last.context_manifest_json) as {
+          provider?: string
+          options?: Params<"runs.start">["options"]
+        })
+      : {}
+    let item = w
+    if (purpose === "execute") {
+      // Seguir trabajando es decisión del humano que escribe (aristas de ADR-0006).
+      if (["waiting_human", "failed", "needs_review"].includes(item.lifecycle))
+        item = this.transition(uow, item, "planned", "human", {
+          reason: "seguir trabajando la tarea",
+          keepWorkspaces: true,
+        })
+      else if (item.lifecycle === "running")
+        item = this.transition(uow, item, "planned", "system", {
+          reason: "el run anterior terminó sin asentar la tarea",
+          keepWorkspaces: true,
+        })
+    }
+    const base = { ...lastManifest.options, ...o.options }
+    return this.startRunIn(uow, {
+      work_item_id: item.id,
+      purpose,
+      prompt,
+      prompt_source: o.source,
+      profile: o.profile ?? lastManifest.provider ?? "claude",
+      options: {
+        ...base,
+        // Planear es sólo lectura; al ejecutar vuelve el modo que tenía el humano.
+        permission_mode:
+          purpose === "plan"
+            ? "plan"
+            : base.permission_mode && base.permission_mode !== "plan"
+              ? base.permission_mode
+              : "ask",
+      },
+      parent_run_id: last?.id ?? null,
+      task_worktree: true,
+    })
+  }
+
+  /** Sin run vivo, abre el siguiente; con run vivo, le escribe. */
+  private continueFlow(workItemId: string, why: string): void {
+    const w = this.repo.getWorkItem(workItemId)
+    const flow = this.repo.getFlow(workItemId)
+    if (!w || !flow) return
+    const live = this.repo.liveRunFor(workItemId)
+    if (live) {
+      // Mismo propósito: el agente sigue en este turno. Otro: termina y Keel abre el siguiente.
+      const text =
+        live.purpose === purposeForStage(flow.stage)
+          ? why
+          : `${why} La etapa ${flow.stage} sigue en un run nuevo que Keel abre al terminar este turno: cierra con un resumen breve.`
+      if (this.providerOf(live).sendMessage(live.id, text))
+        this.emitSystem("run.keel_message", live.id, { text })
+      return
+    }
+    try {
+      runUnitOfWork(this.uowDeps(), this.systemScope(w.project_id), (uow) =>
+        this.startFlowRun(uow, w, continuationPrompt(w, flow.stage, why, flow.ceremony), {
+          source: "keel",
+        }),
+      )
+    } catch (e) {
+      this.emitSystem("task.flow_stalled", null, {
+        work_item_id: w.id,
+        stage: flow.stage,
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }
+
+  /** Al terminar un run: si la etapa pide otro propósito, la conversación sigue sola. */
+  private afterFlowRun(final: RunRow): void {
+    const flow = this.repo.getFlow(final.work_item_id)
+    if (!flow || final.status !== "completed") return
+    if (this.repo.pendingStageGate(final.work_item_id)) return
+    if (purposeForStage(flow.stage) !== final.purpose)
+      this.continueFlow(final.work_item_id, `La tarea pasó a la etapa ${flow.stage}.`)
+  }
+
+  /**
+   * Aplica una etapa ya legal y autorizada: mueve el lifecycle cuando toca y,
+   * al confirmar, ajusta el run vivo y corre la verificación de la etapa.
+   */
+  private applyStage(
+    uow: UnitOfWork,
+    w: WorkItemRow,
+    to: Stage,
+    o: { authorizedBy: string; delegated: boolean; reason?: string | undefined },
+  ): void {
+    const flow = this.repo.getFlow(w.id) as NonNullable<ReturnType<Repo["getFlow"]>>
+    const from = flow.stage
+    this.repo.updateFlow(w.id, { stage: to })
+    let item = this.repo.getWorkItem(w.id) as WorkItemRow
+    if (item.lifecycle === "triage" && lifecycleForStage(to) !== "triage")
+      item = this.transition(uow, item, "planned", "human", {
+        reason: o.delegated
+          ? `trabajo directo: lo autorizó ${o.authorizedBy} al pedir trabajar la tarea`
+          : "el humano aprobó el diseño",
+      })
+    const run = this.repo.lastRunFor(w.id)
+    uow.emit("task.stage_changed", run?.id ?? null, {
+      work_item_id: w.id,
+      from,
+      to,
+      ceremony: flow.ceremony,
+      authorized_by: o.authorizedBy,
+      delegated: o.delegated,
+      reason: o.reason ?? null,
+    })
+    uow.emit("work_item.updated", run?.id ?? null, this.repo.workItemView(item))
+    uow.afterCommit(() => {
+      const live = this.repo.liveRunFor(w.id)
+      // Revisar es sólo lectura también para el SDK; implementar vuelve al modo del run.
+      if (live?.purpose === "execute") {
+        const mode = to === "review" ? "plan" : runOptionsFor(live).permission_mode
+        this.applyLive(live, (a) =>
+          a.setMode(live.id, mode === "plan" && to !== "review" ? "ask" : mode),
+        )
+      }
+      if (to === "implement" && !this.repo.getFlow(w.id)?.baseline_json)
+        this.track(this.taskVerify(w.id, { baseline: true }))
+      if (to === "review") this.track(this.taskVerify(w.id, { notify: true }))
+    })
+  }
+
+  /** Abre el gate humano de una transición (ADR-0021 §2). */
+  private openStageGate(
+    uow: UnitOfWork,
+    w: WorkItemRow,
+    gate: "brief" | "design" | "close",
+    from: Stage,
+    to: Stage,
+    reason: "stage" | "contract",
+  ): { approval_id: string; gate: "brief" | "design" | "close" } {
+    const run = this.repo.liveRunFor(w.id) ?? this.repo.lastRunFor(w.id)
+    if (!run) throw rpcError(ErrorCode.invalidTransition, "la tarea no tiene runs")
+    const docs = this.repo.latestTaskDocs(w.id).map((d) => ({
+      kind: d.kind,
+      version: d.version,
+      sha256: d.sha256,
+    }))
+    const flow = this.repo.getFlow(w.id)
+    const input = {
+      work_item_id: w.id,
+      gate,
+      from,
+      to,
+      reason,
+      ceremony: flow?.ceremony ?? null,
+      ceremony_reason: flow?.ceremony_reason ?? null,
+      docs,
+    }
+    const hash = createHash("sha256")
+      .update(canonicalJson({ tool: "stage.gate", input, run_id: run.id }))
+      .digest("hex")
+    const approvalId = this.repo.createApproval({
+      project_id: w.project_id,
+      run_id: run.id,
+      operation_hash: hash,
+      operation: { tool: "stage.gate", input, run_id: run.id },
+      expires_at: null,
+    })
+    uow.emit("approval.requested", run.id, {
+      approval_id: approvalId,
+      operation_hash: hash,
+      tool: "stage.gate",
+      input,
+      expires_at: null,
+    })
+    return { approval_id: approvalId, gate }
+  }
+
+  /** El humano decide un gate del método: aprobar avanza; negar devuelve el trabajo al agente. */
+  private resolveStageGate(
+    uow: UnitOfWork,
+    a: NonNullable<ReturnType<Repo["getApproval"]>>,
+    input: unknown,
+    p: Params<"approvals.resolve">,
+  ) {
+    if (p.decision !== "approve_once" && p.decision !== "deny")
+      throw rpcError(
+        ErrorCode.invalidParams,
+        "un gate del método se aprueba (approve_once) o se niega (deny)",
+      )
+    const g = input as {
+      work_item_id: string
+      gate: "brief" | "design" | "close"
+      from: Stage
+      to: Stage
+      reason: "stage" | "contract"
+      docs: { kind: TaskDocKind; sha256: string }[]
+    }
+    const w = this.requireWorkItem(g.work_item_id)
+    const flow = this.repo.getFlow(w.id)
+    const current = new Map(this.repo.latestTaskDocs(w.id).map((d) => [d.kind, d.sha256]))
+    const stale =
+      !flow || flow.stage !== g.from || g.docs.some((d) => current.get(d.kind) !== d.sha256)
+    if (stale) {
+      this.repo.setApproval(a.id, "expired", null)
+      uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "expired" })
+      throw rpcError(
+        ErrorCode.conflict,
+        "la tarea o sus documentos cambiaron desde que se pidió el gate; el agente debe pedirlo de nuevo",
+      )
+    }
+    const reason = p.reason?.trim() ?? ""
+    const label = { brief: "brief", design: "diseño", close: "cierre" }[g.gate]
+    if (p.decision === "deny") {
+      this.repo.setApproval(a.id, "denied", uow.actorId)
+      uow.emit("approval.resolved", a.run_id, {
+        approval_id: a.id,
+        decision: "denied",
+        ...(reason ? { reason } : {}),
+      })
+      uow.afterCommit(() =>
+        this.continueFlow(
+          w.id,
+          `El humano no aprobó el ${label}${reason ? `: ${reason}` : "."} Corrígelo y vuelve a pedir el gate con stage_advance.`,
+        ),
+      )
+      return { approval_id: a.id, state: "denied" as const }
+    }
+    this.repo.setApproval(a.id, "consumed", uow.actorId)
+    uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "approved" })
+    // El contrato congelado es el hash de su sección en el diseño aprobado.
+    if (g.gate === "design") {
+      const design = this.docSet(w.id).design ?? ""
+      this.repo.updateFlow(w.id, {
+        contract_sha256: createHash("sha256")
+          .update(contractSection(design) ?? "")
+          .digest("hex"),
+      })
+    }
+    if (g.reason === "contract") {
+      uow.afterCommit(() =>
+        this.continueFlow(
+          w.id,
+          "El humano aprobó el cambio de contrato; sigue implementando contra el nuevo.",
+        ),
+      )
+      return { approval_id: a.id, state: "approved" as const }
+    }
+    this.applyStage(uow, w, g.to, { authorizedBy: uow.actorId, delegated: false, reason })
+    uow.afterCommit(() =>
+      this.continueFlow(w.id, `El humano aprobó el ${label}${reason ? ` («${reason}»)` : ""}.`),
+    )
+    return { approval_id: a.id, state: "approved" as const }
+  }
+
+  /** Dónde verificar la tarea: el worktree de su último run, o la raíz. */
+  private taskCwd(w: WorkItemRow): string {
+    const last = this.repo.lastRunFor(w.id)
+    const wt = last
+      ? this.repo
+          .runWorktrees(last.id)
+          .find((x) => x.slot === "root" && existsSync(x.worktree_path))
+      : undefined
+    return wt?.worktree_path ?? this.repo.projectRoot(w.project_id) ?? this.rootPath
+  }
+
+  /**
+   * Corre la verificación del proyecto en el worktree de la tarea (ADR-0021 §4),
+   * guarda baseline o último resultado y, si se pide, se lo cuenta al agente en
+   * pocas líneas. Una a la vez por tarea.
+   */
+  private async taskVerify(
+    workItemId: string,
+    o: { baseline?: boolean; notify?: boolean } = {},
+  ): Promise<{
+    results: VerifyResult[]
+    delta: ReturnType<typeof verifyDelta>
+    baseline: boolean
+  }> {
+    const previous = this.verifying.get(workItemId) ?? Promise.resolve()
+    const job = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const w = this.requireWorkItem(workItemId)
+        const profile = this.profileOf(w.project_id) ?? (await this.detectedProfile(w.project_id))
+        const results = profile.verify.length
+          ? await runVerify(this.taskCwd(w), profile.verify, {
+              store: (text) => this.artifacts.put(text, "text/plain").ref,
+            })
+          : []
+        const flow = this.repo.getFlow(w.id)
+        const isBaseline = o.baseline === true || !flow?.baseline_json
+        const base = isBaseline
+          ? results
+          : (JSON.parse(flow?.baseline_json ?? "[]") as VerifyResult[])
+        const delta = verifyDelta(base, results)
+        runUnitOfWork(this.uowDeps(), this.systemScope(w.project_id), (uow) => {
+          if (flow)
+            this.repo.updateFlow(w.id, {
+              last_verify_json: JSON.stringify(results),
+              ...(isBaseline ? { baseline_json: JSON.stringify(results) } : {}),
+            })
+          uow.emit("verify.completed", this.repo.lastRunFor(w.id)?.id ?? null, {
+            work_item_id: w.id,
+            baseline: isBaseline,
+            results,
+            delta,
+          })
+        })
+        const live = this.repo.liveRunFor(w.id)
+        if (o.notify && live && results.length) {
+          const text = `Keel corrió la verificación: ${verifySummary(results, delta)}`
+          if (this.providerOf(live).sendMessage(live.id, text))
+            this.emitSystem("run.keel_message", live.id, { text })
+        }
+        return { results, delta, baseline: isBaseline }
+      })
+    this.verifying.set(workItemId, job)
+    try {
+      return await job
+    } finally {
+      if (this.verifying.get(workItemId) === job) this.verifying.delete(workItemId)
+    }
   }
 
   private providerName(run: RunRow): "claude" | "codex" {
@@ -2297,8 +3055,24 @@ export class Daemon {
     if (!run || !item) return
     const manifest = JSON.parse(run.context_manifest_json) as { provider?: string }
     const env = agentEnv(run, item, manifest.provider === "codex" ? "Codex" : "Claude")
+    const approver = this.repo.getApproval(planId)?.decision_actor ?? null
     const r = await executePlan(this.gitPlanDeps(), planId, plan, env)
     this.repo.setApproval(planId, r.ok ? "consumed" : "expired", null)
+    // ADR-0021 §4: en el cierre del método, el plan aprobado es el gate (c): la tarea termina.
+    const flow = this.repo.getFlow(item.id)
+    const current = this.repo.getWorkItem(item.id)
+    if (r.ok && flow?.stage === "close" && current?.lifecycle === "needs_review")
+      runUnitOfWork(
+        this.uowDeps(),
+        { projectId: run.project_id, actorId: approver ?? "system:daemon" },
+        (uow) => {
+          this.transition(uow, current, "done", "human_close", {
+            runId: run.id,
+            reason: "el humano aprobó el plan de cierre",
+          })
+          uow.emit("task.closed", run.id, { work_item_id: item.id, plan_id: planId, approver })
+        },
+      )
     // El diff aprobado queda como evidencia de la tarea (ADR-0015 §6, ADR-0012).
     if (r.ok && plan.diff_ref) {
       const sha = parseArtifactRef(plan.diff_ref) as string
@@ -2452,6 +3226,9 @@ export class Daemon {
       )
       .all())
       add(r.v)
+    // Los documentos de la tarea (ADR-0021) no se purgan mientras su fila exista.
+    for (const r of db.query<{ v: string }, []>("SELECT artifact_ref v FROM task_docs").all())
+      add(r.v)
     for (const r of db
       .query<{ v: string }, []>(
         "SELECT payload_json v FROM events WHERE payload_json LIKE '%artifact:sha256:%'",
@@ -2496,9 +3273,14 @@ export class Daemon {
 
   private settleInTransaction(uow: UnitOfWork, final: RunRow, origin: ReleaseOrigin): void {
     if (final.purpose !== "execute") return
+    // ADR-0021: en el método, terminar un turno no es terminar la tarea. Sólo el cierre
+    // espera la revisión humana; antes, la tarea espera a que el humano le escriba.
+    const flow = this.repo.getFlow(final.work_item_id)
     const to: Lifecycle =
       final.status === "completed"
-        ? "needs_review"
+        ? flow && flow.stage !== "close"
+          ? "waiting_human"
+          : "needs_review"
         : final.status === "cancelled"
           ? "planned"
           : "failed"
@@ -2774,4 +3556,18 @@ function mediaTypeOf(path: string): string {
     ".xml": "application/xml",
   }
   return types[extname(path).toLowerCase()] ?? "application/octet-stream"
+}
+
+/** El resultado de la verificación en una línea: lo que lee el agente (ADR-0021 §4). */
+function verifySummary(
+  results: readonly VerifyResult[],
+  delta: { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] },
+): string {
+  const head = delta.green ? "sin rojo nuevo" : `rojo nuevo en ${delta.newRed.join(", ")}`
+  const parts = results.map(
+    (r) =>
+      `${r.name} ${r.ok ? "✓" : delta.stillRed.includes(r.name) ? "✗ (ya estaba rojo)" : "✗"} ${Math.round(r.duration_ms / 1000)} s`,
+  )
+  const fail = results.filter((r) => !r.ok && delta.newRed.includes(r.name))
+  return `${head}. ${parts.join(" · ")}${fail.length ? `\n${fail.map((r) => `--- ${r.name}\n${r.tail}`).join("\n")}` : ""}`
 }

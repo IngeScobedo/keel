@@ -1235,3 +1235,60 @@ CREATE TABLE user_settings (
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 ```
+
+### 0012 · Flujo de la tarea, sus documentos y el perfil del proyecto (ADR-0021)
+
+Keel conduce el método: cada tarea que se trabaja tiene una etapa (`brief`,
+`design`, `implement`, `review`, `close`) y una ceremonia (`direct` o
+`formal`) que el agente declara al cerrar el brief.
+
+- **`task_flows`.** Guarda la etapa y la ceremonia. Además:
+  - `contract_sha256`: el hash del contrato congelado al aprobar el diseño.
+  - `baseline_json`: el resultado de la verificación al entrar a
+    implementación, contra el que se mide el delta-verde.
+  - `last_verify_json`: la última verificación; cerrar la exige sin rojo nuevo.
+  - `started_by`: el humano que pidió trabajarla. Es el autor de las
+    transiciones que el trabajo directo hace en su nombre.
+- **`task_docs`.** Versiona los documentos de la tarea (brief, spec, diseño,
+  tareas, story, QA). El contenido vive en el almacén de artefactos (ADR-0012):
+  la fila guarda su referencia, que cuenta para no purgarlo. Es append-only:
+  una versión nueva es otra fila.
+- **`project_profiles`.** Guarda lo que Keel detecta del proyecto y el humano
+  confirma: comando de verificación, ramas, rutas generadas, canon e
+  invariantes.
+
+```sql
+-- migración: 0012-flujo-de-la-tarea
+CREATE TABLE task_flows (
+    work_item_id TEXT PRIMARY KEY NOT NULL REFERENCES work_items(id),
+    stage TEXT NOT NULL CHECK (stage IN ('brief', 'design', 'implement', 'review', 'close')),
+    ceremony TEXT CHECK (ceremony IS NULL OR ceremony IN ('direct', 'formal')),
+    ceremony_reason TEXT,
+    contract_sha256 TEXT,
+    baseline_json TEXT CHECK (baseline_json IS NULL OR json_valid(baseline_json)),
+    last_verify_json TEXT CHECK (last_verify_json IS NULL OR json_valid(last_verify_json)),
+    started_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE task_docs (
+    id TEXT PRIMARY KEY NOT NULL,
+    work_item_id TEXT NOT NULL REFERENCES work_items(id),
+    kind TEXT NOT NULL CHECK (kind IN ('brief', 'spec', 'design', 'tasks', 'story', 'qa')),
+    version INTEGER NOT NULL CHECK (version >= 1),
+    artifact_ref TEXT NOT NULL,
+    sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+    size INTEGER NOT NULL CHECK (size >= 0),
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (work_item_id, kind, version)
+);
+
+CREATE TABLE project_profiles (
+    project_id TEXT PRIMARY KEY NOT NULL REFERENCES projects(id),
+    profile_json TEXT NOT NULL CHECK (json_valid(profile_json)),
+    confirmed_by TEXT,
+    confirmed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+```
