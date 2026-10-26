@@ -18,7 +18,30 @@ import { generateKeyPairSync, randomBytes } from "node:crypto"
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
-import { bwrapArgs, bwrapPath, type SandboxSpec } from "../../../packages/daemon/src/sandbox.js"
+
+/** Copia de `bwrapArgs` de packages/daemon/src/sandbox.ts (ADR-0018 §3), para no cruzar paquetes. */
+type SandboxSpec = { writable: string[]; hidden: string[]; reopened: string[] }
+function bwrapArgs(spec: SandboxSpec): string[] {
+  const bind = (p: string) => (existsSync(p) ? ["--bind", p, p] : [])
+  return [
+    "--ro-bind",
+    "/",
+    "/",
+    "--dev",
+    "/dev",
+    "--proc",
+    "/proc",
+    "--tmpfs",
+    "/tmp",
+    ...spec.hidden.flatMap((p) => ["--tmpfs", p]),
+    ...spec.writable.flatMap(bind),
+    ...spec.reopened.flatMap(bind),
+    "--unshare-pid",
+    "--die-with-parent",
+    "--",
+  ]
+}
+const bwrapPath = () => Bun.which("bwrap")
 
 const out: Record<string, unknown> = {}
 const say = (k: string, v: unknown) => {
