@@ -171,8 +171,8 @@ export function envFromAlias(alias: string): {
 /** Los `Host` sin comodines de la config (sin seguir `Include`). */
 export function hostAliases(config: string): string[] {
   const out: string[] = []
-  for (const line of config.split("\n")) {
-    const m = /^\s*Host\s+(.+)$/i.exec(line)
+  for (const line of config.split(/\r?\n/)) {
+    const m = /^\s*Host\s+(.+?)\s*$/i.exec(line)
     if (!m) continue
     for (const a of (m[1] as string).split(/\s+/))
       if (a && !/[*?!]/.test(a) && !out.includes(a)) out.push(a)
@@ -195,8 +195,9 @@ export async function importSshConfig(
     const r = await spawnText([o.ssh ?? "ssh", "-G", "-F", file, alias])
     if (r.code !== 0) continue
     const opts = new Map<string, string[]>()
-    for (const l of r.out.split("\n")) {
-      const [k, ...v] = l.split(" ")
+    // En Windows `ssh -G` termina las líneas con CRLF.
+    for (const l of r.out.split(/\r?\n/)) {
+      const [k, ...v] = l.trim().split(" ")
       if (!k) continue
       opts.set(k, [...(opts.get(k) ?? []), v.join(" ")])
     }

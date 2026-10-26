@@ -129,7 +129,8 @@ function assertNoLeak(dir: string, daemon: Daemon, secret: string) {
     expect(readFileSync(f).includes(Buffer.from(secret))).toBe(false)
 }
 
-describe("ADR-0025: conexiones con el vault", () => {
+// El ssh doble es un script de bash y el ssh-agent de Keel es POSIX: en Windows no corren.
+describe.skipIf(process.platform === "win32")("ADR-0025: conexiones con el vault", () => {
   test("password: el vault entrega la contraseña por askpass y la salida sale redactada", async () => {
     const { dir, daemon, add, run, allow } = await boot()
     expect(await daemon.vault.open()).toBe("unlocked")
@@ -276,7 +277,8 @@ describe("ADR-0025: conexiones con el vault", () => {
   }, 30_000)
 })
 
-describe("ADR-0025 §7: el alcance de una aprobación", () => {
+// El ssh doble es un script de bash y el ssh-agent de Keel es POSIX: en Windows no corren.
+describe.skipIf(process.platform === "win32")("ADR-0025 §7: el alcance de una aprobación", () => {
   test("«esta tarea» deja de preguntar en esa tarea; «este proyecto» en prod se rechaza", async () => {
     const { daemon, human, add, run } = await boot()
     await add({ name: "staging-x", environment: "staging", auth_method: "agent" })
@@ -325,39 +327,45 @@ describe("ADR-0025 §7: el alcance de una aprobación", () => {
   }, 30_000)
 })
 
-describe("ADR-0026: en producción se pregunta y se puede quitar asumiendo el riesgo", () => {
-  test("sin escribir el nombre no se quita; con el nombre, corre sin preguntar y queda registrado", async () => {
-    const { add, allow, run, events } = await boot()
-    const c = await add({ name: "prod-casamatte", environment: "prod", auth_method: "agent" })
-    expect(c.operations[0]?.effective).toBe("ask")
-    const noName = await allow(c.id).catch((e: Error) => e.message)
-    expect(String(noName)).toContain("escribe el nombre de la conexión")
-    const wrong = await allow(c.id, { risk_confirm: "prod-casamat" }).catch((e: Error) => e.message)
-    expect(String(wrong)).toContain("escribe el nombre")
-    const ok = await allow(c.id, { risk_confirm: "prod-casamatte" })
-    expect(ok.operations[0]?.effective).toBe("auto")
-    expect(ok.operations[0]?.risk_accepted_at).toBeTruthy()
-    const r = await run("prod-casamatte", "docker compose up -d")
-    expect(r.output).toContain("corrió: docker compose up -d")
-    const accepted = events().filter((e) => e.kind === "grant.risk_accepted")
-    expect(accepted).toHaveLength(1)
-    expect(JSON.parse(accepted[0]?.payload_json ?? "{}").actor.kind).toBe("human")
-  }, 30_000)
+// El ssh doble es un script de bash y el ssh-agent de Keel es POSIX: en Windows no corren.
+describe.skipIf(process.platform === "win32")(
+  "ADR-0026: en producción se pregunta y se puede quitar asumiendo el riesgo",
+  () => {
+    test("sin escribir el nombre no se quita; con el nombre, corre sin preguntar y queda registrado", async () => {
+      const { add, allow, run, events } = await boot()
+      const c = await add({ name: "prod-casamatte", environment: "prod", auth_method: "agent" })
+      expect(c.operations[0]?.effective).toBe("ask")
+      const noName = await allow(c.id).catch((e: Error) => e.message)
+      expect(String(noName)).toContain("escribe el nombre de la conexión")
+      const wrong = await allow(c.id, { risk_confirm: "prod-casamat" }).catch(
+        (e: Error) => e.message,
+      )
+      expect(String(wrong)).toContain("escribe el nombre")
+      const ok = await allow(c.id, { risk_confirm: "prod-casamatte" })
+      expect(ok.operations[0]?.effective).toBe("auto")
+      expect(ok.operations[0]?.risk_accepted_at).toBeTruthy()
+      const r = await run("prod-casamatte", "docker compose up -d")
+      expect(r.output).toContain("corrió: docker compose up -d")
+      const accepted = events().filter((e) => e.kind === "grant.risk_accepted")
+      expect(accepted).toHaveLength(1)
+      expect(JSON.parse(accepted[0]?.payload_json ?? "{}").actor.kind).toBe("human")
+    }, 30_000)
 
-  test("el agente no puede pedir quitar la pregunta en prod", async () => {
-    const { agent, add } = await boot()
-    await add({ name: "prod-db", environment: "prod", auth_method: "agent" })
-    const r = await agent
-      .call("setup.request", {
-        ...meta(),
-        kind: "grant",
-        why: "para no preguntar",
-        proposal: { connection: "prod-db", operation: "command.run", policy: "auto" },
-      })
-      .catch((e: Error) => e.message)
-    expect(String(r)).toContain("decisión del humano")
-  })
-})
+    test("el agente no puede pedir quitar la pregunta en prod", async () => {
+      const { agent, add } = await boot()
+      await add({ name: "prod-db", environment: "prod", auth_method: "agent" })
+      const r = await agent
+        .call("setup.request", {
+          ...meta(),
+          kind: "grant",
+          why: "para no preguntar",
+          proposal: { connection: "prod-db", operation: "command.run", policy: "auto" },
+        })
+        .catch((e: Error) => e.message)
+      expect(String(r)).toContain("decisión del humano")
+    })
+  },
+)
 
 describe("ADR-0025: importar y llaves", () => {
   test("importa los Host de ~/.ssh/config con el entorno por prefijo, sin leer llaves", async () => {

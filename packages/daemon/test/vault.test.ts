@@ -8,14 +8,19 @@ import { memoryKeyStore, noKeyStore } from "../src/vault/keystore.ts"
 import { Vault, VaultError } from "../src/vault/vault.ts"
 
 const dirs: string[] = []
+const stores: { db: { close: () => void } }[] = []
 afterEach(() => {
+  // Windows no deja borrar un archivo abierto: primero se cierra la base.
+  for (const s of stores.splice(0)) s.db.close()
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 function store() {
   const dir = mkdtempSync(join(tmpdir(), "keel-vault-"))
   dirs.push(dir)
   const path = join(dir, "keel.sqlite")
-  return { s: openStore(path), path }
+  const s = openStore(path)
+  stores.push(s)
+  return { s, path }
 }
 const SENTINEL = "centinela-7f3a-no-debe-verse"
 
