@@ -312,6 +312,17 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       () => client.call("resources.list", {}),
     ),
     tool(
+      "setup_request",
+      "Pide al humano algo que le falta al proyecto para hacer la tarea: una conexión (SSH, base de datos, Terraform), un permiso sobre una conexión, un plugin o un cambio del perfil. Propón lo concreto que encontraste (tipo, nombre, entorno, host, usuario, puerto, operación) y en evidence de dónde lo sacaste. Nunca pases secretos: el humano los guarda en el vault de Keel. Espera su respuesta: te dice qué quedó listo.",
+      z.object({
+        kind: z.enum(["connection", "grant", "plugin", "profile"]),
+        why: z.string().min(1),
+        proposal: z.record(z.string(), z.unknown()),
+        evidence: z.string().optional(),
+      }),
+      (a) => client.call("setup.request", { ...mutation(), ...a }),
+    ),
+    tool(
       "db_schema",
       "Esquema de una base de datos del proyecto (tablas y columnas).",
       z.object({ connection: z.string() }),
@@ -342,7 +353,7 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
     ),
     tool(
       "ssh_run",
-      "Ejecuta un comando en un servidor del proyecto por SSH (con las llaves del usuario, nunca expuestas). Puede requerir aprobación.",
+      "Ejecuta un comando en un servidor del proyecto por SSH. Keel entra con la credencial de la conexión (del vault o del agente SSH del humano), nunca expuesta, y redacta la salida. En producción le pregunta al humano.",
       z.object({ connection: z.string(), command: z.string().min(1) }),
       (a) =>
         client.call("resources.execute", {

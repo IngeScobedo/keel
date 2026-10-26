@@ -16,6 +16,7 @@ import { Markdown } from "./Markdown.js"
 import { GateCard, MethodRow } from "./MethodCards.js"
 import type { Run } from "./model.js"
 import { RunLedger } from "./RunLedger.js"
+import { SetupCard } from "./SetupCard.js"
 import { type Density, ExploreGroup, isExplore, StoryLine, ToolCard } from "./ToolCards.js"
 import { Empty } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -215,7 +216,8 @@ type LayoutRow =
 
 /** ¿Hay que mostrarla entera aunque la densidad sea «Historia»? */
 function needsYou(item: ChatItem): boolean {
-  if (item.kind === "approval" && item.tool === "stage.gate") return true
+  if (item.kind === "approval" && (item.tool === "stage.gate" || item.tool === "setup.request"))
+    return true
   if (item.kind === "approval") return item.decision === null || QUESTIONS.has(item.tool)
   if (item.kind === "tool")
     return (item.approval !== null && item.approval.decision === null) || QUESTIONS.has(item.name)
@@ -378,6 +380,7 @@ function Pending({
   const active = a.decision === null && a.approval_id === firstPending
   const c = call ? { call } : {}
   if (a.tool === "stage.gate") return <GateCard a={a} active={active} {...c} />
+  if (a.tool === "setup.request") return <SetupCard a={a} active={active} {...c} />
   if (a.tool === "AskUserQuestion")
     return <QuestionCard a={a} active={active} agent={agent} {...c} />
   if (a.tool === "ExitPlanMode") return <PlanCard a={a} active={active} {...c} />

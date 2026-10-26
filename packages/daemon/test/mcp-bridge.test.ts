@@ -131,6 +131,7 @@ describe("ADR-0009: puente keel mcp", () => {
       "project_profile",
       "context_search",
       "resources_list",
+      "setup_request",
       "db_schema",
       "db_query",
       "ssh_run",

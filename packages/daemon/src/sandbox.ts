@@ -5,6 +5,9 @@
  * la carpeta del socket humano y el estado de Keel se tapan con un `tmpfs`, y
  * encima se montan sólo la puerta de agentes y la carpeta del token del run.
  *
+ * ADR-0025 §10: también se tapan `$XDG_RUNTIME_DIR` (el bus de D-Bus y con él el
+ * llavero), `~/.ssh` y el ssh-agent del humano (docs/reviews/2026-10-26-spike-vault-broker.md).
+ *
  * Medido (docs/reviews/2026-10-23-sandbox-socket-humano.md): una raíz de solo
  * lectura no impide `connect()` al socket; taparlo sí. La red no se corta: el
  * proveedor la necesita para hablar con su API, y bubblewrap no filtra por
@@ -20,6 +23,11 @@ export type SandboxSpec = {
   hidden: string[]
   /** Montados encima de lo tapado: puerta de agentes y carpeta del token. */
   reopened: string[]
+  /**
+   * ADR-0025 §10: variables que la shell del agente no hereda (el ssh-agent y el bus
+   * de D-Bus del humano); sus rutas además están tapadas.
+   */
+  unsetenv?: string[]
 }
 
 /** `bwrap` del sistema, o null si no hay (otra plataforma o sin instalar). */
@@ -50,6 +58,7 @@ export function bwrapArgs(
     ...spec.hidden.flatMap((p) => ["--tmpfs", p]),
     ...spec.writable.flatMap(bind),
     ...spec.reopened.flatMap(bind),
+    ...(spec.unsetenv ?? []).flatMap((v) => ["--unsetenv", v]),
     // El agente no ve los procesos de fuera (ni `/proc/<daemon>/root`) y muere con su padre.
     "--unshare-pid",
     "--die-with-parent",

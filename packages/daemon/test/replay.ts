@@ -668,3 +668,78 @@ export function featureQuery(daemon: Daemon): QueryFn {
     }) as never
   }
 }
+
+/**
+ * ADR-0025 §6: el agente encuentra que el repo despliega por SSH, pide la conexión con
+ * `setup_request` y espera; cuando el humano la guarda, dice qué quedó listo.
+ */
+export function setupQuery(daemon: Daemon): QueryFn {
+  return ({ options }) => {
+    const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
+    const session = `s-setup-${runId}`
+    let n = 0
+    const say = (text: string) =>
+      ({
+        type: "assistant",
+        uuid: `u-s-${runId}-${++n}`,
+        session_id: session,
+        parent_tool_use_id: null,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }) as unknown as SDKMessage
+    const run = (async function* () {
+      const row = daemon.repo.getRun(runId)
+      if (!row) return
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: session,
+        model: "claude-opus-5-5",
+        uuid: `u-s-init-${runId}`,
+      } as unknown as SDKMessage
+      yield say(
+        "Este repo despliega por SSH: `infrastructure/scripts/deploy.sh` hace `ssh deploy@203.0.113.10`. No hay conexión a producción en Keel; te la pido.",
+      )
+      const { file } = daemon.agentTokens.issue({
+        run_id: runId,
+        project_id: row.project_id,
+        work_item_id: row.work_item_id,
+      })
+      const agent = await IpcClient.connect(daemon.agentServer.path)
+      await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+      const r = (await agent.call("setup.request", {
+        request_id: "r",
+        idempotency_key: `setup-${runId}`,
+        kind: "connection",
+        why: "Para desplegar necesito una conexión SSH a producción.",
+        proposal: {
+          type: "ssh",
+          name: "prod-ssh",
+          environment: "prod",
+          host: "203.0.113.10",
+          user: "deploy",
+          port: 22,
+        },
+        evidence: "infrastructure/scripts/deploy.sh:12",
+      })) as { state: string; message: string }
+      agent.close()
+      yield say(
+        r.state === "approved" ? `Listo: ${r.message}.` : `No la configuraste: ${r.message}`,
+      )
+      yield {
+        type: "result",
+        subtype: "success",
+        uuid: `u-s-res-${runId}`,
+        session_id: session,
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.003,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      } as unknown as SDKMessage
+    })()
+    return Object.assign(run, {
+      setPermissionMode: async () => {},
+      setModel: async () => {},
+      applyFlagSettings: async () => {},
+    }) as never
+  }
+}

@@ -3601,3 +3601,315 @@ button.rc-ledger-row:hover {
   align-items: flex-start;
   font-size: 12px;
 }
+
+/* ADR-0025: conexiones como en Termius. */
+.conn-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.conn-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.conn-list {
+  width: 320px;
+  border-right: 1px solid var(--color-border-subtle);
+  overflow: auto;
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conn-list .search-field {
+  margin: 0 12px 4px;
+}
+.conn-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 12px 2px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.env-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-status-succeeded);
+}
+.env-dot.env-prod {
+  background: var(--color-status-failed);
+}
+.env-dot.env-staging {
+  background: var(--color-status-waiting-human);
+}
+.conn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: none;
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+  font-size: 12px;
+}
+.conn-row:hover {
+  background: var(--color-surface-hover);
+}
+.conn-row[aria-current="true"] {
+  background: var(--color-surface-raised);
+  border-left-color: var(--color-accent-default);
+}
+.conn-row-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+}
+.method-badge {
+  font-size: 10px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+}
+.conn-detail {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 16px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.conn-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.conn-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.conn-card {
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.conn-card h3 {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.conn-card dl {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+.conn-card dt {
+  color: var(--color-text-tertiary);
+}
+.conn-card dd {
+  margin: 0;
+}
+.conn-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.conn-inline input {
+  flex: 1;
+  min-width: 160px;
+}
+.segmented.methods {
+  margin: 0;
+  gap: 0;
+}
+.segmented.methods > button {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 4px 12px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.segmented.methods > button[aria-pressed="true"] {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-default);
+}
+.conn-terminal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-border-default);
+  border-radius: var(--radius-md);
+}
+.key-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 11px;
+  background: var(--color-surface-sunken);
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+}
+.key-pub {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+.vault-banner {
+  display: flex;
+  gap: 10px;
+  margin: 10px 16px 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-status-waiting-human-bg);
+  border: 1px solid var(--color-status-waiting-human-border);
+}
+.vault-banner strong {
+  color: var(--color-status-waiting-human);
+}
+.vault-banner p {
+  margin: 2px 0 6px;
+}
+.vault-unlock {
+  display: flex;
+  gap: 6px;
+}
+.grant-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.grant-table td {
+  padding: 4px 6px 4px 0;
+}
+.risk-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--color-status-failed);
+}
+.import-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.import-table th {
+  text-align: left;
+  color: var(--color-text-tertiary);
+  font-weight: 500;
+}
+.import-table td,
+.import-table th {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.hostkey-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+}
+.risk-modal ul {
+  background: var(--color-status-failed-bg);
+  border-radius: var(--radius-md);
+  padding: 8px 8px 8px 26px;
+  font-size: 12px;
+}
+.risk-modal label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.conn-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.conn-form-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.conn-form-row label {
+  flex: 1;
+  min-width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prod-note {
+  font-size: 12px;
+  color: var(--color-status-failed);
+  margin: 0;
+}
+
+/* ADR-0025 §6: lo que pide el agente. */
+.rc-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-status-waiting-human-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+.rc-setup header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-status-waiting-human);
+}
+.rc-setup[data-state="approved"] {
+  border-color: var(--color-border-subtle);
+}
+.rc-setup p {
+  margin: 0;
+}
+.rc-setup-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+.rc-setup-kv > div {
+  display: contents;
+}
+.rc-setup-kv dt {
+  color: var(--color-text-tertiary);
+}
+.rc-setup-kv dd {
+  margin: 0;
+}
+.secret-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.secret-prompt .remember {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}

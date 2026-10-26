@@ -14,6 +14,7 @@ import { join } from "node:path"
 import { Daemon } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
 import { CONVERSATION_KEY } from "../../src/store/repo.ts"
+import { memoryKeyStore } from "../../src/vault/keystore.ts"
 import {
   chatQuery,
   conversationQuery,
@@ -21,6 +22,7 @@ import {
   firstPrompt,
   methodQuery,
   replayQuery,
+  setupQuery,
 } from "../replay.ts"
 
 const dir = mkdtempSync(join(tmpdir(), "keel-e2e-"))
@@ -46,6 +48,8 @@ const daemon: Daemon = new Daemon({
         : null
       if (task?.title.startsWith("feature") || parent?.title.startsWith("feature"))
         return featureQuery(daemon)(a)
+      // «desplegar…» pide una conexión con setup_request (ADR-0025 §6).
+      if (task?.title.startsWith("desplegar")) return setupQuery(daemon)(a)
       // La conversación del proyecto (ADR-0024) la contesta su propio guion.
       if (task?.dedupe_key === CONVERSATION_KEY) return conversationQuery(daemon)(a)
       return firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a)
@@ -53,6 +57,8 @@ const daemon: Daemon = new Daemon({
     binary: "/fake/claude",
   },
   mcpBridge: false,
+  // El vault con un llavero en memoria: las pruebas no tocan el llavero del sistema.
+  keystore: memoryKeyStore(),
   // Con KEEL_E2E_CODEX_OFF=1 arranca sin el flag: la suscripción se enciende desde la GUI.
   codex: { subscription_enabled: process.env.KEEL_E2E_CODEX_OFF !== "1" },
   codexDeps: {

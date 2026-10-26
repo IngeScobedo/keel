@@ -29,7 +29,7 @@ import { hasNativeShell } from "./client.js"
 import { demoDetails } from "./fixtures.js"
 import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
-import { LiveConnections } from "./LiveConnections.js"
+import { LiveConnections, type SetupPrefill } from "./LiveConnections.js"
 import { LiveInbox } from "./LiveInbox.js"
 import { LivePlugins } from "./LivePlugins.js"
 import { LiveProfile } from "./LiveProfile.js"
@@ -38,6 +38,8 @@ import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.j
 import { Permissions } from "./Permissions.js"
 import { ProjectConversation } from "./ProjectConversation.js"
 import { RunsList, RunView } from "./RunView.js"
+import { SecretPrompts } from "./SecretPrompts.js"
+import { SETUP_EVENT } from "./SetupCard.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
 import { Button, Hint, Modal } from "./ui.js"
 import { useWorkspace } from "./useWorkspace.js"
@@ -73,6 +75,19 @@ export function App() {
   const [paletteQuery, setPaletteQuery] = useState("")
   /** ADR-0024 §3: «preguntar al proyecto…» desde ⌘K. */
   const [question, setQuestion] = useState("")
+  /** ADR-0025 §6: lo que pidió el agente, para abrir el alta llena en Conexiones. */
+  const [setup, setSetup] = useState<SetupPrefill | null>(null)
+  useEffect(() => {
+    const on = (e: Event) => {
+      const d = (e as CustomEvent<SetupPrefill & { kind: string }>).detail
+      setSetup(
+        d.kind === "connection" ? { approval_id: d.approval_id, proposal: d.proposal } : null,
+      )
+      setPage("connections")
+    }
+    window.addEventListener(SETUP_EVENT, on)
+    return () => window.removeEventListener(SETUP_EVENT, on)
+  }, [])
   const [newTask, setNewTask] = useState(false)
   const [connection, setConnection] = useState(false)
   const [title, setTitle] = useState("")
@@ -490,7 +505,12 @@ export function App() {
         {page === "agents" && <ControlPlane demo={demo} />}
         {page === "connections" &&
           (workspace.mode === "live" ? (
-            <LiveConnections call={workspace.call} tick={workspace.inboxTick} />
+            <LiveConnections
+              call={workspace.call}
+              tick={workspace.inboxTick}
+              setup={setup}
+              onSetupDone={() => setSetup(null)}
+            />
           ) : (
             <Connections demo={demo} />
           ))}
@@ -549,6 +569,9 @@ export function App() {
         <span>{demo ? "$12.40 hoy · estimado · ejemplo" : formatCost()}</span>
         <span className="muted">{demo ? "pen.dev · 107 tokens" : workspace.mode}</span>
       </footer>
+      {workspace.mode === "live" && (
+        <SecretPrompts events={workspace.events} call={workspace.call} />
+      )}
       {palette && (
         <Modal title="Command palette" onClose={() => setPalette(false)}>
           <div className="palette-search">

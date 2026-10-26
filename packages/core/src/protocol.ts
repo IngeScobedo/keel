@@ -420,6 +420,10 @@ export type ConnectionType = keyof typeof CONNECTION_OPERATIONS
 /** Operaciones que nunca son `auto` en producción (ADR-0013 §4). */
 export const WRITE_OPERATIONS = ["query.write", "command.run", "iac.apply"] as const
 export const GrantPolicySchema = z.enum(["auto", "ask", "deny"])
+/** ADR-0025 §3: cómo entra una conexión, como en Termius. */
+export const AUTH_METHODS = ["agent", "file", "key", "password", "ask"] as const
+export const AuthMethodSchema = z.enum(AUTH_METHODS)
+export type AuthMethod = z.infer<typeof AuthMethodSchema>
 export const ConnectionViewSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -432,8 +436,57 @@ export const ConnectionViewSchema = z.object({
   /** Qué garantiza el servidor y qué sólo Keel (ADR-0013 §5). */
   guarantees: z.object({ server: z.string().nullable(), keel: z.string() }),
   operations: z.array(
-    z.object({ operation: z.string(), policy: GrantPolicySchema, effective: GrantPolicySchema }),
+    z.object({
+      operation: z.string(),
+      policy: GrantPolicySchema,
+      effective: GrantPolicySchema,
+      /** ADR-0026: el humano quitó la pregunta en producción asumiendo el riesgo. */
+      risk_accepted_at: z.string().nullable().optional(),
+    }),
   ),
+  /** ADR-0025 §3: cómo entra; null = la referencia de ADR-0013 (`secret_ref`). */
+  auth_method: AuthMethodSchema.nullable().optional(),
+  tags: z.array(z.string()).optional(),
+  /** La huella aceptada del host (SSH), si la hay. */
+  host_key: z.object({ fingerprint: z.string(), type: z.string() }).nullable().optional(),
+  /** Lo que el vault guarda para esta conexión: nunca el valor. */
+  secret: z
+    .object({
+      kind: z.string(),
+      public_key: z.string().nullable(),
+      last_used_at: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
+})
+export const VaultStatusSchema = z.object({
+  state: z.enum(["unlocked", "locked", "uninitialized"]),
+  keystore: z.enum(["keychain", "passphrase", "none"]),
+  keychain: z.object({
+    available: z.boolean(),
+    tool: z.string().nullable(),
+    hint: z.string().nullable(),
+  }),
+  items: z.number().int(),
+})
+export const ImportedHostSchema = z.object({
+  alias: z.string(),
+  host: z.string(),
+  user: z.string().nullable(),
+  port: z.number().int(),
+  proxy_jump: z.string().nullable(),
+  identity_file: z.string().nullable(),
+  environment: z.enum(["dev", "staging", "prod"]).nullable(),
+  why: z.string(),
+})
+/** ADR-0025 §6: lo que el agente puede pedir; nunca un secreto. */
+export const SetupRequestSchema = z.object({
+  kind: z.enum(["connection", "grant", "plugin", "profile"]),
+  why: z.string().min(1).max(2_000),
+  /** Lo que propone: tipo, nombre, entorno, host, usuario, puerto, operación… sin secretos. */
+  proposal: z.record(z.string(), z.unknown()),
+  /** De dónde lo sacó: un archivo, un script, una línea. */
+  evidence: z.string().max(500).optional(),
 })
 export const PluginViewSchema = z.object({
   id: z.string(),
@@ -884,6 +937,10 @@ export const Methods = {
        * solas cuando tienen QA PASS, verificación sin rojo nuevo y diff en su frontera.
        */
       auto_integrate: z.boolean().optional(),
+      /** ADR-0025 §6: lo que el humano dejó listo para una petición `setup.request`. */
+      setup_result: z
+        .object({ connection_id: z.string().optional(), note: z.string().max(500).optional() })
+        .optional(),
     }),
     result: z.object({
       approval_id: z.string(),
@@ -1073,8 +1130,141 @@ export const Methods = {
       secret_ref: z.string().optional(),
       secret_ref_ro: z.string().optional(),
       server_guarantee: z.string().optional(),
+      /** ADR-0025 §3: método de entrada. */
+      auth_method: AuthMethodSchema.optional(),
+      /**
+       * La contraseña (o la frase de la llave con `file`), que el daemon guarda en el
+       * vault. Sólo por la puerta humana; nunca va a un evento ni a un recibo.
+       */
+      secret_value: z.string().min(1).max(10_000).optional(),
+      tags: z.array(z.string().max(40)).max(20).optional(),
+      /** ADR-0025 §6: la petición del agente que esta alta resuelve. */
+      setup_request_id: z.string().optional(),
     }),
     result: ConnectionViewSchema,
+  },
+  /** ADR-0025: cambia el método, el secreto, el entorno o las etiquetas de una conexión. */
+  "connections.update": {
+    params: MutationMeta.extend({
+      connection_id: z.string(),
+      environment: z.enum(["dev", "staging", "prod"]).optional(),
+      auth_method: AuthMethodSchema.optional(),
+      secret_value: z.string().min(1).max(10_000).optional(),
+      /** Quita el secreto guardado (pasa a preguntar). */
+      forget_secret: z.boolean().optional(),
+      identity_file: z.string().optional(),
+      tags: z.array(z.string().max(40)).max(20).optional(),
+      server_guarantee: z.string().optional(),
+    }),
+    result: ConnectionViewSchema,
+  },
+  /** ADR-0025 §3: Keel genera una llave ed25519 en el vault y devuelve la pública. */
+  "connections.generate_key": {
+    params: MutationMeta.extend({
+      connection_id: z.string(),
+      command: z.string().max(500).optional(),
+      from: z.string().max(200).optional(),
+    }),
+    result: z.object({
+      connection: ConnectionViewSchema,
+      public_key: z.string(),
+      authorized_keys: z.string(),
+    }),
+  },
+  /** ADR-0025 §9: copia al vault una llave que el humano eligió. Keel no recorre ~/.ssh. */
+  "connections.import_key_file": {
+    params: MutationMeta.extend({ connection_id: z.string(), path: z.string().min(1) }),
+    result: ConnectionViewSchema,
+  },
+  /** ADR-0025 §3: los Host de ~/.ssh/config, con el entorno propuesto por prefijo. */
+  "connections.import_preview": {
+    params: z.object({}),
+    result: z.object({ hosts: z.array(ImportedHostSchema) }),
+  },
+  "connections.import": {
+    params: MutationMeta.extend({
+      hosts: z
+        .array(
+          ImportedHostSchema.pick({
+            alias: true,
+            host: true,
+            user: true,
+            port: true,
+            proxy_jump: true,
+            identity_file: true,
+          }).extend({ environment: z.enum(["dev", "staging", "prod"]) }),
+        )
+        .min(1)
+        .max(200),
+    }),
+    result: z.object({ connections: z.array(ConnectionViewSchema) }),
+  },
+  /** ADR-0025 §4: las llaves que presenta el host; aceptar una es decisión humana. */
+  "connections.host_keys": {
+    params: z.object({ connection_id: z.string() }),
+    result: z.object({
+      keys: z.array(z.object({ line: z.string(), fingerprint: z.string(), type: z.string() })),
+      accepted: z.object({ fingerprint: z.string(), type: z.string() }).nullable(),
+    }),
+  },
+  "connections.host_key_accept": {
+    params: MutationMeta.extend({ connection_id: z.string(), line: z.string().min(1) }),
+    result: ConnectionViewSchema,
+  },
+  /**
+   * ADR-0025 §5: lo que necesita `keel ssh <conexión>` para abrir la terminal del humano:
+   * argumentos y entorno de `ssh` (el agente de Keel, askpass con su token), y el aviso.
+   */
+  "connections.ssh_session": {
+    params: z.object({ connection: z.string() }),
+    result: z.object({
+      connection: ConnectionViewSchema,
+      args: z.array(z.string()),
+      env: z.record(z.string(), z.string()),
+      banner: z.string().nullable(),
+    }),
+  },
+  "vault.status": { params: z.object({}), result: VaultStatusSchema },
+  /** Sin llavero: la frase abre el vault (y lo crea la primera vez). */
+  "vault.unlock": {
+    params: MutationMeta.extend({ passphrase: z.string().min(8).max(1_000) }),
+    result: VaultStatusSchema,
+  },
+  /**
+   * El programa `keel askpass` pide una contraseña o una frase con el token que Keel
+   * le dio a ese `ssh`. `ask` = el valor no está guardado: pregúntale al humano.
+   */
+  "secrets.askpass": {
+    params: z.object({ token: z.string().min(16), prompt: z.string().max(1_000) }),
+    result: z.object({ value: z.string().nullable(), ask: z.boolean() }),
+  },
+  /** Lo que el humano escribió en su terminal (askpass), para recordarlo. */
+  "secrets.remember": {
+    params: MutationMeta.extend({
+      token: z.string().min(16),
+      value: z.string().min(1).max(10_000),
+      scope: z.enum(["session", "vault"]),
+    }),
+    result: z.object({ ok: z.literal(true) }),
+  },
+  /** La respuesta del humano a una pregunta de secreto del broker (método `ask`). */
+  "secrets.prompt_answer": {
+    params: MutationMeta.extend({
+      prompt_id: z.string(),
+      value: z.string().max(10_000).optional(),
+      cancel: z.boolean().optional(),
+      remember: z.enum(["once", "session", "vault"]).default("once"),
+    }),
+    result: z.object({ ok: z.literal(true) }),
+  },
+  /** ADR-0025 §6: el agente pide lo que le falta; el humano lo configura. */
+  "setup.request": {
+    params: MutationMeta.extend(SetupRequestSchema.shape),
+    result: z.object({
+      approval_id: z.string(),
+      state: z.enum(["approved", "denied", "expired"]),
+      message: z.string(),
+    }),
   },
   "connections.archive": {
     params: MutationMeta.extend({ connection_id: z.string() }),
@@ -1087,6 +1277,11 @@ export const Methods = {
       operation: z.string(),
       policy: GrantPolicySchema,
       expires_at: z.string().optional(),
+      /**
+       * ADR-0026: para quitar la pregunta en producción, el nombre de la conexión
+       * escrito por el humano.
+       */
+      risk_confirm: z.string().optional(),
     }),
     result: ConnectionViewSchema,
   },
@@ -1320,6 +1515,7 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "task_docs.list",
   "verify.run",
   "projects.profile_get",
+  "setup.request",
 ]
 
 /** El scope que exige cada método de agente; los demás no necesitan scope. */
@@ -1345,6 +1541,7 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "task_docs.list": "tasks:read",
   "verify.run": "tasks:write",
   "projects.profile_get": "tasks:read",
+  "setup.request": "resources:use",
 }
 
 /**

@@ -17,11 +17,16 @@
  *
  * Puente MCP para agentes (ADR-0009); lo lanza el proveedor de cada run:
  *   main.ts mcp    (lee KEEL_RUN_TOKEN_FILE y KEEL_SOCKET del entorno)
+ *
+ * La terminal del humano sobre una conexión del vault (ADR-0025 §5), como `sshx`:
+ *   main.ts ssh [conexión] [--socket ruta]
+ *   main.ts askpass <prompt>   (lo ejecuta ssh; lee KEEL_ASKPASS_TOKEN y KEEL_SOCKET)
  */
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { defaultArtifactsDir } from "./artifacts.js"
+import { askpassMain, sshMain } from "./cli-ssh.js"
 import { Daemon } from "./daemon.js"
 import { IpcClient } from "./ipc/client.js"
 import { defaultEndpoint } from "./ipc/endpoint.js"
@@ -87,7 +92,12 @@ function maintenance(command: string): void {
   }
 }
 
-if (import.meta.main && process.argv[2] === "mcp") {
+if (import.meta.main && process.argv[2] === "askpass") {
+  process.exit(await askpassMain(process.argv[3] ?? ""))
+} else if (import.meta.main && process.argv[2] === "ssh") {
+  const name = process.argv[3]?.startsWith("--") ? undefined : process.argv[3]
+  process.exit(await sshMain(name, arg("--socket") ?? defaultPaths().socketPath))
+} else if (import.meta.main && process.argv[2] === "mcp") {
   await runBridge()
 } else if (import.meta.main && (process.argv[2] === "backup" || process.argv[2] === "restore")) {
   maintenance(process.argv[2])

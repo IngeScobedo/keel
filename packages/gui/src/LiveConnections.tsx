@@ -1,13 +1,40 @@
-import type { ConnectionViewSchema } from "@keel/core"
-import { Database, Plus, Server, ShieldAlert, Trash2 } from "lucide-react"
+/**
+ * Conexiones del proyecto (ADR-0025, ADR-0026), como en Termius: cada una con su método
+ * de entrada (`agent`, `file`, `key`, `password`, `ask`). El vault guarda los secretos;
+ * esta pantalla nunca los muestra ni los recibe de vuelta. En producción ejecutar
+ * pregunta; quitar la pregunta pide escribir el nombre de la conexión.
+ */
+import type { ConnectionViewSchema, ImportedHostSchema, VaultStatusSchema } from "@keel/core"
+import {
+  Copy,
+  Download,
+  Fingerprint,
+  KeyRound,
+  Lock,
+  Plus,
+  Search,
+  ShieldAlert,
+  Terminal,
+  Trash2,
+} from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useState } from "react"
 import { mutationMeta } from "./client.js"
-import { Button, Empty, Hint } from "./ui.js"
+import { Button, Empty, Hint, Modal } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
 type Connection = ReturnType<typeof ConnectionViewSchema.parse>
+type VaultStatus = ReturnType<typeof VaultStatusSchema.parse>
+type ImportedHost = ReturnType<typeof ImportedHostSchema.parse>
 type Kind = Connection["type"]
+type Env = Connection["environment"]
+type Method = "agent" | "file" | "key" | "password" | "ask"
+
+/** Lo que propuso el agente con `setup_request` (ADR-0025 §6), para abrir el alta llena. */
+export type SetupPrefill = {
+  approval_id: string
+  proposal: Record<string, unknown>
+}
 
 const FIELDS: Record<Kind, { key: string; label: string }[]> = {
   sqlite: [{ key: "path", label: "Ruta del archivo" }],
@@ -21,29 +48,68 @@ const FIELDS: Record<Kind, { key: string; label: string }[]> = {
   ssh: [
     { key: "host", label: "Host" },
     { key: "user", label: "Usuario" },
-    { key: "allowed_commands", label: "Comandos permitidos (separados por coma)" },
+    { key: "port", label: "Puerto" },
+    { key: "proxy_jump", label: "Salto (ProxyJump)" },
   ],
   terraform: [{ key: "dir", label: "Carpeta de Terraform" }],
 }
+const METHODS: Record<Kind, Method[]> = {
+  ssh: ["agent", "file", "key", "password", "ask"],
+  postgres: ["password", "ask"],
+  sqlite: [],
+  terraform: [],
+}
+const METHOD_HINT: Record<Method, string> = {
+  agent: "Usa tu ssh-agent. Keel no guarda nada.",
+  file: "Tu llave de ~/.ssh: la lee ssh, no Keel. Si tiene frase, Keel se la da a ssh (guárdala aquí o te la pide).",
+  key: "Una llave de Keel en el vault. Recomendada para el agente: limítala en el servidor con command= y from=.",
+  password: "La contraseña vive cifrada en el vault y nunca la ve el agente.",
+  ask: "No se guarda: se pide cada vez. Al contestar puedes recordarla.",
+}
 const WRITE = new Set(["query.write", "command.run", "iac.apply"])
+const ENVS: Env[] = ["prod", "staging", "dev"]
 
-/**
- * Conexiones del proyecto (ADR-0013): referencias a secretos, nunca valores;
- * permiso por operación; qué garantiza el servidor y qué sólo Keel.
- */
-export function LiveConnections({ call, tick }: { call: Call; tick: number }) {
+function target(c: Connection): string {
+  const cfg = c.config
+  if (c.type === "sqlite") return String(cfg.path ?? "")
+  if (c.type === "terraform") return String(cfg.dir ?? "")
+  const host = String(cfg.host ?? "")
+  const user = cfg.user ? `${cfg.user}@` : ""
+  const port = cfg.port ? `:${cfg.port}` : ""
+  return c.type === "postgres" && cfg.database
+    ? `${user}${host}${port}/${cfg.database}`
+    : `${user}${host}${port}`
+}
+
+export function LiveConnections({
+  call,
+  tick,
+  setup,
+  onSetupDone,
+}: {
+  call: Call
+  tick: number
+  setup?: SetupPrefill | null
+  onSetupDone?: () => void
+}) {
   const [items, setItems] = useState<Connection[]>([])
+  const [vault, setVault] = useState<VaultStatus | null>(null)
+  const [selected, setSelected] = useState("")
+  const [query, setQuery] = useState("")
   const [error, setError] = useState("")
-  const [name, setName] = useState("")
-  const [type, setType] = useState<Kind>("sqlite")
-  const [env, setEnv] = useState<"dev" | "staging" | "prod">("dev")
-  const [config, setConfig] = useState<Record<string, string>>({})
-  const [secret, setSecret] = useState("")
-  const [secretRo, setSecretRo] = useState("")
-  const [guarantee, setGuarantee] = useState("")
+  const [modal, setModal] = useState<
+    | null
+    | { kind: "new"; prefill?: SetupPrefill }
+    | { kind: "import" }
+    | { kind: "hostkeys"; conn: Connection }
+    | { kind: "risk"; conn: Connection; operation: string }
+    | { kind: "key"; line: string; pub: string }
+  >(null)
   const refresh = useCallback(async () => {
     try {
-      setItems((await call("connections.list", {})).connections)
+      const [c, v] = await Promise.all([call("connections.list", {}), call("vault.status", {})])
+      setItems(c.connections)
+      setVault(v)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -52,6 +118,9 @@ export function LiveConnections({ call, tick }: { call: Call; tick: number }) {
   useEffect(() => {
     void refresh()
   }, [refresh, tick])
+  useEffect(() => {
+    if (setup) setModal({ kind: "new", prefill: setup })
+  }, [setup])
   async function act(work: () => Promise<unknown>) {
     setError("")
     try {
@@ -61,190 +130,1008 @@ export function LiveConnections({ call, tick }: { call: Call; tick: number }) {
     }
     await refresh()
   }
-  function add(e: FormEvent) {
-    e.preventDefault()
-    const cfg: Record<string, unknown> = {}
-    for (const f of FIELDS[type]) {
-      const v = config[f.key]?.trim()
-      if (!v) continue
-      cfg[f.key] =
-        f.key === "allowed_commands"
-          ? v.split(",").map((x) => x.trim())
-          : f.key === "port"
-            ? Number(v)
-            : v
-    }
-    void act(async () => {
-      await call("connections.add", {
-        ...mutationMeta(),
-        name: name.trim(),
-        type,
-        environment: env,
-        config: cfg,
-        ...(secret.trim() ? { secret_ref: secret.trim() } : {}),
-        ...(secretRo.trim() ? { secret_ref_ro: secretRo.trim() } : {}),
-        ...(guarantee.trim() ? { server_guarantee: guarantee.trim() } : {}),
-      })
-      setName("")
-      setConfig({})
-      setSecret("")
-      setSecretRo("")
-      setGuarantee("")
-    })
-  }
+  const current = items.find((c) => c.id === selected) ?? items[0]
+  const visible = items.filter((c) =>
+    `${c.name} ${target(c)} ${(c.tags ?? []).join(" ")}`
+      .toLowerCase()
+      .includes(query.toLowerCase()),
+  )
   return (
-    <div className="page">
+    <div className="page conn-page">
       <div className="toolbar">
         <h1>Conexiones</h1>
-        <span className="mono muted">{items.length} del proyecto</span>
+        <span className="mono muted">
+          {items.length} conexiones · vault {vaultLabel(vault)}
+        </span>
+        <div className="toolbar-spacer" />
+        <Button icon={Download} onClick={() => setModal({ kind: "import" })}>
+          Importar de ~/.ssh/config
+        </Button>
+        <Button variant="primary" icon={Plus} onClick={() => setModal({ kind: "new" })}>
+          Nueva conexión
+        </Button>
       </div>
-      <div className="padded connections">
-        {error && (
-          <p className="error-banner" role="alert">
-            {error}
+      {error && (
+        <p className="error-banner" role="alert">
+          {error}
+        </p>
+      )}
+      {vault && vault.state !== "unlocked" && (
+        <VaultBanner vault={vault} call={call} onDone={() => void refresh()} />
+      )}
+      <div className="conn-body">
+        <aside className="conn-list" aria-label="Conexiones">
+          <label className="search-field">
+            <Search size={14} />
+            <input
+              aria-label="Buscar conexión"
+              placeholder="Buscar host, usuario o etiqueta…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </label>
+          {ENVS.map((env) => {
+            const rows = visible.filter((c) => c.environment === env)
+            if (rows.length === 0) return null
+            return (
+              <div key={env} className="conn-group">
+                <h3>
+                  <i className={`env-dot env-${env}`} /> {env.toUpperCase()}
+                </h3>
+                {rows.map((c) => (
+                  <button
+                    type="button"
+                    key={c.id}
+                    className="conn-row"
+                    aria-current={current?.id === c.id ? "true" : undefined}
+                    onClick={() => setSelected(c.id)}
+                  >
+                    <span className="conn-row-top">
+                      <strong>{c.name}</strong>
+                      <span className="method-badge mono">{c.auth_method ?? c.type}</span>
+                    </span>
+                    <span className="mono muted">
+                      {target(c)} · {c.type}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )
+          })}
+          {items.length === 0 && (
+            <Hint>
+              Sin conexiones: importa tus hosts o crea una. El agente también puede pedírtela.
+            </Hint>
+          )}
+        </aside>
+        <section className="conn-detail" data-testid="connection">
+          {current ? (
+            <Detail
+              key={current.id}
+              c={current}
+              call={call}
+              act={act}
+              onRisk={(operation) => setModal({ kind: "risk", conn: current, operation })}
+              onHostKeys={() => setModal({ kind: "hostkeys", conn: current })}
+              onKey={(line, pub) => setModal({ kind: "key", line, pub })}
+            />
+          ) : (
+            <Empty title="Elige una conexión" />
+          )}
+        </section>
+      </div>
+      {modal?.kind === "new" && (
+        <NewConnection
+          call={call}
+          {...(modal.prefill ? { prefill: modal.prefill } : {})}
+          onClose={() => {
+            setModal(null)
+            if (modal.prefill) onSetupDone?.()
+          }}
+          onCreated={async (c, key) => {
+            setSelected(c.id)
+            await refresh()
+            if (modal.prefill) onSetupDone?.()
+            setModal(key ? { kind: "key", line: key.line, pub: key.pub } : null)
+          }}
+        />
+      )}
+      {modal?.kind === "import" && (
+        <ImportModal
+          call={call}
+          existing={new Set(items.map((c) => c.name))}
+          onClose={() => setModal(null)}
+          onDone={() => {
+            setModal(null)
+            void refresh()
+          }}
+        />
+      )}
+      {modal?.kind === "hostkeys" && (
+        <HostKeysModal
+          conn={modal.conn}
+          call={call}
+          onClose={() => {
+            setModal(null)
+            void refresh()
+          }}
+        />
+      )}
+      {modal?.kind === "risk" && (
+        <RiskModal
+          conn={modal.conn}
+          operation={modal.operation}
+          onClose={() => setModal(null)}
+          onConfirm={(typed) =>
+            act(() =>
+              call("grants.set", {
+                ...mutationMeta(),
+                connection_id: modal.conn.id,
+                operation: modal.operation,
+                policy: "auto",
+                risk_confirm: typed,
+              }),
+            ).then(() => setModal(null))
+          }
+        />
+      )}
+      {modal?.kind === "key" && (
+        <Modal title="Llave generada por Keel · ed25519" onClose={() => setModal(null)}>
+          <p className="muted">
+            La privada vive sólo en el vault. Agrega esta línea al <code>authorized_keys</code> del
+            usuario en el servidor:
           </p>
+          <pre className="key-line" data-testid="authorized-keys">
+            {modal.line}
+          </pre>
+          <Hint>
+            command= limita la llave a ese script y from= a esta máquina: es la garantía en el
+            servidor que el agente no puede saltarse (ADR-0013 §5).
+          </Hint>
+          <div className="modal-actions">
+            <Button icon={Copy} onClick={() => void navigator.clipboard?.writeText(modal.line)}>
+              Copiar línea
+            </Button>
+            <Button onClick={() => void navigator.clipboard?.writeText(modal.pub)}>
+              Copiar sólo la pública
+            </Button>
+            <Button variant="primary" onClick={() => setModal(null)}>
+              Listo
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+function vaultLabel(v: VaultStatus | null): string {
+  if (!v) return "…"
+  if (v.state === "unlocked")
+    return v.keystore === "keychain" ? "desbloqueado con tu llavero" : "abierto con su frase"
+  return v.state === "locked" ? "bloqueado" : "sin crear"
+}
+
+/** Sin llavero (o sin la llave en él): la frase abre el vault, o lo crea la primera vez. */
+function VaultBanner({
+  vault,
+  call,
+  onDone,
+}: {
+  vault: VaultStatus
+  call: Call
+  onDone: () => void
+}) {
+  const [phrase, setPhrase] = useState("")
+  const [error, setError] = useState("")
+  const first = vault.state === "uninitialized"
+  async function open(e: FormEvent) {
+    e.preventDefault()
+    setError("")
+    try {
+      await call("vault.unlock", { ...mutationMeta(), passphrase: phrase })
+      setPhrase("")
+      onDone()
+    } catch (x) {
+      setError(x instanceof Error ? x.message : String(x))
+    }
+  }
+  const keychainLost = vault.state === "locked" && vault.keystore === "keychain"
+  return (
+    <div className="vault-banner" data-testid="vault-banner">
+      <Lock size={15} />
+      <div>
+        <strong>
+          {keychainLost
+            ? "Bloqueado: la llave maestra no está en el llavero"
+            : first
+              ? "El vault aún no existe"
+              : "El vault está bloqueado"}
+        </strong>
+        <p className="muted">
+          {keychainLost
+            ? "¿Otra máquina o se borró del llavero? Los secretos no se pueden leer; las conexiones sin secreto siguen."
+            : (vault.keychain.hint ??
+              (first
+                ? "Elige una frase para crearlo; sin llavero, se abre con ella hasta cerrar Keel."
+                : "Escribe su frase para abrirlo hasta cerrar Keel."))}
+        </p>
+        {!keychainLost && (
+          <form onSubmit={(e) => void open(e)} className="vault-unlock">
+            <input
+              type="password"
+              aria-label="Frase del vault"
+              placeholder={first ? "Frase nueva (8+ caracteres)" : "Frase del vault"}
+              value={phrase}
+              onChange={(e) => setPhrase(e.target.value)}
+            />
+            <button type="submit" className="button primary" disabled={phrase.length < 8}>
+              {first ? "Crear vault" : "Abrir"}
+            </button>
+          </form>
         )}
-        {items.map((c) => (
-          <article key={c.id} className="connection" data-testid="connection">
-            <header className="section-header">
-              {c.type === "ssh" ? <Server size={14} /> : <Database size={14} />}
-              <strong>{c.name}</strong>
-              <span className="tag">{c.type}</span>
-              <span className={`tag env-${c.environment}`}>{c.environment}</span>
-              <span className="muted mono">
-                {c.has_secret ? "con credencial" : "sin credencial"}
-              </span>
-              {c.has_secret_ro && <span className="muted mono">· credencial de sólo lectura</span>}
+        {error && <p className="error">{error}</p>}
+      </div>
+    </div>
+  )
+}
+
+function Detail({
+  c,
+  call,
+  act,
+  onRisk,
+  onHostKeys,
+  onKey,
+}: {
+  c: Connection
+  call: Call
+  act: (work: () => Promise<unknown>) => Promise<void>
+  onRisk: (operation: string) => void
+  onHostKeys: () => void
+  onKey: (line: string, pub: string) => void
+}) {
+  const [secret, setSecret] = useState("")
+  const [identity, setIdentity] = useState(String(c.config.identity_file ?? ""))
+  const [keyPath, setKeyPath] = useState("")
+  const [guarantee, setGuarantee] = useState(c.guarantees.server ?? "")
+  const [terminal, setTerminal] = useState(false)
+  const methods = METHODS[c.type]
+  const method = (c.auth_method ?? null) as Method | null
+  const update = (patch: Record<string, unknown>) =>
+    act(() => call("connections.update", { ...mutationMeta(), connection_id: c.id, ...patch }))
+  const cmd = `keel ssh ${c.name}`
+  return (
+    <>
+      <header className="conn-head">
+        <h2>{c.name}</h2>
+        <span className={`tag env-${c.environment}`}>{c.environment}</span>
+        <span className="tag">{c.type}</span>
+        <div className="toolbar-spacer" />
+        {c.type === "ssh" && method && (
+          <Button variant="primary" icon={Terminal} onClick={() => setTerminal((v) => !v)}>
+            Abrir terminal
+          </Button>
+        )}
+        {c.type === "ssh" && (
+          <Button icon={Fingerprint} onClick={onHostKeys}>
+            Huella
+          </Button>
+        )}
+        <Button
+          variant="ghost"
+          icon={Trash2}
+          aria-label={`Archivar ${c.name}`}
+          onClick={() =>
+            void act(() => call("connections.archive", { ...mutationMeta(), connection_id: c.id }))
+          }
+        />
+      </header>
+      {terminal && (
+        <div className="conn-terminal" data-testid="terminal-command">
+          <code>{cmd}</code>
+          <Button icon={Copy} onClick={() => void navigator.clipboard?.writeText(cmd)}>
+            Copiar
+          </Button>
+          <Hint>
+            Ábrelo en tu terminal: Keel prepara ssh con lo que tenga el vault y marca el entorno
+            {c.environment === "prod" ? " (fondo rojo y aviso de producción)" : ""}. La terminal
+            dentro de Keel llega con el host de PTY.
+          </Hint>
+        </div>
+      )}
+      <article className="conn-card">
+        <h3>Destino</h3>
+        <dl>
+          <dt>Destino</dt>
+          <dd className="mono">{target(c)}</dd>
+          {c.config.proxy_jump ? (
+            <>
+              <dt>Salto</dt>
+              <dd className="mono">{String(c.config.proxy_jump)}</dd>
+            </>
+          ) : null}
+          {c.type === "ssh" && (
+            <>
+              <dt>Huella del host</dt>
+              <dd className="mono">
+                {c.host_key ? (
+                  `${c.host_key.fingerprint} · ${c.host_key.type}`
+                ) : (
+                  <button type="button" className="text-link" onClick={onHostKeys}>
+                    sin aceptar: revisar huella
+                  </button>
+                )}
+              </dd>
+            </>
+          )}
+          {(c.tags ?? []).length > 0 && (
+            <>
+              <dt>Etiquetas</dt>
+              <dd className="mono">{(c.tags ?? []).join(" · ")}</dd>
+            </>
+          )}
+        </dl>
+      </article>
+      {methods.length > 0 && (
+        <article className="conn-card" data-testid="auth-card">
+          <h3>Cómo entra</h3>
+          <fieldset className="segmented methods" aria-label="Método de entrada">
+            {methods.map((m) => (
+              <button
+                type="button"
+                key={m}
+                aria-pressed={method === m}
+                className="mono"
+                onClick={() => {
+                  if (m === "key" && c.secret?.kind !== "ssh_key")
+                    void act(async () => {
+                      const r = await call("connections.generate_key", {
+                        ...mutationMeta(),
+                        connection_id: c.id,
+                      })
+                      onKey(r.authorized_keys, r.public_key)
+                    })
+                  else if (m !== method) void update({ auth_method: m })
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </fieldset>
+          {!method && c.has_secret && (
+            <p className="muted">
+              Usa una referencia de secreto (ADR-0013). Elige un método para que Keel la guarde.
+            </p>
+          )}
+          {method && <p className="muted">{METHOD_HINT[method]}</p>}
+          {method === "file" && (
+            <form
+              className="conn-inline"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void update({
+                  identity_file: identity,
+                  ...(secret ? { secret_value: secret } : {}),
+                }).then(() => setSecret(""))
+              }}
+            >
+              <input
+                aria-label="Ruta de la llave"
+                className="mono"
+                value={identity}
+                placeholder="~/.ssh/id_ed25519"
+                onChange={(e) => setIdentity(e.target.value)}
+              />
+              <input
+                type="password"
+                aria-label="Frase de la llave"
+                placeholder={
+                  c.secret ? "frase guardada · escribe otra para cambiarla" : "frase (opcional)"
+                }
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+              <button type="submit" className="button">
+                Guardar
+              </button>
+            </form>
+          )}
+          {method === "password" && (
+            <form
+              className="conn-inline"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void update({ secret_value: secret }).then(() => setSecret(""))
+              }}
+            >
+              <input
+                type="password"
+                aria-label="Contraseña"
+                placeholder={
+                  c.secret ? "guardada en el vault · escribe otra para cambiarla" : "contraseña"
+                }
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+              <button type="submit" className="button" disabled={!secret}>
+                Guardar
+              </button>
+              {c.secret && (
+                <Button onClick={() => void update({ forget_secret: true, auth_method: "ask" })}>
+                  Olvidar
+                </Button>
+              )}
+            </form>
+          )}
+          {method === "key" && (
+            <div className="conn-inline">
+              {c.secret?.public_key && (
+                <code className="key-pub" title={c.secret.public_key}>
+                  {c.secret.public_key.slice(0, 40)}…
+                </code>
+              )}
               <Button
-                variant="ghost"
-                icon={Trash2}
-                aria-label={`Archivar ${c.name}`}
+                icon={KeyRound}
+                onClick={() =>
+                  void act(async () => {
+                    const r = await call("connections.generate_key", {
+                      ...mutationMeta(),
+                      connection_id: c.id,
+                    })
+                    onKey(r.authorized_keys, r.public_key)
+                  })
+                }
+              >
+                Generar otra
+              </Button>
+              <input
+                aria-label="Importar llave existente"
+                className="mono"
+                placeholder="o importa una: ~/.ssh/id_deploy"
+                value={keyPath}
+                onChange={(e) => setKeyPath(e.target.value)}
+              />
+              <Button
+                disabled={!keyPath}
                 onClick={() =>
                   void act(() =>
-                    call("connections.archive", { ...mutationMeta(), connection_id: c.id }),
-                  )
+                    call("connections.import_key_file", {
+                      ...mutationMeta(),
+                      connection_id: c.id,
+                      path: keyPath,
+                    }),
+                  ).then(() => setKeyPath(""))
                 }
+              >
+                Importar
+              </Button>
+            </div>
+          )}
+          {c.secret?.last_used_at && (
+            <p className="mono muted">usado {new Date(c.secret.last_used_at).toLocaleString()}</p>
+          )}
+        </article>
+      )}
+      <article className="conn-card">
+        <h3>Lo que garantiza</h3>
+        <dl>
+          <dt>En el servidor</dt>
+          <dd>
+            <form
+              className="conn-inline"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void update({ server_guarantee: guarantee })
+              }}
+            >
+              <input
+                aria-label={`Garantía del servidor de ${c.name}`}
+                value={guarantee}
+                placeholder="usuario restringido, rol de sólo lectura, command= …"
+                onChange={(e) => setGuarantee(e.target.value)}
               />
-            </header>
-            <p className="muted">
-              <ShieldAlert size={12} /> Servidor: {c.guarantees.server ?? "sin garantía declarada"}{" "}
-              · Keel: {c.guarantees.keel}
-            </p>
-            <table>
-              <tbody>
-                {c.operations.map((o) => (
-                  <tr key={o.operation}>
-                    <td className="mono">{o.operation}</td>
-                    <td>
-                      <select
-                        aria-label={`Política de ${o.operation} en ${c.name}`}
-                        value={o.policy}
-                        onChange={(e) =>
+              <button type="submit" className="button">
+                Guardar
+              </button>
+            </form>
+            {!c.guarantees.server && <span className="amber">nada declarado</span>}
+          </dd>
+          <dt>En Keel</dt>
+          <dd className="muted">{c.guarantees.keel}</dd>
+        </dl>
+      </article>
+      <article className="conn-card">
+        <h3>Permisos del agente</h3>
+        <table className="grant-table">
+          <tbody>
+            {c.operations.map((o) => {
+              const prodWrite = c.environment === "prod" && WRITE.has(o.operation)
+              return (
+                <tr key={o.operation}>
+                  <td className="mono">{o.operation}</td>
+                  <td>
+                    <select
+                      aria-label={`Política de ${o.operation} en ${c.name}`}
+                      value={o.policy}
+                      onChange={(e) => {
+                        const policy = e.target.value
+                        // ADR-0026: quitar la pregunta en prod pide confirmar el riesgo.
+                        if (policy === "auto" && prodWrite) onRisk(o.operation)
+                        else
                           void act(() =>
                             call("grants.set", {
                               ...mutationMeta(),
                               connection_id: c.id,
                               operation: o.operation,
-                              policy: e.target.value,
+                              policy: policy as "auto" | "ask" | "deny",
                             }),
                           )
-                        }
-                      >
-                        <option value="ask">preguntar</option>
-                        <option
-                          value="auto"
-                          disabled={c.environment === "prod" && WRITE.has(o.operation)}
-                        >
-                          automático
-                        </option>
-                        <option value="deny">negar</option>
-                      </select>
-                    </td>
-                    <td className="muted">
-                      {o.effective !== o.policy
-                        ? `en ${c.environment} queda en ${o.effective}`
-                        : ""}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </article>
-        ))}
-        {items.length === 0 && (
-          <Empty title="Sin conexiones">
-            Una conexión le da al agente operaciones (consultar, ejecutar, planear), nunca la
-            credencial.
-          </Empty>
+                      }}
+                    >
+                      <option value="ask">preguntar</option>
+                      <option value="auto">sin preguntar</option>
+                      <option value="deny">denegar</option>
+                    </select>
+                  </td>
+                  <td className="muted">
+                    {o.risk_accepted_at ? (
+                      <span className="risk-chip" data-testid="risk-accepted">
+                        <ShieldAlert size={12} /> prod sin preguntar
+                      </span>
+                    ) : o.effective !== o.policy ? (
+                      `efectivo: ${o.effective}`
+                    ) : prodWrite ? (
+                      "en prod pregunta cada vez"
+                    ) : (
+                      ""
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </article>
+    </>
+  )
+}
+
+/** El alta (ADR-0025 §3), llena si viene de lo que pidió el agente (§6). */
+function NewConnection({
+  call,
+  prefill,
+  onClose,
+  onCreated,
+}: {
+  call: Call
+  prefill?: SetupPrefill
+  onClose: () => void
+  onCreated: (c: Connection, key: { line: string; pub: string } | null) => void
+}) {
+  const p = prefill?.proposal ?? {}
+  const str = (k: string) => (p[k] === undefined || p[k] === null ? "" : String(p[k]))
+  const [name, setName] = useState(str("name"))
+  const [type, setType] = useState<Kind>(
+    (["ssh", "postgres", "sqlite", "terraform"].includes(str("type"))
+      ? str("type")
+      : "ssh") as Kind,
+  )
+  const [env, setEnv] = useState<Env>(
+    (["dev", "staging", "prod"].includes(str("environment")) ? str("environment") : "dev") as Env,
+  )
+  const [config, setConfig] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      ["host", "user", "port", "proxy_jump", "database", "user_ro", "path", "dir"]
+        .filter((k) => str(k))
+        .map((k) => [k, str(k)]),
+    ),
+  )
+  const [method, setMethod] = useState<Method>(type === "postgres" ? "password" : "key")
+  const [secret, setSecret] = useState("")
+  const [identity, setIdentity] = useState("")
+  const [ref, setRef] = useState("")
+  const [error, setError] = useState("")
+  const [busy, setBusy] = useState(false)
+  const methods = METHODS[type]
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    setBusy(true)
+    setError("")
+    const cfg: Record<string, unknown> = {}
+    for (const f of FIELDS[type]) {
+      const v = config[f.key]?.trim()
+      if (v) cfg[f.key] = f.key === "port" ? Number(v) : v
+    }
+    if (method === "file" && identity) cfg.identity_file = identity
+    const managed = methods.length > 0
+    try {
+      const c = await call("connections.add", {
+        ...mutationMeta(),
+        name: name.trim(),
+        type,
+        environment: env,
+        config: cfg,
+        ...(managed ? { auth_method: method === "key" ? "agent" : method } : {}),
+        ...(managed && secret && (method === "password" || method === "file")
+          ? { secret_value: secret }
+          : {}),
+        ...(!managed && ref ? { secret_ref: ref } : {}),
+        ...(prefill ? { setup_request_id: prefill.approval_id } : {}),
+      })
+      let key: { line: string; pub: string } | null = null
+      if (managed && method === "key" && type === "ssh") {
+        const r = await call("connections.generate_key", { ...mutationMeta(), connection_id: c.id })
+        key = { line: r.authorized_keys, pub: r.public_key }
+      }
+      onCreated(c, key)
+    } catch (x) {
+      setError(x instanceof Error ? x.message : String(x))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Modal title="Nueva conexión" onClose={onClose}>
+      <form onSubmit={(e) => void submit(e)} className="conn-form" data-testid="new-connection">
+        {prefill && (
+          <p className="muted">
+            Propuesta por el agente
+            {p.why ? `: ${String(p.why).replace(/\.$/, "")}` : ""}. Revisa y completa; el agente
+            nunca ve el secreto.
+          </p>
         )}
-        <form className="connection-form" onSubmit={add}>
-          <h3>Nueva conexión</h3>
-          <input
-            aria-label="Nombre de la conexión"
-            placeholder="nombre"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-          <select
-            aria-label="Tipo de conexión"
-            value={type}
-            onChange={(e) => setType(e.target.value as Kind)}
-          >
-            <option value="sqlite">SQLite</option>
-            <option value="postgres">PostgreSQL</option>
-            <option value="ssh">SSH</option>
-            <option value="terraform">Terraform</option>
-          </select>
-          <select
-            aria-label="Entorno"
-            value={env}
-            onChange={(e) => setEnv(e.target.value as typeof env)}
-          >
-            <option value="dev">dev</option>
-            <option value="staging">staging</option>
-            <option value="prod">prod</option>
-          </select>
-          {FIELDS[type].map((f) => (
+        <div className="conn-form-row">
+          <label>
+            Nombre
             <input
-              key={f.key}
-              aria-label={f.label}
-              placeholder={f.label}
-              value={config[f.key] ?? ""}
-              onChange={(e) => setConfig((c) => ({ ...c, [f.key]: e.target.value }))}
+              aria-label="Nombre de la conexión"
+              required
+              data-autofocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
             />
+          </label>
+          <label>
+            Tipo
+            <select
+              aria-label="Tipo"
+              value={type}
+              onChange={(e) => {
+                const t = e.target.value as Kind
+                setType(t)
+                setMethod(t === "postgres" ? "password" : "key")
+              }}
+            >
+              <option value="ssh">SSH</option>
+              <option value="postgres">PostgreSQL</option>
+              <option value="sqlite">SQLite</option>
+              <option value="terraform">Terraform</option>
+            </select>
+          </label>
+          <label>
+            Entorno
+            <select
+              aria-label="Entorno"
+              value={env}
+              onChange={(e) => setEnv(e.target.value as Env)}
+            >
+              <option value="dev">dev</option>
+              <option value="staging">staging</option>
+              <option value="prod">prod</option>
+            </select>
+          </label>
+        </div>
+        {env === "prod" && (
+          <p className="prod-note">
+            Producción: cada ejecución te pide permiso. Puedes quitar la pregunta después, desde la
+            conexión, asumiendo el riesgo.
+          </p>
+        )}
+        <div className="conn-form-row">
+          {FIELDS[type].map((f) => (
+            <label key={f.key}>
+              {f.label}
+              <input
+                aria-label={f.label}
+                className="mono"
+                value={config[f.key] ?? ""}
+                onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
+              />
+            </label>
           ))}
-          {type !== "sqlite" && type !== "ssh" && (
+        </div>
+        {methods.length > 0 ? (
+          <>
+            <span className="label">Cómo entra</span>
+            <fieldset className="segmented methods" aria-label="Método de entrada">
+              {methods.map((m) => (
+                <button
+                  type="button"
+                  key={m}
+                  aria-pressed={method === m}
+                  className="mono"
+                  onClick={() => setMethod(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </fieldset>
+            <Hint>{METHOD_HINT[method]}</Hint>
+            {method === "file" && (
+              <input
+                aria-label="Ruta de la llave"
+                className="mono"
+                placeholder="~/.ssh/id_ed25519"
+                value={identity}
+                onChange={(e) => setIdentity(e.target.value)}
+              />
+            )}
+            {(method === "password" || method === "file") && (
+              <input
+                type="password"
+                aria-label={method === "file" ? "Frase de la llave" : "Contraseña"}
+                placeholder={method === "file" ? "frase (opcional)" : "contraseña"}
+                value={secret}
+                onChange={(e) => setSecret(e.target.value)}
+              />
+            )}
+          </>
+        ) : (
+          <label>
+            Referencia del secreto (opcional)
             <input
               aria-label="Referencia del secreto"
-              placeholder="secreto: env:VAR, keychain:servicio/cuenta, op://…, vault:ruta#campo"
-              value={secret}
-              onChange={(e) => setSecret(e.target.value)}
+              className="mono"
+              placeholder="env:NOMBRE · keychain:servicio/cuenta · op://…"
+              value={ref}
+              onChange={(e) => setRef(e.target.value)}
             />
-          )}
-          {type === "postgres" && (
-            <input
-              aria-label="Referencia del secreto de sólo lectura"
-              placeholder="secreto del rol de sólo lectura"
-              value={secretRo}
-              onChange={(e) => setSecretRo(e.target.value)}
-            />
-          )}
-          <input
-            aria-label="Garantía del servidor"
-            placeholder="qué garantiza el servidor (rol de sólo lectura, comando forzado…)"
-            value={guarantee}
-            onChange={(e) => setGuarantee(e.target.value)}
-          />
-          <button className="button primary" type="submit" disabled={!name.trim()}>
-            <Plus size={13} /> Añadir
+          </label>
+        )}
+        {error && (
+          <p role="alert" className="error">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <Button onClick={onClose}>Cancelar</Button>
+          <button type="submit" className="button primary" disabled={!name.trim() || busy}>
+            {prefill ? "Guardar y avisar al agente" : "Añadir"}
           </button>
-          <Hint>
-            Keel guarda dónde está el secreto, nunca su valor, y lo resuelve sólo al ejecutar. Una
-            conexión nueva pregunta todo; en prod las escrituras siempre preguntan.
-          </Hint>
-        </form>
+        </div>
+      </form>
+    </Modal>
+  )
+}
+
+function ImportModal({
+  call,
+  existing,
+  onClose,
+  onDone,
+}: {
+  call: Call
+  existing: Set<string>
+  onClose: () => void
+  onDone: () => void
+}) {
+  const [hosts, setHosts] = useState<ImportedHost[] | null>(null)
+  const [pick, setPick] = useState<Record<string, Env | null>>({})
+  const [error, setError] = useState("")
+  useEffect(() => {
+    call("connections.import_preview", {})
+      .then((r) => {
+        setHosts(r.hosts)
+        setPick(
+          Object.fromEntries(
+            r.hosts.map((h) => [h.alias, existing.has(h.alias) ? null : h.environment]),
+          ),
+        )
+      })
+      .catch((e: Error) => setError(e.message))
+  }, [call, existing])
+  const chosen = (hosts ?? []).filter((h) => pick[h.alias])
+  async function run() {
+    setError("")
+    try {
+      await call("connections.import", {
+        ...mutationMeta(),
+        hosts: chosen.map((h) => ({
+          alias: h.alias,
+          host: h.host,
+          user: h.user,
+          port: h.port,
+          proxy_jump: h.proxy_jump,
+          identity_file: h.identity_file,
+          environment: pick[h.alias] as Env,
+        })),
+      })
+      onDone()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  return (
+    <Modal title="Importar de ~/.ssh/config" onClose={onClose} wide>
+      <p className="muted">
+        Keel lee sólo los Host de tu config: nombre, destino, usuario, puerto, salto y la ruta de la
+        llave. No lee tus llaves ni otros archivos de ~/.ssh.
+      </p>
+      {!hosts && !error && <p className="muted">Leyendo…</p>}
+      {hosts && hosts.length === 0 && <Hint>Tu ~/.ssh/config no tiene hosts.</Hint>}
+      {hosts && hosts.length > 0 && (
+        <table className="import-table">
+          <thead>
+            <tr>
+              <th />
+              <th>Host</th>
+              <th>Destino</th>
+              <th>Entorno</th>
+              <th>Entra con</th>
+            </tr>
+          </thead>
+          <tbody>
+            {hosts.map((h) => (
+              <tr key={h.alias} data-testid="import-row">
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`Importar ${h.alias}`}
+                    disabled={existing.has(h.alias)}
+                    checked={!!pick[h.alias]}
+                    onChange={(e) =>
+                      setPick((o) => ({
+                        ...o,
+                        [h.alias]: e.target.checked ? (h.environment ?? "dev") : null,
+                      }))
+                    }
+                  />
+                </td>
+                <td>{h.alias}</td>
+                <td className="mono">
+                  {h.user ? `${h.user}@` : ""}
+                  {h.host}:{h.port}
+                </td>
+                <td>
+                  <select
+                    aria-label={`Entorno de ${h.alias}`}
+                    value={pick[h.alias] ?? h.environment ?? "dev"}
+                    disabled={!pick[h.alias]}
+                    onChange={(e) => setPick((o) => ({ ...o, [h.alias]: e.target.value as Env }))}
+                  >
+                    <option value="dev">dev</option>
+                    <option value="staging">staging</option>
+                    <option value="prod">prod</option>
+                  </select>{" "}
+                  <span className="muted">{existing.has(h.alias) ? "ya existe" : h.why}</span>
+                </td>
+                <td className="mono">
+                  {h.identity_file ? `file · ${h.identity_file.split("/").pop()}` : "agent"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <Hint>
+        El entorno sale del prefijo del alias, como en sshx. Cámbialo si no corresponde: en prod el
+        agente siempre pregunta.
+      </Hint>
+      {error && <p className="error">{error}</p>}
+      <div className="modal-actions">
+        <Button onClick={onClose}>Cancelar</Button>
+        <Button variant="primary" disabled={chosen.length === 0} onClick={() => void run()}>
+          Importar {chosen.length} conexiones
+        </Button>
       </div>
-    </div>
+    </Modal>
+  )
+}
+
+function HostKeysModal({
+  conn,
+  call,
+  onClose,
+}: {
+  conn: Connection
+  call: Call
+  onClose: () => void
+}) {
+  const [keys, setKeys] = useState<{ line: string; fingerprint: string; type: string }[] | null>(
+    null,
+  )
+  const [error, setError] = useState("")
+  useEffect(() => {
+    call("connections.host_keys", { connection_id: conn.id })
+      .then((r) => setKeys(r.keys))
+      .catch((e: Error) => setError(e.message))
+  }, [call, conn.id])
+  return (
+    <Modal title={`Huella de ${conn.name}`} onClose={onClose}>
+      <p className="muted">
+        Compara la huella con la que te dé el administrador del servidor antes de aceptarla. Keel
+        nunca acepta una huella por su cuenta, y si cambia, la operación falla.
+      </p>
+      {conn.host_key && (
+        <p className="mono">
+          Aceptada: {conn.host_key.fingerprint} · {conn.host_key.type}
+        </p>
+      )}
+      {!keys && !error && <p className="muted">Preguntando al host…</p>}
+      {keys?.map((k) => (
+        <div key={k.line} className="hostkey-row">
+          <span className="mono">
+            {k.fingerprint} · {k.type}
+          </span>
+          <Button
+            onClick={() =>
+              void call("connections.host_key_accept", {
+                ...mutationMeta(),
+                connection_id: conn.id,
+                line: k.line,
+              })
+                .then(onClose)
+                .catch((e: Error) => setError(e.message))
+            }
+          >
+            Aceptar
+          </Button>
+        </div>
+      ))}
+      {keys && keys.length === 0 && <Hint>El host no respondió con llaves.</Hint>}
+      {error && <p className="error">{error}</p>}
+    </Modal>
+  )
+}
+
+/** ADR-0026: dejar de preguntar en producción, escribiendo el nombre de la conexión. */
+function RiskModal({
+  conn,
+  operation,
+  onClose,
+  onConfirm,
+}: {
+  conn: Connection
+  operation: string
+  onClose: () => void
+  onConfirm: (typed: string) => void
+}) {
+  const [typed, setTyped] = useState("")
+  return (
+    <Modal title="⚠  Dejar de preguntar en producción" onClose={onClose}>
+      <div className="risk-modal" data-testid="risk-modal">
+        <p>
+          Los agentes podrán ejecutar <code>{operation}</code> en <strong>{conn.name}</strong> (
+          {target(conn)}) sin pedirte permiso. Un error del agente llega directo al servidor.
+        </p>
+        <ul>
+          <li>Vale para cualquier tarea de este proyecto</li>
+          <li>La salida se sigue redactando y todo queda en la auditoría</li>
+          <li>Vuelves a preguntar con un clic, sin confirmar</li>
+        </ul>
+        <label>
+          Escribe {conn.name} para confirmar
+          <input
+            aria-label="Nombre de la conexión para confirmar"
+            className="mono"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+          />
+        </label>
+        <Hint>Recomendado: una llave de Keel con command= en el servidor.</Hint>
+        <div className="modal-actions">
+          <Button onClick={onClose}>Cancelar</Button>
+          <button
+            type="button"
+            className="button danger"
+            disabled={typed !== conn.name}
+            onClick={() => onConfirm(typed)}
+          >
+            Dejar de preguntar
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }

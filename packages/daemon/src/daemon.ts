@@ -3,7 +3,7 @@
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
 import { createHash, randomBytes } from "node:crypto"
-import { existsSync, readFileSync, realpathSync, statSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path"
 import {
@@ -142,6 +142,18 @@ import {
   type SubtaskInfo,
   type WorkItemRow,
 } from "./store/repo.js"
+import { CredentialService } from "./vault/credentials.js"
+import { type KeyStore, systemKeyStore } from "./vault/keystore.js"
+import {
+  authorizedKeysLine,
+  fingerprint,
+  generateEd25519,
+  importSshConfig,
+  KeelSshAgent,
+  knownHostLines,
+  scanHostKeys,
+} from "./vault/ssh.js"
+import { Vault, VaultError } from "./vault/vault.js"
 import { runVerify } from "./verify.js"
 import type { WorkspaceDriver } from "./workspace-driver.js"
 import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
@@ -190,6 +202,10 @@ export type DaemonOptions = {
   processes?: ProcessTable
   /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
   limits?: Partial<Limits>
+  /** ADR-0025 §2: dónde vive la llave maestra del vault; por defecto, el llavero del sistema. */
+  keystore?: KeyStore
+  /** ADR-0025 §4: el ejecutable de `keel askpass`; por defecto, un envoltorio en el estado de Keel. */
+  askpass?: string
 }
 
 export type OrphanCheck = { runId: string; recorded: RecordedProcess }
@@ -201,6 +217,9 @@ export class Daemon {
   readonly artifacts: ArtifactStore
   readonly semantic: SemanticProjector
   readonly broker: ResourceBroker
+  /** ADR-0025: el vault y las credenciales de las conexiones. */
+  readonly vault: Vault
+  readonly credentials: CredentialService
   readonly plugins: PluginHost
   readonly research: Research
   readonly server: IpcServer
@@ -296,6 +315,30 @@ export class Daemon {
         return id
       },
       ask: (ctx, op) => this.askHuman(ctx.projectId, ctx.runId as string, op),
+      credentials: {
+        ssh: (c, x) => this.credentials.ssh(c, x),
+        password: (c, x) => this.credentials.password(c, x),
+      },
+    })
+    const stateDir = dirname(opts.dbPath)
+    this.vault = new Vault({
+      db: this.store.db,
+      keystore: opts.keystore ?? systemKeyStore(),
+      emit: (kind, payload) =>
+        runUnitOfWork(this.uowDeps(), this.systemScope(), (uow) => uow.emit(kind, null, payload)),
+    })
+    this.credentials = new CredentialService({
+      vault: this.vault,
+      agent: new KeelSshAgent(join(stateDir, "ssh")),
+      broker: this.broker,
+      knownHosts: join(stateDir, "ssh", "known_hosts"),
+      askpass: opts.askpass ?? join(stateDir, "bin", "keel-askpass"),
+      humanDoor: () => this.server.path,
+      emit: (projectId, runId, kind, payload) =>
+        runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+          uow.emit(kind, runId, payload),
+        ),
+      timeoutMs: () => this.settingsView().approvals.timeout_ms,
     })
     const root = opts.rootPath ?? this.repo.listProjects()[0]?.root_path ?? process.cwd()
     this.rootPath = root
@@ -365,6 +408,9 @@ export class Daemon {
   /** Reconcilia (una vez), abre el socket y devuelve lo reconciliado. */
   start(): { interrupted: string[]; orphans: OrphanCheck[] } {
     const reconciled = this.reconcile()
+    // ADR-0025: el vault se abre con el llavero si se puede; sin él espera la frase.
+    if (!this.opts.askpass) writeAskpass(join(dirname(this.opts.dbPath), "bin", "keel-askpass"))
+    this.track(this.vault.open().catch(() => "locked"))
     // Lo que quedó pendiente antes de una caída: despachos y liberaciones (DoD Fase 0).
     this.track(this.outbox.drain())
     this.server.start()
@@ -391,6 +437,7 @@ export class Daemon {
 
   stop(): void {
     if (this.lagTimer) clearInterval(this.lagTimer)
+    this.credentials.stop()
     this.plugins.stopAll()
     this.server.stop()
     this.agentServer.stop()
@@ -499,8 +546,18 @@ export class Daemon {
   ): Handler {
     return async (params, ctx) => {
       const p = params as P
+      // Los secretos (ADR-0025) no entran ni al hash del recibo.
       const requestHash = await sha256Hex(
-        canonicalJson({ method, params: { ...p, request_id: undefined } }),
+        canonicalJson({
+          method,
+          params: {
+            ...p,
+            request_id: undefined,
+            secret_value: undefined,
+            passphrase: undefined,
+            value: undefined,
+          },
+        }),
       )
       return runCommand(
         this.uowDeps(),
@@ -1699,27 +1756,343 @@ export class Daemon {
         const pid = this.scopeOf(ctx)
         return { connections: this.broker.connections(pid).map((c) => this.broker.view(c)) }
       },
-      "connections.add": this.mutation<Params<"connections.add">>(
-        "connections.add",
-        (p, uow, ctx) => {
-          requireHuman(ctx, "dar de alta una conexión")
-          const c = brokerCall(() =>
-            this.broker.add({
-              project_id: uow.projectId,
-              name: p.name,
-              type: p.type,
-              environment: p.environment,
-              config: p.config,
-              secret_ref: p.secret_ref,
-              secret_ref_ro: p.secret_ref_ro,
-              server_guarantee: p.server_guarantee,
-            }),
-          )
+      "connections.add": async (params, ctx) => {
+        requireHuman(ctx, "dar de alta una conexión")
+        const p = params as Params<"connections.add">
+        // ADR-0025: el secreto entra al vault antes de la fila; la mutación sólo lo enlaza.
+        const vaultId = p.secret_value
+          ? await this.vaultPut({
+              project_id: this.scopeOf(ctx),
+              kind: p.auth_method === "file" ? "passphrase" : "password",
+              label: p.name,
+              value: p.secret_value,
+              actor: ctx.actor.actor_id,
+            })
+          : null
+        try {
+          return await this.mutation<Params<"connections.add">>("connections.add", (q, uow) => {
+            const c = brokerCall(() =>
+              this.broker.add({
+                project_id: uow.projectId,
+                name: q.name,
+                type: q.type,
+                environment: q.environment,
+                config: q.config,
+                secret_ref: q.secret_ref,
+                secret_ref_ro: q.secret_ref_ro,
+                server_guarantee: q.server_guarantee,
+                auth_method: q.auth_method,
+                vault_item_id: vaultId,
+                tags: q.tags,
+              }),
+            )
+            const view = this.broker.view(c)
+            uow.emit("connection.added", null, view)
+            if (q.setup_request_id)
+              this.answerSetup(uow, q.setup_request_id, { connection_id: c.id })
+            return view
+          })(params, ctx)
+        } catch (e) {
+          if (vaultId) this.vault.remove(vaultId, ctx.actor.actor_id)
+          throw e
+        }
+      },
+      "connections.update": async (params, ctx) => {
+        requireHuman(ctx, "cambiar una conexión")
+        const p = params as Params<"connections.update">
+        const conn = brokerCall(() => this.broker.find(this.scopeOf(ctx), p.connection_id))
+        const method = p.auth_method ?? conn.auth_method ?? null
+        let vaultId: string | null | undefined
+        if (p.secret_value) {
+          if (conn.vault_item_id) {
+            await this.vaultCall(() =>
+              this.vault.rotate(
+                conn.vault_item_id as string,
+                p.secret_value as string,
+                ctx.actor.actor_id,
+              ),
+            )
+            vaultId = conn.vault_item_id
+          } else
+            vaultId = await this.vaultPut({
+              project_id: conn.project_id,
+              kind: method === "file" ? "passphrase" : "password",
+              label: conn.name,
+              value: p.secret_value,
+              actor: ctx.actor.actor_id,
+            })
+        } else if (p.forget_secret && conn.vault_item_id) {
+          this.vault.remove(conn.vault_item_id, ctx.actor.actor_id)
+          vaultId = null
+        }
+        return this.mutation<Params<"connections.update">>("connections.update", (q, uow) => {
+          const config = JSON.parse(conn.config_json) as Record<string, unknown>
+          const c = this.broker.update(conn, {
+            ...(q.environment ? { environment: q.environment } : {}),
+            ...(q.auth_method ? { auth_method: q.auth_method } : {}),
+            ...(vaultId !== undefined ? { vault_item_id: vaultId } : {}),
+            ...(q.tags ? { tags: q.tags } : {}),
+            ...(q.server_guarantee !== undefined ? { server_guarantee: q.server_guarantee } : {}),
+            ...(q.identity_file !== undefined
+              ? { config: { ...config, identity_file: q.identity_file || undefined } }
+              : {}),
+          })
           const view = this.broker.view(c)
-          uow.emit("connection.added", null, view)
+          uow.emit("connection.updated", null, view)
           return view
-        },
-      ),
+        })(params, ctx)
+      },
+      "connections.generate_key": async (params, ctx) => {
+        requireHuman(ctx, "generar una llave")
+        const p = params as Params<"connections.generate_key">
+        const conn = brokerCall(() => this.broker.find(this.scopeOf(ctx), p.connection_id))
+        if (conn.conn_type !== "ssh")
+          throw rpcError(ErrorCode.invalidParams, "sólo una conexión SSH lleva llave")
+        const project = this.repo.listProjects().find((x) => x.id === conn.project_id)
+        const key = generateEd25519(`keel/${project?.name ?? "proyecto"}/${conn.name}`)
+        const id = await this.vaultCall(async () => {
+          if (conn.vault_item_id && conn.auth_method === "key") {
+            await this.vault.rotate(
+              conn.vault_item_id,
+              key.privatePem,
+              ctx.actor.actor_id,
+              key.publicLine,
+            )
+            return conn.vault_item_id
+          }
+          return this.vault.put({
+            project_id: conn.project_id,
+            kind: "ssh_key",
+            label: conn.name,
+            value: key.privatePem,
+            public_key: key.publicLine,
+            actor: ctx.actor.actor_id,
+          })
+        })
+        const view = await this.mutation<Params<"connections.generate_key">>(
+          "connections.generate_key",
+          (_q, uow) => {
+            const c = this.broker.update(conn, { auth_method: "key", vault_item_id: id })
+            const v = this.broker.view(c)
+            uow.emit("connection.updated", null, v)
+            return v
+          },
+        )(params, ctx)
+        return {
+          connection: view,
+          public_key: key.publicLine,
+          authorized_keys: authorizedKeysLine(key.publicLine, {
+            command: p.command ?? null,
+            from: p.from ?? null,
+          }),
+        }
+      },
+      "connections.import_key_file": async (params, ctx) => {
+        requireHuman(ctx, "importar una llave")
+        const p = params as Params<"connections.import_key_file">
+        const conn = brokerCall(() => this.broker.find(this.scopeOf(ctx), p.connection_id))
+        // ADR-0025 §9: sólo el archivo que el humano eligió; Keel no recorre ~/.ssh.
+        const path = p.path.replace(/^~(?=\/)/, homedir())
+        if (!existsSync(path)) throw rpcError(ErrorCode.notFound, `no existe ${p.path}`)
+        const pem = readFileSync(path, "utf8")
+        if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(pem))
+          throw rpcError(ErrorCode.invalidParams, "ese archivo no es una llave privada")
+        const pub = existsSync(`${path}.pub`) ? readFileSync(`${path}.pub`, "utf8").trim() : null
+        const id = await this.vaultPut({
+          project_id: conn.project_id,
+          kind: "ssh_key",
+          label: conn.name,
+          value: pem,
+          public_key: pub,
+          actor: ctx.actor.actor_id,
+        })
+        return this.mutation<Params<"connections.import_key_file">>(
+          "connections.import_key_file",
+          (_q, uow) => {
+            const c = this.broker.update(conn, { auth_method: "key", vault_item_id: id })
+            const v = this.broker.view(c)
+            uow.emit("connection.updated", null, v)
+            uow.emit("vault.key_imported", null, {
+              connection_id: conn.id,
+              item_id: id,
+              path: p.path,
+              actor: actorOf(ctx),
+            })
+            return v
+          },
+        )(params, ctx)
+      },
+      "connections.import_preview": async (_params, ctx) => {
+        requireHuman(ctx, "importar conexiones")
+        return { hosts: await importSshConfig() }
+      },
+      "connections.import": async (params, ctx) => {
+        requireHuman(ctx, "importar conexiones")
+        const p = params as Params<"connections.import">
+        // Las huellas que el humano ya aceptó en su known_hosts siembran las de Keel.
+        const seeds = new Map<string, string | null>()
+        for (const h of p.hosts) {
+          const line = (await knownHostLines(h.host, h.port))[0] ?? null
+          seeds.set(h.alias, line ? JSON.stringify({ line, ...(await fingerprint(line)) }) : null)
+        }
+        return this.mutation<Params<"connections.import">>("connections.import", (q, uow) => {
+          const out = q.hosts.map((h) => {
+            const c = brokerCall(() =>
+              this.broker.add({
+                project_id: uow.projectId,
+                name: h.alias,
+                type: "ssh",
+                environment: h.environment,
+                config: {
+                  host: h.host,
+                  ...(h.user ? { user: h.user } : {}),
+                  port: h.port,
+                  ...(h.proxy_jump ? { proxy_jump: h.proxy_jump } : {}),
+                  ...(h.identity_file ? { identity_file: h.identity_file } : {}),
+                },
+                auth_method: h.identity_file ? "file" : "agent",
+                host_key: seeds.get(h.alias) ?? null,
+              }),
+            )
+            const v = this.broker.view(c)
+            uow.emit("connection.added", null, { ...v, imported_from: "~/.ssh/config" })
+            return v
+          })
+          return { connections: out }
+        })(params, ctx)
+      },
+      "connections.host_keys": async (params, ctx) => {
+        requireHuman(ctx, "revisar la huella de un host")
+        const p = params as Params<"connections.host_keys">
+        const conn = brokerCall(() => this.broker.find(this.scopeOf(ctx), p.connection_id))
+        const cfg = JSON.parse(conn.config_json) as { host?: string; port?: number }
+        if (!cfg.host) throw rpcError(ErrorCode.invalidParams, "la conexión no tiene host")
+        return {
+          keys: await scanHostKeys(cfg.host, Number(cfg.port ?? 22)),
+          accepted: this.broker.view(conn).host_key ?? null,
+        }
+      },
+      "connections.host_key_accept": async (params, ctx) => {
+        requireHuman(ctx, "aceptar la huella de un host")
+        const p = params as Params<"connections.host_key_accept">
+        const fp = await fingerprint(p.line)
+        if (!fp.fingerprint)
+          throw rpcError(ErrorCode.invalidParams, "esa línea no es una llave de host")
+        return this.mutation<Params<"connections.host_key_accept">>(
+          "connections.host_key_accept",
+          (q, uow) => {
+            const conn = brokerCall(() => this.broker.find(uow.projectId, q.connection_id))
+            const c = this.broker.update(conn, {
+              host_key: JSON.stringify({ line: q.line, ...fp }),
+            })
+            const v = this.broker.view(c)
+            uow.emit("connection.host_key_accepted", null, {
+              connection_id: c.id,
+              fingerprint: fp.fingerprint,
+              type: fp.type,
+              actor: actorOf(ctx),
+            })
+            return v
+          },
+        )(params, ctx)
+      },
+      "connections.ssh_session": async (params, ctx) => {
+        requireHuman(ctx, "abrir una terminal")
+        const p = params as Params<"connections.ssh_session">
+        const conn = brokerCall(() => this.broker.find(this.scopeOf(ctx), p.connection))
+        try {
+          const s = await this.credentials.humanSession(conn)
+          this.emitSystem("connection.terminal_opened", null, {
+            connection_id: conn.id,
+            environment: conn.environment,
+            actor: actorOf(ctx),
+          })
+          return { connection: this.broker.view(conn), ...s }
+        } catch (e) {
+          throw brokerFailure(e)
+        }
+      },
+      "vault.status": (_params, ctx) => {
+        requireHuman(ctx, "ver el vault")
+        return this.vault.status()
+      },
+      "vault.unlock": async (params, ctx) => {
+        requireHuman(ctx, "abrir el vault")
+        const p = params as Params<"vault.unlock">
+        await this.vaultCall(() => this.vault.unlock(p.passphrase))
+        this.emitSystem("vault.unlocked", null, { actor: actorOf(ctx), keystore: "passphrase" })
+        return this.vault.status()
+      },
+      "secrets.askpass": async (params) => {
+        const p = params as Params<"secrets.askpass">
+        return this.vaultCall(() => this.credentials.askpass(p.token, p.prompt))
+      },
+      "secrets.remember": async (params, ctx) => {
+        const p = params as Params<"secrets.remember">
+        await this.vaultCall(() =>
+          this.credentials.remember(p.token, p.value, p.scope, ctx.actor.actor_id),
+        )
+        return { ok: true as const }
+      },
+      "secrets.prompt_answer": (params, ctx) => {
+        requireHuman(ctx, "contestar una pregunta de secreto")
+        const p = params as Params<"secrets.prompt_answer">
+        try {
+          this.credentials.answer(
+            p.prompt_id,
+            p.cancel || !p.value
+              ? null
+              : { value: p.value, remember: p.remember, actor: ctx.actor.actor_id },
+          )
+        } catch (e) {
+          throw rpcError(ErrorCode.notFound, e instanceof Error ? e.message : String(e))
+        }
+        return { ok: true as const }
+      },
+      "setup.request": async (params, ctx) => {
+        const p = params as Params<"setup.request">
+        const actor = ctx.actor
+        if (actor.kind !== "agent" || !actor.run_id)
+          throw rpcError(ErrorCode.unauthorized, "setup.request es para el agente de un run")
+        // ADR-0025 §6: el agente nunca pasa secretos ni pide quitar la pregunta en prod.
+        const bad = Object.keys(p.proposal).filter((k) =>
+          /pass|secret|token|private|key_?material|credential/i.test(k),
+        )
+        if (bad.length)
+          throw rpcError(
+            ErrorCode.invalidParams,
+            `«${bad.join(", ")}» parece un secreto: el agente no pasa secretos; describe qué falta y el humano lo guarda en el vault (o usa una referencia)`,
+          )
+        if (
+          p.kind === "grant" &&
+          p.proposal.policy === "auto" &&
+          (p.proposal.environment === "prod" ||
+            this.broker
+              .connections(this.scopeOf(ctx))
+              .find((c) => c.id === p.proposal.connection || c.name === p.proposal.connection)
+              ?.environment === "prod")
+        )
+          throw rpcError(
+            ErrorCode.invalidParams,
+            "quitar la pregunta en producción es una decisión del humano en la conexión (ADR-0026); pide el grant en ask",
+          )
+        const decision = await this.askHuman(this.scopeOf(ctx), actor.run_id, {
+          tool: "setup.request",
+          input: { kind: p.kind, why: p.why, proposal: p.proposal, evidence: p.evidence ?? null },
+        })
+        const message = this.setupMessages.get(actor.run_id) ?? null
+        this.setupMessages.delete(actor.run_id)
+        return {
+          approval_id: "",
+          state: decision,
+          message:
+            decision === "approved"
+              ? (message ?? "el humano lo dejó listo")
+              : decision === "denied"
+                ? `el humano no lo configuró${message ? `: ${message}` : ""}. No vuelvas a pedirlo en este turno.`
+                : "nadie contestó a tiempo",
+        }
+      },
       "connections.archive": this.mutation<Params<"connections.archive">>(
         "connections.archive",
         (p, uow, ctx) => {
@@ -1732,8 +2105,10 @@ export class Daemon {
       "grants.set": this.mutation<Params<"grants.set">>("grants.set", (p, uow, ctx) => {
         requireHuman(ctx, "cambiar los permisos de una conexión")
         const conn = brokerCall(() => this.broker.find(uow.projectId, p.connection_id))
-        brokerCall(() =>
-          this.broker.setGrant(conn, p.operation, p.policy, uow.actorId, p.expires_at ?? null),
+        const r = brokerCall(() =>
+          this.broker.setGrant(conn, p.operation, p.policy, uow.actorId, p.expires_at ?? null, {
+            riskConfirm: p.risk_confirm,
+          }),
         )
         const view = this.broker.view(conn)
         uow.emit("grant.set", null, {
@@ -1741,6 +2116,15 @@ export class Daemon {
           operation: p.operation,
           policy: p.policy,
         })
+        // ADR-0026: quitar la pregunta en prod queda a nombre de quien asumió el riesgo.
+        if (r.risk_accepted)
+          uow.emit("grant.risk_accepted", null, {
+            connection_id: conn.id,
+            connection_name: conn.name,
+            operation: p.operation,
+            environment: conn.environment,
+            actor: actorOf(ctx),
+          })
         return view
       }),
       "resources.list": (_params, ctx) => {
@@ -1993,16 +2377,55 @@ export class Daemon {
           // ADR-0020 §7: una pregunta se contesta o se rechaza; no hay «sesión» ni «siempre».
           if (op.tool && QUESTION_TOOLS.has(op.tool))
             return this.resolveQuestion(uow, a, op.tool, p)
-          // Una operación de recurso se aprueba una vez: los permisos duraderos son grants.
+          // ADR-0025 §6: lo que pidió el agente queda listo (o no) con lo que hizo el humano.
+          if (op.tool === "setup.request") {
+            requireHuman(ctx, "contestar una petición del agente")
+            if (p.decision === "deny") {
+              this.setupMessages.set(a.run_id, p.reason ?? "")
+              repo.setApproval(a.id, "denied", uow.actorId)
+              uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "denied" })
+              uow.afterCommit(() => this.approvalWaiters.get(a.id)?.({ decision: "denied" }))
+              return { approval_id: a.id, state: "denied" as const }
+            }
+            return this.answerSetup(uow, a.id, p.setup_result ?? {})
+          }
+          // ADR-0025 §7: una operación de recurso se aprueba esta vez, para esta tarea
+          // (una hora) o para el proyecto (un grant); en prod, el proyecto pide el riesgo
+          // en la conexión (ADR-0026).
           if (
             op.tool?.startsWith("resource.") &&
             p.decision !== "approve_once" &&
             p.decision !== "deny"
-          )
-            throw rpcError(
-              ErrorCode.invalidParams,
-              "una operación de recurso se aprueba una vez; para permitirla siempre, usa un grant de la conexión",
+          ) {
+            const input = (op.input ?? {}) as { connection?: string; operation?: string }
+            const conn = brokerCall(() =>
+              this.broker.find(a.project_id, String(input.connection ?? "")),
             )
+            const run = repo.getRun(a.run_id)
+            if (p.decision === "approve_always" && conn.environment === "prod")
+              throw rpcError(
+                ErrorCode.invalidParams,
+                "en producción, quitar la pregunta para todo el proyecto se hace en la conexión, escribiendo su nombre (ADR-0026)",
+              )
+            brokerCall(() =>
+              this.broker.setGrant(
+                conn,
+                String(input.operation ?? ""),
+                "auto",
+                uow.actorId,
+                p.decision === "approve_session"
+                  ? new Date(Date.now() + 60 * 60_000).toISOString()
+                  : null,
+                p.decision === "approve_session" && run ? { workItemId: run.work_item_id } : {},
+              ),
+            )
+            uow.emit("grant.set", a.run_id, {
+              connection_id: conn.id,
+              operation: input.operation,
+              policy: "auto",
+              scope: p.decision === "approve_session" ? "task" : "project",
+            })
+          }
           const decision =
             p.decision === "approve_once" ||
             p.decision === "approve_session" ||
@@ -2395,6 +2818,64 @@ export class Daemon {
     const gate = this.repo.pendingStageGate(run.work_item_id)
     const frozen = gate !== null && JSON.parse(gate.operation_json).input?.reason === "contract"
     return { stage: flow.stage, readOnly: isReadOnlyStage(flow.stage) || frozen, inMethod: true }
+  }
+
+  // --- vault y peticiones del agente (ADR-0025) ------------------------------------
+
+  /** Lo que el humano dejó listo para una petición `setup.request`, por run. */
+  private readonly setupMessages = new Map<string, string>()
+
+  /** Un error del vault como error del protocolo: bloqueado, inexistente o inválido. */
+  private async vaultCall<T>(fn: () => T | Promise<T>): Promise<T> {
+    try {
+      return await fn()
+    } catch (e) {
+      if (e instanceof VaultError)
+        throw rpcError(
+          e.code === "not_found" ? ErrorCode.notFound : ErrorCode.invalidParams,
+          e.message,
+          { vault: e.code },
+        )
+      if (e instanceof BrokerError) throw brokerFailure(e)
+      throw e
+    }
+  }
+
+  private vaultPut(p: Parameters<Vault["put"]>[0]): Promise<string> {
+    return this.vaultCall(() => this.vault.put(p))
+  }
+
+  /**
+   * Resuelve una petición del agente con lo que el humano dejó listo (ADR-0025 §6). El
+   * agente recibe una línea: qué quedó, con qué operaciones y con qué política.
+   */
+  private answerSetup(
+    uow: UnitOfWork,
+    approvalId: string,
+    result: { connection_id?: string | undefined; note?: string | undefined },
+  ) {
+    const a = this.repo.getApproval(approvalId)
+    const op = a ? (JSON.parse(a.operation_json) as { tool?: string }) : null
+    if (!a || op?.tool !== "setup.request" || a.state !== "pending")
+      throw rpcError(ErrorCode.invalidTransition, "esa petición del agente ya no está abierta")
+    let message = result.note?.trim() || "el humano lo dejó listo"
+    if (result.connection_id) {
+      const conn = brokerCall(() => this.broker.find(a.project_id, result.connection_id as string))
+      const ops = this.broker
+        .view(conn)
+        .operations.map((o) => `${o.operation} (${o.effective})`)
+        .join(", ")
+      message = `conexión ${conn.name} lista (${conn.environment}): ${ops}${result.note ? ` · ${result.note}` : ""}`
+    }
+    this.setupMessages.set(a.run_id, message)
+    this.repo.setApproval(a.id, "approved", uow.actorId)
+    uow.emit("approval.resolved", a.run_id, {
+      approval_id: a.id,
+      decision: "approved",
+      setup: { ...result, message },
+    })
+    uow.afterCommit(() => this.approvalWaiters.get(a.id)?.({ decision: "approved" }))
+    return { approval_id: a.id, state: "approved" as const }
   }
 
   /** El perfil confirmado o, si no hay, el detectado. */
@@ -3359,12 +3840,22 @@ export class Daemon {
     const humanDoor = this.server.path
     const hidden = [dirname(this.opts.dbPath)]
     if (!isNamedPipe(humanDoor)) hidden.push(dirname(humanDoor))
+    // ADR-0025 §10: ni el llavero (por el bus de D-Bus en $XDG_RUNTIME_DIR), ni ~/.ssh,
+    // ni el ssh-agent del humano. Lo que no existe no se tapa.
+    for (const p of [
+      process.env.XDG_RUNTIME_DIR,
+      join(homedir(), ".ssh"),
+      process.env.SSH_AUTH_SOCK ? dirname(process.env.SSH_AUTH_SOCK) : undefined,
+    ])
+      if (p && existsSync(p) && p !== homedir() && p !== "/" && !p.startsWith("/tmp"))
+        hidden.push(p)
     return {
       bwrap,
       spec: {
         writable,
         hidden: [...new Set(hidden)],
         reopened: [this.agentServer.path, this.agentTokens.dirFor(run.id)],
+        unsetenv: ["SSH_AUTH_SOCK", "DBUS_SESSION_BUS_ADDRESS", "GNOME_KEYRING_CONTROL"],
       },
     }
   }
@@ -3998,7 +4489,6 @@ function projectView(p: ReturnType<Repo["listProjects"]>[number]) {
   return { id: p.id, name, root_path: p.root_path, vcs: p.vcs, last_opened_at: p.last_opened_at }
 }
 
-/** Encabezado corto del prompt (ADR-0017 §1): tarea, id y cómo pedir el contexto. */
 /** ADR-0022: lo que el agente de una feature o de una subtarea tiene que saber de su rama. */
 export function featureHeader(own: FeatureInfo | null, parent: FeatureInfo | null): string {
   if (parent)
@@ -4019,6 +4509,7 @@ export function conversationHeader(): string {
   ].join(" ")
 }
 
+/** Encabezado corto del prompt (ADR-0017 §1): tarea, id y cómo pedir el contexto. */
 export function promptHeader(item: WorkItemRow): string {
   return [
     `[Keel] Tarea ${item.display_id} «${item.title}» (id ${item.id}).`,
@@ -4186,4 +4677,17 @@ function verifySummary(
   )
   const fail = results.filter((r) => !r.ok && delta.newRed.includes(r.name))
   return `${head}. ${parts.join(" · ")}${fail.length ? `\n${fail.map((r) => `--- ${r.name}\n${r.tail}`).join("\n")}` : ""}`
+}
+
+/**
+ * El envoltorio de `keel askpass` (ADR-0025 §4): `ssh` lo ejecuta sin shell, con el
+ * prompt como argumento. Vive en el estado de Keel, que el sandbox tapa.
+ */
+function writeAskpass(path: string): void {
+  const main = join(import.meta.dir, "main.ts")
+  const cmd = existsSync(main)
+    ? `exec '${process.execPath}' '${main}' askpass "$@"`
+    : `exec '${process.execPath}' askpass "$@"`
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(path, `#!/bin/sh\n${cmd}\n`, { mode: 0o700 })
 }

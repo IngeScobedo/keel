@@ -239,10 +239,13 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
     .toBe("completed")
   human.sock.destroy()
 
-  // 7. Conexiones (ADR-0013): referencias, permiso por operación; en prod la escritura no es auto.
+  // 7. Conexiones (ADR-0013, ADR-0026): permiso por operación; en prod quitar la pregunta
+  // pide escribir el nombre de la conexión.
   await page.getByRole("button", { name: "Connections", exact: true }).click()
+  await page.getByRole("button", { name: "Nueva conexión" }).click()
   await page.getByLabel("Nombre de la conexión").fill("conta")
-  await page.getByLabel("Entorno").selectOption("prod")
+  await page.getByLabel("Tipo", { exact: true }).selectOption("sqlite")
+  await page.getByLabel("Entorno", { exact: true }).selectOption("prod")
   await page.getByLabel("Ruta del archivo").fill("/tmp/conta.db")
   await page.getByRole("button", { name: "Añadir", exact: true }).click()
   const conn = page.getByTestId("connection")
@@ -250,9 +253,12 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(conn).toContainText("mode=ro")
   await page.getByLabel("Política de query.read en conta").selectOption("auto")
   await expect(page.getByLabel("Política de query.read en conta")).toHaveValue("auto")
-  await expect(
-    page.getByLabel("Política de query.write en conta").locator("option[value=auto]"),
-  ).toBeDisabled()
+  await page.getByLabel("Política de query.write en conta").selectOption("auto")
+  const risk = page.getByTestId("risk-modal")
+  await expect(risk.getByRole("button", { name: "Dejar de preguntar" })).toBeDisabled()
+  await risk.getByLabel("Nombre de la conexión para confirmar").fill("conta")
+  await risk.getByRole("button", { name: "Dejar de preguntar" }).click()
+  await expect(page.getByTestId("risk-accepted")).toContainText("prod sin preguntar")
 
   // 8. Investigación (ADR-0016): afirmaciones, decisión humana y reporte con hash.
   await page.getByRole("button", { name: "Board", exact: true }).click()

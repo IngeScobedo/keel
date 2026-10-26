@@ -213,7 +213,7 @@ describe("ADR-0013: intermediario de recursos", () => {
     },
   )
 
-  test("en prod las escrituras nunca son auto y lo producido es restricted, fuera de la búsqueda", async () => {
+  test("en prod las escrituras preguntan (quitarlo pide el nombre, ADR-0026) y lo producido es restricted, fuera de la búsqueda", async () => {
     const { human, agent, ledger, exec } = await boot()
     const c = await addConn(human, {
       name: "prod-db",
@@ -228,7 +228,7 @@ describe("ADR-0013: intermediario de recursos", () => {
         operation: "query.write",
         policy: "auto",
       }),
-    ).rejects.toThrow("nunca es auto")
+    ).rejects.toThrow("escribe el nombre de la conexión")
     await human.call("grants.set", {
       ...meta(),
       connection_id: c.id,

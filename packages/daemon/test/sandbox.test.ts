@@ -113,6 +113,64 @@ describe.skipIf(!bwrap)("ADR-0018 §3: sandbox con bubblewrap", () => {
     expect(wrote).toBe(false)
   })
 
+  test("ADR-0025 §10: el agente no alcanza el llavero (D-Bus), ~/.ssh ni el ssh-agent del humano", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keel-sbx-vault-"))
+    dirs.push(dir)
+    const repo = initRepo(join(dir, "repo"))
+    const state = join(dir, "state")
+    mkdirSync(state)
+    const daemon = new Daemon({
+      dbPath: join(state, "keel.sqlite"),
+      socketPath: join(dir, "run", "keel.sock"),
+      rootPath: repo,
+      worktreesDir: join(dir, "worktrees"),
+      adapterDeps: { queryFn: replayQuery(), binary: "/fake/claude" },
+    })
+    daemon.start()
+    daemons.push(daemon)
+    const pid = daemon.project.project_id
+    const w = daemon.repo.createWorkItem({ project_id: pid, title: "t", kind: "chore" })
+    const run = daemon.repo.createRun({ project_id: pid, work_item_id: w.id, purpose: "execute" })
+    const cwd = join(dir, "worktree")
+    initRepo(cwd)
+    daemon.agentTokens.issue({ run_id: run.id, project_id: pid, work_item_id: w.id })
+    const { spec } = (await daemon.sandboxFor(run, cwd)) as NonNullable<
+      Awaited<ReturnType<typeof daemon.sandboxFor>>
+    >
+    const home = process.env.HOME ?? ""
+    const bus = process.env.XDG_RUNTIME_DIR ? join(process.env.XDG_RUNTIME_DIR, "bus") : ""
+    const probe = join(cwd, "probe-vault.mjs")
+    writeFileSync(
+      probe,
+      `const fs = require("node:fs"), net = require("node:net")
+const [bus, ssh, sock, agent] = process.argv.slice(2)
+const tryConnect = (p) => new Promise((ok) => { if (!p) return ok("none"); const s = net.createConnection(p); s.on("connect", () => { s.destroy(); ok("connect") }); s.on("error", (e) => ok(e.code)) })
+const out = {
+  bus: await tryConnect(bus),
+  ssh: fs.existsSync(ssh) && fs.readdirSync(ssh).length > 0 ? "visible" : "hidden",
+  humanAgent: await tryConnect(sock),
+  env: [process.env.SSH_AUTH_SOCK ?? null, process.env.DBUS_SESSION_BUS_ADDRESS ?? null],
+  door: await tryConnect(agent),
+}
+console.log(JSON.stringify(out))`,
+    )
+    const { command, args } = wrapCommand(bwrap as string, spec, process.execPath, [
+      probe,
+      bus,
+      join(home, ".ssh"),
+      process.env.SSH_AUTH_SOCK ?? "",
+      daemon.agentServer.path,
+    ])
+    const r = spawnSync(command, args, { encoding: "utf8", timeout: 20_000 })
+    const out = JSON.parse(r.stdout) as Record<string, unknown>
+    expect(out.door).toBe("connect")
+    expect(out.env).toEqual([null, null])
+    expect(out.ssh).toBe("hidden")
+    // Fuera del sandbox puede que no haya bus ni agente; dentro nunca conectan.
+    expect(out.bus).not.toBe("connect")
+    expect(out.humanAgent).not.toBe("connect")
+  })
+
   test("un run que no ejecuta, o con el sandbox apagado, no se aísla", async () => {
     const dir = mkdtempSync(join(tmpdir(), "keel-sbx-"))
     dirs.push(dir)

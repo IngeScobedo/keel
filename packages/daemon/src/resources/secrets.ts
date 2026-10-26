@@ -80,3 +80,30 @@ export function redactSecrets<T>(value: T, secrets: string[]): T {
   }
   return walk(value) as T
 }
+
+/**
+ * Patrones que se borran aunque no estén en el vault (ADR-0025 §8): llaves privadas,
+ * llaves de AWS y credenciales dentro de una URL. Un `cat .env` remoto no los devuelve.
+ */
+const PATTERNS: [RegExp, string][] = [
+  [
+    /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    "[llave privada redactada]",
+  ],
+  [/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, "[redactado]"],
+  [/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):([^\s@/]+)@/gi, "$1:[redactado]@"],
+]
+export function redactKnownPatterns<T>(value: T): T {
+  const scrub = (s: string) => PATTERNS.reduce((acc, [re, by]) => acc.replace(re, by), s)
+  const walk = (v: unknown): unknown => {
+    if (typeof v === "string") return scrub(v)
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === "object") {
+      const out: Record<string, unknown> = {}
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) out[k] = walk(x)
+      return out
+    }
+    return v
+  }
+  return walk(value) as T
+}

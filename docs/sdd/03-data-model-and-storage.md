@@ -1239,20 +1239,20 @@ CREATE TABLE user_settings (
 ### 0012 · Flujo de la tarea, sus documentos y el perfil del proyecto (ADR-0021)
 
 Keel conduce el método: cada tarea que se trabaja tiene una etapa (`brief`,
-`design`, `implement`, `review`, `close`) y una ceremonia (`direct` o
-`formal`) que el agente declara al cerrar el brief.
+`design`, `implement`, `review`, `close`) y una ceremonia (`direct` o `formal`)
+que el agente declara al cerrar el brief.
 
 - **`task_flows`.** Guarda la etapa y la ceremonia. Además:
   - `contract_sha256`: el hash del contrato congelado al aprobar el diseño.
-  - `baseline_json`: el resultado de la verificación al entrar a
-    implementación, contra el que se mide el delta-verde.
+  - `baseline_json`: el resultado de la verificación al entrar a implementación,
+    contra el que se mide el delta-verde.
   - `last_verify_json`: la última verificación; cerrar la exige sin rojo nuevo.
   - `started_by`: el humano que pidió trabajarla. Es el autor de las
     transiciones que el trabajo directo hace en su nombre.
 - **`task_docs`.** Versiona los documentos de la tarea (brief, spec, diseño,
   tareas, story, QA). El contenido vive en el almacén de artefactos (ADR-0012):
-  la fila guarda su referencia, que cuenta para no purgarlo. Es append-only:
-  una versión nueva es otra fila.
+  la fila guarda su referencia, que cuenta para no purgarlo. Es append-only: una
+  versión nueva es otra fila.
 - **`project_profiles`.** Guarda lo que Keel detecta del proyecto y el humano
   confirma: comando de verificación, ramas, rutas generadas, canon e
   invariantes.
@@ -1332,4 +1332,54 @@ ALTER TABLE task_flows ADD COLUMN subtask_json TEXT
     CHECK (subtask_json IS NULL OR json_valid(subtask_json));
 CREATE INDEX idx_work_items_parent ON work_items(parent_work_item_id)
     WHERE parent_work_item_id IS NOT NULL;
+```
+
+### 0015 · Vault y conexiones como en Termius (ADR-0025, ADR-0026)
+
+Keel guarda las credenciales de las conexiones del proyecto y el agente sólo
+pide operaciones.
+
+- **`vault_items`.** Un secreto por fila, cifrado con su propia llave (DEK,
+  AES-256-GCM) envuelta con la llave maestra (AES-KW). `public_key` sólo para
+  llaves SSH: la pública no es secreta. Borrar sobrescribe el cifrado y deja la
+  fila para la auditoría.
+- **`vault_meta`.** De dónde sale la llave maestra (`keychain` o `passphrase`),
+  la sal de la frase y un texto conocido cifrado que detecta una frase
+  equivocada sin guardar la llave.
+- **`connections`** gana el método de entrada (`agent`, `file`, `key`,
+  `password`, `ask`), el secreto del vault que usa, la huella aceptada del host
+  y sus etiquetas. Sin método, la conexión sigue con `secret_ref` (ADR-0013).
+- **`permission_grants.risk_accepted_at`.** El humano quitó la pregunta en
+  producción escribiendo el nombre de la conexión (ADR-0026).
+
+```sql
+-- migración: 0015-vault
+CREATE TABLE vault_items (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT REFERENCES projects(id),
+    kind TEXT NOT NULL CHECK (kind IN ('password', 'ssh_key', 'passphrase', 'token', 'connection_string')),
+    label TEXT NOT NULL,
+    ciphertext BLOB NOT NULL,
+    nonce BLOB NOT NULL,
+    wrapped_dek BLOB NOT NULL,
+    public_key TEXT,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    rotated_at TEXT,
+    last_used_at TEXT,
+    deleted_at TEXT
+);
+
+CREATE TABLE vault_meta (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+);
+
+ALTER TABLE connections ADD COLUMN auth_method TEXT
+    CHECK (auth_method IS NULL OR auth_method IN ('agent', 'file', 'key', 'password', 'ask'));
+ALTER TABLE connections ADD COLUMN vault_item_id TEXT REFERENCES vault_items(id);
+ALTER TABLE connections ADD COLUMN host_key TEXT;
+ALTER TABLE connections ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'
+    CHECK (json_valid(tags_json));
+ALTER TABLE permission_grants ADD COLUMN risk_accepted_at TEXT;
 ```

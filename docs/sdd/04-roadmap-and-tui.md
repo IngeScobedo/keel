@@ -203,6 +203,25 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       `packages/daemon/test/method-flow.test.ts`,
       `packages/gui/e2e/method.spec.ts` y una corrida real con haiku; lo
       pendiente en `docs/reviews/2026-10-26-metodo-implementado.md`.
+- [x] La conversación del proyecto (ADR-0024, aceptado el 2026-10-26). Consultas
+      de sólo lectura sin tarea, de donde nacen tareas urgentes con «Trabajar».
+      Evidencia: `packages/daemon/test/project-conversation.test.ts` y
+      `packages/gui/e2e/conversation.spec.ts`.
+- [x] Feature y subtareas (ADR-0022, aceptado el 2026-10-26). El plan del diseño
+      aprobado hace nacer las subtareas con sus dependencias; cada una trabaja
+      en una rama desde la de la feature y se integra a ella, sola si el humano
+      lo eligió. Evidencia: `packages/daemon/test/feature-flow.test.ts`,
+      `packages/daemon/test/features.test.ts` y
+      `packages/gui/e2e/feature.spec.ts`.
+- [x] Vault y broker (ADR-0025, aceptado el 2026-10-26; ADR-0026 propuesto).
+      Conexiones con método de entrada, secretos cifrados con la llave maestra
+      en el llavero, `ssh-agent` de Keel, `keel askpass`, `keel ssh`, el sandbox
+      que tapa el llavero y `setup_request`. Evidencia:
+      `packages/daemon/test/vault.test.ts`,
+      `packages/daemon/test/vault-connections.test.ts`,
+      `packages/daemon/test/sandbox.test.ts` y `packages/gui/e2e/vault.spec.ts`;
+      lo distinto y lo pendiente en
+      `docs/reviews/2026-10-26-subtareas-conversacion-vault.md`.
 - [ ] DAG validado y versionado, estimaciones, C1–C5, roles y scopes por repo.
 - [ ] C1–C2 con un worker; paralelismo superior justificado y acotado por
       presupuesto.

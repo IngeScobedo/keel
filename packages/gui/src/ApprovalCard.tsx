@@ -95,7 +95,11 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
   const [pattern, setPattern] = useState(() => patternText(patternFor(a.tool, a.input)))
   const { busy, error, resolve } = useResolve(a, call)
   const parsed = shell ? parsePattern(a.tool, pattern) : patternFor(a.tool, a.input)
-  const covers = parsed !== null && matchesPattern(parsed, a.tool, a.input)
+  // ADR-0025 §7: una operación de recurso se aprueba esta vez, para la tarea o para el
+  // proyecto (un grant); en prod, el proyecto se decide en la conexión (ADR-0026).
+  const resource = a.tool.startsWith("resource.")
+  const prod = resource && (a.input as { environment?: string } | null)?.environment === "prod"
+  const covers = resource || (parsed !== null && matchesPattern(parsed, a.tool, a.input))
   const pending = a.decision === null
   const expired = pending && a.expires_at !== null && Date.parse(a.expires_at) <= Date.now()
   const canAct = pending && !expired && !!call && !busy
@@ -111,7 +115,7 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
     if (k === "y") decide("approve_once")
     else if (k === "n") decide("deny")
     else if (k === "s" && covers) decide("approve_session")
-    else if (k === "a" && covers) decide("approve_always")
+    else if (k === "a" && covers && !prod) decide("approve_always")
     else return
     e.preventDefault()
   })
@@ -182,19 +186,30 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
               type="button"
               className="button"
               disabled={!canAct || !covers}
-              title="El resto de este run (máx. 15 min)"
+              title={
+                resource
+                  ? "Esta operación en esta conexión, para esta tarea, una hora"
+                  : "El resto de este run (máx. 15 min)"
+              }
               onClick={() => decide("approve_session")}
             >
-              {shell ? "El patrón en la sesión" : "En la sesión"} <kbd>S</kbd>
+              {resource ? "Esta tarea" : shell ? "El patrón en la sesión" : "En la sesión"}{" "}
+              <kbd>S</kbd>
             </button>
             <button
               type="button"
               className="button"
-              disabled={!canAct || !covers}
-              title="Crea una regla del proyecto; se revoca en Permisos"
+              disabled={!canAct || !covers || prod}
+              title={
+                prod
+                  ? "En producción, quitar la pregunta se hace en la conexión, escribiendo su nombre"
+                  : resource
+                    ? "Un permiso de la conexión para todo el proyecto; se cambia en Conexiones"
+                    : "Crea una regla del proyecto; se revoca en Permisos"
+              }
               onClick={() => decide("approve_always")}
             >
-              Siempre en el proyecto <kbd>A</kbd>
+              {resource ? "Este proyecto" : "Siempre en el proyecto"} <kbd>A</kbd>
             </button>
             <button
               type="button"

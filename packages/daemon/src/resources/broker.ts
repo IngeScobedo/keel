@@ -7,7 +7,7 @@
  * `auto` y lo que se produce es `restricted`.
  */
 import type { Database } from "bun:sqlite"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { CONNECTION_OPERATIONS, type ConnectionType, WRITE_OPERATIONS } from "@keel/core"
@@ -15,7 +15,7 @@ import { SQL } from "bun"
 import type { ArtifactStore, Sensitivity } from "../artifacts.js"
 import { canonicalJson, sha256Hex, ulid } from "../ids.js"
 import { tableFromText } from "../semantic.js"
-import { redactSecrets, resolveSecret } from "./secrets.js"
+import { redactKnownPatterns, redactSecrets, resolveSecret } from "./secrets.js"
 
 export type ConnectionRow = {
   id: string
@@ -29,9 +29,27 @@ export type ConnectionRow = {
   guarantees_json: string
   created_at: string | null
   archived_at: string | null
+  /** ADR-0025 §3: null = la referencia de ADR-0013. */
+  auth_method?: "agent" | "file" | "key" | "password" | "ask" | null
+  vault_item_id?: string | null
+  /** JSON `{line, fingerprint, type}` de la huella aceptada. */
+  host_key?: string | null
+  tags_json?: string
 }
 
 export type Policy = "auto" | "ask" | "deny"
+
+/**
+ * Lo que el broker pide al daemon para una conexión con método de entrada (ADR-0025):
+ * el broker decide y ejecuta, el daemon tiene el vault, el ssh-agent y askpass.
+ */
+export type Credentials = {
+  ssh(
+    conn: ConnectionRow,
+    ctx: ExecuteContext,
+  ): Promise<{ args: string[]; env: Record<string, string>; redact: string[]; done: () => void }>
+  password(conn: ConnectionRow, ctx: ExecuteContext): Promise<string | null>
+}
 
 export type ExecuteContext = {
   projectId: string
@@ -79,6 +97,8 @@ export type BrokerDeps = {
   /** Carpeta privada de Keel donde viven los planes de Terraform (llevan variables). */
   plansDir: string
   env?: Record<string, string | undefined>
+  /** ADR-0025: credenciales del vault para las conexiones con método. */
+  credentials?: Credentials
 }
 
 export class BrokerError extends Error {
@@ -97,7 +117,7 @@ const DEFAULT_GUARANTEES: Record<ConnectionType, string> = {
   postgres:
     "Lecturas en una transacción READ ONLY con statement_timeout y tope de filas; si hay credencial de sólo lectura, se usa.",
   sqlite: "Las lecturas abren el archivo en modo sólo lectura (mode=ro): la base rechaza escribir.",
-  ssh: "Lista de comandos permitidos por prefijo en Keel; la garantía real es un usuario restringido en el servidor.",
+  ssh: "En producción cada comando pregunta (salvo que quites la pregunta asumiendo el riesgo) y la salida se redacta; la garantía real es un usuario restringido o un comando forzado en el servidor.",
   terraform: "apply sólo ejecuta el archivo de plan aprobado, atado a su hash.",
 }
 
@@ -131,6 +151,10 @@ export class ResourceBroker {
     secret_ref?: string | undefined
     secret_ref_ro?: string | undefined
     server_guarantee?: string | undefined
+    auth_method?: ConnectionRow["auth_method"] | undefined
+    vault_item_id?: string | null | undefined
+    tags?: string[] | undefined
+    host_key?: string | null | undefined
   }): ConnectionRow {
     // La configuración no lleva secretos: si trae algo con forma de contraseña, se rechaza.
     for (const k of Object.keys(p.config))
@@ -143,8 +167,8 @@ export class ResourceBroker {
     this.deps.db
       .query(
         `INSERT INTO connections(id, project_id, name, conn_type, config_json, secret_ref, secret_ref_ro,
-           environment, guarantees_json, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+           environment, guarantees_json, created_at, auth_method, vault_item_id, tags_json, host_key)
+         VALUES (?,?,?,?,?,?,?,?,?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?,?,?,?)`,
       )
       .run(
         id,
@@ -156,8 +180,48 @@ export class ResourceBroker {
         p.secret_ref_ro ?? null,
         p.environment,
         JSON.stringify({ server: p.server_guarantee ?? null, keel: DEFAULT_GUARANTEES[p.type] }),
+        p.auth_method ?? null,
+        p.vault_item_id ?? null,
+        JSON.stringify(p.tags ?? []),
+        p.host_key ?? null,
       )
     return this.find(p.project_id, id)
+  }
+
+  /** ADR-0025: cambia lo que no es la identidad de la conexión. */
+  update(
+    conn: ConnectionRow,
+    patch: Partial<{
+      environment: ConnectionRow["environment"]
+      auth_method: ConnectionRow["auth_method"]
+      vault_item_id: string | null
+      host_key: string | null
+      tags: string[]
+      config: Record<string, unknown>
+      server_guarantee: string | null
+    }>,
+  ): ConnectionRow {
+    const sets: string[] = []
+    const args: (string | null)[] = []
+    const col = (k: string, v: string | null) => {
+      sets.push(`${k} = ?`)
+      args.push(v)
+    }
+    if (patch.environment) col("environment", patch.environment)
+    if (patch.auth_method !== undefined) col("auth_method", patch.auth_method ?? null)
+    if (patch.vault_item_id !== undefined) col("vault_item_id", patch.vault_item_id)
+    if (patch.host_key !== undefined) col("host_key", patch.host_key)
+    if (patch.tags) col("tags_json", JSON.stringify(patch.tags))
+    if (patch.config) col("config_json", JSON.stringify(patch.config))
+    if (patch.server_guarantee !== undefined) {
+      const g = JSON.parse(conn.guarantees_json) as { server: string | null; keel: string }
+      col("guarantees_json", JSON.stringify({ ...g, server: patch.server_guarantee }))
+    }
+    if (sets.length)
+      this.deps.db
+        .query(`UPDATE connections SET ${sets.join(", ")} WHERE id = ?`)
+        .run(...args, conn.id)
+    return this.find(conn.project_id, conn.id)
   }
 
   archive(projectId: string, id: string): void {
@@ -176,67 +240,116 @@ export class ResourceBroker {
     policy: Policy,
     actor: string,
     expiresAt: string | null,
-  ): void {
+    o: { riskConfirm?: string | undefined; workItemId?: string | undefined } = {},
+  ): { risk_accepted: boolean } {
     this.assertOperation(conn, operation)
-    if (
+    // ADR-0026: en producción ejecutar pregunta; quitar la pregunta exige escribir el
+    // nombre de la conexión, y queda a nombre del humano.
+    const risky =
       policy === "auto" &&
       conn.environment === "prod" &&
       (WRITE_OPERATIONS as readonly string[]).includes(operation)
-    )
+    if (risky && o.riskConfirm !== conn.name)
       throw new BrokerError(
         "invalid",
-        `en producción ${operation} nunca es auto: cada vez pregunta (ADR-0013 §4)`,
+        `en producción ${operation} pregunta cada vez; para quitar la pregunta escribe el nombre de la conexión (${conn.name}) y asume el riesgo (ADR-0026)`,
       )
     const db = this.deps.db
+    // Un permiso de tarea no revoca el del proyecto; uno del proyecto reemplaza al anterior.
+    if (!o.workItemId)
+      db.query(
+        "UPDATE permission_grants SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL AND json_extract(scope_json, '$.work_item_id') IS NULL",
+      ).run(conn.id, operation)
     db.query(
-      "UPDATE permission_grants SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL",
-    ).run(conn.id, operation)
-    db.query(
-      `INSERT INTO permission_grants(id, project_id, connection_id, policy, scope_json, granted_by, expires_at, operation)
-       VALUES (?,?,?,?,?,?,?,?)`,
+      `INSERT INTO permission_grants(id, project_id, connection_id, policy, scope_json, granted_by, expires_at, operation, risk_accepted_at)
+       VALUES (?,?,?,?,?,?,?,?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END)`,
     ).run(
       ulid(),
       conn.project_id,
       conn.id,
       policy,
-      JSON.stringify({ operation, environment: conn.environment }),
+      JSON.stringify({
+        operation,
+        environment: conn.environment,
+        ...(o.workItemId ? { work_item_id: o.workItemId } : {}),
+      }),
       actor,
       expiresAt,
       operation,
+      risky ? 1 : 0,
     )
+    return { risk_accepted: risky }
   }
 
-  /** La política vigente: sin grant se pregunta; en prod las escrituras siempre preguntan. */
-  policy(conn: ConnectionRow, operation: string): { policy: Policy; effective: Policy } {
-    const g = this.deps.db
-      .query<{ policy: string }, [string, string, string]>(
-        `SELECT policy FROM permission_grants WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL
-           AND (expires_at IS NULL OR expires_at > ?) ORDER BY rowid DESC LIMIT 1`,
-      )
-      .get(conn.id, operation, new Date().toISOString())
+  /**
+   * La política vigente: sin grant se pregunta. En prod ejecutar pregunta, salvo que el
+   * humano haya quitado la pregunta asumiendo el riesgo (ADR-0026). Un permiso de la
+   * tarea («esta tarea», ADR-0025 §7) vale sólo para ella y caduca.
+   */
+  policy(
+    conn: ConnectionRow,
+    operation: string,
+    workItemId: string | null = null,
+  ): { policy: Policy; effective: Policy; risk_accepted_at: string | null } {
+    const now = new Date().toISOString()
+    const row = (scoped: boolean) =>
+      this.deps.db
+        .query<
+          { policy: string; risk_accepted_at: string | null },
+          [string, string, string, string]
+        >(
+          `SELECT policy, risk_accepted_at FROM permission_grants WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL
+             AND (expires_at IS NULL OR expires_at > ?)
+             AND ${scoped ? "json_extract(scope_json, '$.work_item_id') = ?" : "(json_extract(scope_json, '$.work_item_id') IS NULL AND ? IS NOT NULL)"}
+           ORDER BY rowid DESC LIMIT 1`,
+        )
+        .get(conn.id, operation, now, scoped ? (workItemId as string) : "x")
+    const g = (workItemId ? row(true) : null) ?? row(false)
     const policy = (g?.policy === "dry_run_then_ask" ? "ask" : (g?.policy ?? "ask")) as Policy
     const forced =
       policy === "auto" &&
       conn.environment === "prod" &&
-      (WRITE_OPERATIONS as readonly string[]).includes(operation)
-    return { policy, effective: forced ? "ask" : policy }
+      (WRITE_OPERATIONS as readonly string[]).includes(operation) &&
+      !g?.risk_accepted_at
+    return {
+      policy,
+      effective: forced ? "ask" : policy,
+      risk_accepted_at: g?.risk_accepted_at ?? null,
+    }
   }
 
   view(conn: ConnectionRow) {
     const type = conn.conn_type as ConnectionType
+    const item = conn.vault_item_id
+      ? this.deps.db
+          .query<
+            { kind: string; public_key: string | null; last_used_at: string | null },
+            [string]
+          >(
+            "SELECT kind, public_key, last_used_at FROM vault_items WHERE id = ? AND deleted_at IS NULL",
+          )
+          .get(conn.vault_item_id)
+      : null
+    const hostKey = conn.host_key
+      ? (JSON.parse(conn.host_key) as { fingerprint: string; type: string })
+      : null
     return {
       id: conn.id,
       name: conn.name,
       type,
       environment: conn.environment,
       config: JSON.parse(conn.config_json) as Record<string, unknown>,
-      has_secret: conn.secret_ref !== null,
+      has_secret: conn.secret_ref !== null || item !== null,
       has_secret_ro: conn.secret_ref_ro !== null,
       guarantees: JSON.parse(conn.guarantees_json) as { server: string | null; keel: string },
       operations: (CONNECTION_OPERATIONS[type] ?? []).map((operation) => ({
         operation,
         ...this.policy(conn, operation),
       })),
+      auth_method: conn.auth_method ?? null,
+      tags: JSON.parse(conn.tags_json ?? "[]") as string[],
+      host_key: hostKey ? { fingerprint: hostKey.fingerprint, type: hostKey.type } : null,
+      secret: item ?? null,
     }
   }
 
@@ -255,7 +368,7 @@ export class ResourceBroker {
   ): Promise<BrokerResult> {
     const conn = this.find(ctx.projectId, p.connection)
     this.assertOperation(conn, p.operation)
-    const { effective } = this.policy(conn, p.operation)
+    const { effective } = this.policy(conn, p.operation, ctx.workItemId)
     if (effective === "deny")
       throw new BrokerError("denied", `${p.operation} en ${conn.name} está denegado para el agente`)
     // El humano decide por sí mismo; un agente sin grant vigente pregunta.
@@ -285,9 +398,26 @@ export class ResourceBroker {
     const ref = useRo ? conn.secret_ref_ro : conn.secret_ref
     const secrets: string[] = []
     const env = this.deps.env ?? process.env
+    let cleanup = () => {}
+    let live: string[] = []
     try {
-      const secret = ref ? resolveSecret(ref, env) : null
+      // ADR-0025: con método de entrada, la credencial sale del vault (o se le pregunta
+      // al humano), nunca de una referencia en el entorno.
+      const managed = Boolean(conn.auth_method) && Boolean(this.deps.credentials)
+      const secret =
+        managed && conn.conn_type === "postgres"
+          ? await (this.deps.credentials as Credentials).password(conn, ctx)
+          : ref
+            ? resolveSecret(ref, env)
+            : null
       if (secret) secrets.push(secret)
+      let ssh: Awaited<ReturnType<Credentials["ssh"]>> | null = null
+      if (managed && conn.conn_type === "ssh") {
+        ssh = await (this.deps.credentials as Credentials).ssh(conn, ctx)
+        // Lo que askpass entregue durante la ejecución también se redacta.
+        live = ssh.redact
+        cleanup = ssh.done
+      }
       const config = JSON.parse(conn.config_json) as Record<string, unknown>
       const varSecrets = (config.var_secrets ?? {}) as Record<string, string>
       const tfVars: Record<string, string> = {}
@@ -296,17 +426,29 @@ export class ResourceBroker {
         secrets.push(v)
         tfVars[`TF_VAR_${name}`] = v
       }
-      const role = useRo ? "agent_ro" : ref ? "rw" : "sin credencial"
+      const role = useRo
+        ? "agent_ro"
+        : conn.auth_method
+          ? `vault:${conn.auth_method}`
+          : ref
+            ? "rw"
+            : "sin credencial"
       const started = performance.now()
-      const raw = await this.run(conn, config, p.operation, p.input, secret, tfVars)
+      const raw =
+        conn.conn_type === "ssh" && ssh
+          ? await runManagedSsh(conn, config, p.input, ssh)
+          : await this.run(conn, config, p.operation, p.input, secret, tfVars)
       const duration_ms = Math.round(performance.now() - started)
-      // Redacción exacta (ADR-0013 §3): el valor resuelto no sale en nada.
-      const clean = redactSecrets(raw, secrets)
+      // Redacción exacta (ADR-0013 §3) y por patrones conocidos (ADR-0025 §8).
+      const clean = redactKnownPatterns(redactSecrets(raw, [...secrets, ...live]))
       return this.record(ctx, conn, p.operation, p.input, clean, { role, duration_ms })
     } catch (e) {
-      if (e instanceof BrokerError) throw new BrokerError(e.code, redactSecrets(e.message, secrets))
-      const message = redactSecrets(e instanceof Error ? e.message : String(e), secrets)
+      const all = [...secrets, ...live]
+      if (e instanceof BrokerError) throw new BrokerError(e.code, redactSecrets(e.message, all))
+      const message = redactSecrets(e instanceof Error ? e.message : String(e), all)
       throw new BrokerError("failed", `${p.operation} en ${conn.name} falló: ${message}`)
+    } finally {
+      cleanup()
     }
   }
 
@@ -525,6 +667,64 @@ function runSsh(config: Record<string, unknown>, input: Record<string, unknown>)
     semantic: {
       kind: "ssh.command.completed",
       payload: (ref) => ({ server: dest, command, exit_code: r.status, output_ref: ref }),
+    },
+  }
+}
+
+/**
+ * SSH con el método de la conexión (ADR-0025 §4): las opciones y el entorno los arma el
+ * daemon (agente de Keel, askpass); aquí sólo se ejecuta, sin bloquear el daemon, porque
+ * askpass le pregunta al propio daemon.
+ */
+async function runManagedSsh(
+  conn: ConnectionRow,
+  config: Record<string, unknown>,
+  input: Record<string, unknown>,
+  prep: { args: string[]; env: Record<string, string> },
+): Promise<RawResult> {
+  const command = String(input.command ?? "")
+  if (!command) throw new BrokerError("invalid", "falta input.command")
+  const host = String(config.host ?? "")
+  if (!host) throw new BrokerError("invalid", "la conexión ssh necesita config.host")
+  const dest = config.user ? `${config.user}@${host}` : host
+  const { code, out } = await new Promise<{ code: number | null; out: string }>(
+    (resolve, reject) => {
+      const child = spawn(String(config.ssh_path ?? "ssh"), [...prep.args, host, "--", command], {
+        env: prep.env,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      let buf = ""
+      const take = (d: Buffer) => {
+        if (buf.length < 4_000_000) buf += d.toString("utf8")
+      }
+      child.stdout.on("data", take)
+      child.stderr.on("data", take)
+      const timer = setTimeout(() => child.kill("SIGTERM"), 120_000)
+      child.on("error", (e) => {
+        clearTimeout(timer)
+        reject(new BrokerError("failed", `ssh no disponible: ${e.message}`))
+      })
+      child.on("close", (c) => {
+        clearTimeout(timer)
+        resolve({ code: c, out: buf })
+      })
+    },
+  )
+  if (code === 255 && /Host key verification failed|No .* host key is known/i.test(out))
+    throw new BrokerError(
+      "denied",
+      `la huella de ${host} no está aceptada en Keel: el humano la revisa y la acepta en la conexión ${conn.name}`,
+    )
+  return {
+    summary: `exit ${code}`,
+    body: out,
+    media_type: "text/plain",
+    evidence_kind: "log",
+    output: out,
+    exit_code: code,
+    semantic: {
+      kind: "ssh.command.completed",
+      payload: (ref) => ({ server: dest, command, exit_code: code, output_ref: ref }),
     },
   }
 }

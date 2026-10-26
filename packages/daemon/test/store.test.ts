@@ -32,6 +32,7 @@ describe("ADR-0004: store SQLite WAL con migraciones", () => {
       "0012-flujo-de-la-tarea:applied",
       "0013-origen-de-las-tareas:applied",
       "0014-feature-y-subtareas:applied",
+      "0015-vault:applied",
     ])
     expect(store.vector.available).toBe(true)
     const pragma = (n: string) => store.db.query(`PRAGMA ${n}`).get() as Record<string, unknown>
@@ -93,6 +94,6 @@ describe("ADR-0004: store SQLite WAL con migraciones", () => {
     const out = r.stdout.toString()
     expect(r.exitCode).toBe(0)
     expect(out).toContain("0 fallidas")
-    expect(loadMigrations(MIGRATIONS_DIR)).toHaveLength(15)
+    expect(loadMigrations(MIGRATIONS_DIR)).toHaveLength(16)
   })
 })

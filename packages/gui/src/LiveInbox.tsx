@@ -198,7 +198,8 @@ export function LiveInbox({
                           {/* Una pregunta del agente se contesta con sus opciones, en el chat (ADR-0020 §7). */}
                           {op.tool === "AskUserQuestion" ||
                           op.tool === "ExitPlanMode" ||
-                          op.tool === "stage.gate" ? (
+                          op.tool === "stage.gate" ||
+                          op.tool === "setup.request" ? (
                             <Button
                               variant="primary"
                               onClick={() => {
@@ -210,7 +211,9 @@ export function LiveInbox({
                                 ? "Contestar en el chat"
                                 : op.tool === "stage.gate"
                                   ? "Decidir el gate en el chat"
-                                  : "Revisar el plan en el chat"}
+                                  : op.tool === "setup.request"
+                                    ? "Ver lo que pide en el chat"
+                                    : "Revisar el plan en el chat"}
                             </Button>
                           ) : (
                             <ApprovalActions
