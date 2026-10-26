@@ -25,16 +25,18 @@ import { type Vault, VaultError } from "./vault.js"
 
 type Method = NonNullable<ConnectionRow["auth_method"]>
 type AskEntry = {
-  connection_id: string
+  /** null = git (ADR-0028): la frase de la llave del humano para fetch o pull. */
+  connection_id: string | null
   project_id: string
-  purpose: "agent" | "human"
+  purpose: "agent" | "human" | "git"
   ctx: ExecuteContext | null
   expires: number
   /** Valores entregados por askpass en esta sesión: se redactan de la salida. */
   served: string[]
 }
+/** A quién se refiere una pregunta de secreto: una conexión o la llave de git. */
+type PromptTarget = { project_id: string; id: string; name: string; environment: string }
 type Prompt = {
-  connection: ConnectionRow
   what: "password" | "passphrase"
   resolve: (
     v: { value: string; remember: "once" | "session" | "vault"; actor: string } | null,
@@ -200,7 +202,19 @@ export class CredentialService implements Credentials {
       this.requireVaultOpen()
       return this.deps.vault.use(conn.vault_item_id, "broker", (v) => v)
     }
-    if (method === "ask") return this.askHuman(conn, "password", "Contraseña", ctx)
+    if (method === "ask")
+      return this.askHuman(
+        {
+          project_id: conn.project_id,
+          id: conn.id,
+          name: conn.name,
+          environment: conn.environment,
+        },
+        "password",
+        "Contraseña",
+        ctx,
+        (v, scope, actor) => this.keep(conn, "password", v, scope, actor),
+      )
     return null
   }
 
@@ -209,18 +223,99 @@ export class CredentialService implements Credentials {
     const entry = this.tokens.get(token)
     if (!entry || entry.expires < Date.now())
       throw new VaultError("invalid", "token de askpass inválido o vencido")
+    // Una confirmación de huella nunca la contesta Keel: la acepta el humano.
+    if (/yes\/no|fingerprint/i.test(prompt)) return { value: null, ask: false }
+    if (entry.connection_id === null) return this.gitAskpass(entry, prompt)
     const conn = this.deps.broker.find(entry.project_id, entry.connection_id)
     const what = conn.auth_method === "file" ? "passphrase" : "password"
-    // Una confirmación de huella nunca la contesta Keel: la acepta el humano en la conexión.
-    if (/yes\/no|fingerprint/i.test(prompt)) return { value: null, ask: false }
     let value: string | null = null
     if (conn.vault_item_id && this.deps.vault.state() === "unlocked")
       value = await this.deps.vault.use(conn.vault_item_id, `askpass:${entry.purpose}`, (v) => v)
     value ??= this.session.get(`${conn.id}:${what}`) ?? null
     if (value === null && entry.purpose === "human") return { value: null, ask: true }
-    if (value === null) value = await this.askHuman(conn, what, prompt, entry.ctx)
+    if (value === null)
+      value = await this.askHuman(
+        {
+          project_id: conn.project_id,
+          id: conn.id,
+          name: conn.name,
+          environment: conn.environment,
+        },
+        what,
+        prompt,
+        entry.ctx,
+        (v, scope, actor) => this.keep(conn, what, v, scope, actor),
+      )
     entry.served.push(value)
     return { value, ask: false }
+  }
+
+  /**
+   * ADR-0028: git pide la frase de la llave del humano. Keel no lee la llave: la lee
+   * ssh. La frase sale de la sesión, del vault (si el humano la guardó) o del humano.
+   */
+  private async gitAskpass(
+    entry: AskEntry,
+    prompt: string,
+  ): Promise<{ value: string | null; ask: boolean }> {
+    const key = /passphrase for (?:key )?'([^']+)'/i.exec(prompt)?.[1]
+    // Sólo frases de llaves: usuario y contraseña de un proveedor de git no pasan por Keel.
+    if (!key) return { value: null, ask: false }
+    const label = `ssh-key:${key}`
+    let value = this.session.get(label) ?? null
+    if (value === null && this.deps.vault.state() === "unlocked") {
+      const id = this.deps.vault.findByLabel(label)
+      if (id) value = await this.deps.vault.use(id, "askpass:git", (v) => v)
+    }
+    value ??= await this.askHuman(
+      { project_id: entry.project_id, id: label, name: `git · ${key}`, environment: "dev" },
+      "passphrase",
+      prompt,
+      null,
+      async (v, scope, actor) => {
+        if (scope === "session") this.session.set(label, v)
+        if (scope !== "vault") return
+        this.requireVaultOpen()
+        const existing = this.deps.vault.findByLabel(label)
+        if (existing) await this.deps.vault.rotate(existing, v, actor)
+        else
+          await this.deps.vault.put({
+            project_id: null,
+            kind: "passphrase",
+            label,
+            value: v,
+            actor,
+          })
+      },
+    )
+    entry.served.push(value)
+    return { value, ask: false }
+  }
+
+  /** El entorno de git para fetch y pull del humano (ADR-0028): askpass sólo para frases. */
+  gitEnv(projectId: string, noAskpass: string): { env: Record<string, string>; done: () => void } {
+    const token = randomBytes(24).toString("hex")
+    this.tokens.set(token, {
+      connection_id: null,
+      project_id: projectId,
+      purpose: "git",
+      ctx: null,
+      expires: Date.now() + 5 * 60_000,
+      served: [],
+    })
+    return {
+      env: {
+        GIT_TERMINAL_PROMPT: "0",
+        // Usuario y contraseña de un proveedor de git: nunca por Keel.
+        GIT_ASKPASS: noAskpass,
+        SSH_ASKPASS: this.deps.askpass,
+        SSH_ASKPASS_REQUIRE: "force",
+        DISPLAY: process.env.DISPLAY || "keel",
+        KEEL_ASKPASS_TOKEN: token,
+        KEEL_SOCKET: this.deps.humanDoor(),
+      },
+      done: () => this.tokens.delete(token),
+    }
   }
 
   /** Lo que el humano escribió en su terminal, para recordarlo (ADR-0025 §4). */
@@ -233,6 +328,7 @@ export class CredentialService implements Credentials {
     const entry = this.tokens.get(token)
     if (!entry || entry.expires < Date.now())
       throw new VaultError("invalid", "token de askpass inválido o vencido")
+    if (entry.connection_id === null) return
     const conn = this.deps.broker.find(entry.project_id, entry.connection_id)
     await this.keep(
       conn,
@@ -274,57 +370,48 @@ export class CredentialService implements Credentials {
    * secreto; la respuesta llega por `secrets.prompt_answer`.
    */
   private askHuman(
-    conn: ConnectionRow,
+    target: PromptTarget,
     what: "password" | "passphrase",
     text: string,
     ctx: ExecuteContext | null,
+    keep: (value: string, scope: "once" | "session" | "vault", actor: string) => Promise<void>,
   ): Promise<string> {
     const id = ulid()
     const timeout = this.deps.timeoutMs() ?? 10 * 60_000
+    const noun = what === "password" ? "contraseña" : "frase"
     return new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.prompts.delete(id)
-        this.deps.emit(conn.project_id, ctx?.runId ?? null, "secret.prompt_resolved", {
+        this.deps.emit(target.project_id, ctx?.runId ?? null, "secret.prompt_resolved", {
           prompt_id: id,
           outcome: "expired",
         })
-        reject(
-          new BrokerError(
-            "denied",
-            `nadie dio la ${what === "password" ? "contraseña" : "frase"} de ${conn.name} a tiempo`,
-          ),
-        )
+        reject(new BrokerError("denied", `nadie dio la ${noun} de ${target.name} a tiempo`))
       }, timeout)
       this.prompts.set(id, {
-        connection: conn,
         what,
         resolve: (answer) => {
           clearTimeout(timer)
           this.prompts.delete(id)
-          this.deps.emit(conn.project_id, ctx?.runId ?? null, "secret.prompt_resolved", {
+          this.deps.emit(target.project_id, ctx?.runId ?? null, "secret.prompt_resolved", {
             prompt_id: id,
             outcome: answer ? "answered" : "cancelled",
             remember: answer?.remember ?? null,
           })
           if (!answer) {
-            reject(
-              new BrokerError(
-                "denied",
-                `el humano no dio la ${what === "password" ? "contraseña" : "frase"} de ${conn.name}`,
-              ),
-            )
+            reject(new BrokerError("denied", `el humano no dio la ${noun} de ${target.name}`))
             return
           }
-          void this.keep(conn, what, answer.value, answer.remember, answer.actor)
+          void keep(answer.value, answer.remember, answer.actor)
             .catch(() => {})
             .finally(() => resolve(answer.value))
         },
       })
-      this.deps.emit(conn.project_id, ctx?.runId ?? null, "secret.prompt_requested", {
+      this.deps.emit(target.project_id, ctx?.runId ?? null, "secret.prompt_requested", {
         prompt_id: id,
-        connection_id: conn.id,
-        connection_name: conn.name,
-        environment: conn.environment,
+        connection_id: target.id,
+        connection_name: target.name,
+        environment: target.environment,
         what,
         text,
         work_item_id: ctx?.workItemId ?? null,

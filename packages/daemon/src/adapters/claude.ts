@@ -56,14 +56,16 @@ export type ClaudeProfile = {
   auth_mode: AuthMode
   model: string
   allowed_tools: string[]
-  max_turns: number
+  /** ADR-0028: null = sin tope de turnos (por defecto). */
+  max_turns: number | null
   /**
    * ms que el daemon espera una decisión humana antes de denegar; null = sin
    * límite (ADR-0020 §3, por defecto). Un ajuste del usuario lo reemplaza.
    */
   approval_timeout_ms: number | null
   /** Tiempo máximo de reloj de un run; al vencer, Keel lo aborta (`end_reason: timeout`). */
-  max_wall_ms: number
+  /** ADR-0028: null = sin tope de tiempo (por defecto). */
+  max_wall_ms: number | null
   /** Tope de costo estimado del run (`maxBudgetUsd` del SDK); lo fija el daemon (limits.ts). */
   max_budget_usd: number | null
   cwd: string
@@ -115,10 +117,10 @@ export const DEFAULT_PROFILE: ClaudeProfile = {
   auth_mode: "subscription_session",
   model: "haiku",
   allowed_tools: ["Read", "Glob", "Grep"],
-  max_turns: 12,
+  // ADR-0028: sin tope de turnos ni de tiempo; la guarda de costo es el presupuesto.
+  max_turns: null,
   approval_timeout_ms: null,
-  // Default bajo (ADR-0002 regla 3): subirlo es una decisión explícita del perfil.
-  max_wall_ms: 30 * 60_000,
+  max_wall_ms: null,
   max_budget_usd: null,
   cwd: process.cwd(),
   mcp_servers: {},
@@ -510,7 +512,7 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
       ...(profile.method_plugin
         ? { plugins: [{ type: "local", path: profile.method_plugin }] }
         : {}),
-      maxTurns: profile.max_turns,
+      ...(profile.max_turns === null ? {} : { maxTurns: profile.max_turns }),
       ...(profile.max_budget_usd === null ? {} : { maxBudgetUsd: profile.max_budget_usd }),
       allowedTools: [
         ...profile.allowed_tools,
@@ -547,10 +549,13 @@ export class ClaudeAdapter implements ProviderAdapter<ClaudeProfile> {
 
     const queryFn = this.deps.queryFn ?? ((a) => sdkQuery(a))
     // Supervisor: tiempo máximo de reloj. Abortar pasa por el mismo camino que cancelar.
-    const deadline = setTimeout(() => {
-      this.abortCause.set(run.id, "timeout")
-      abort.abort("timeout")
-    }, profile.max_wall_ms)
+    const deadline =
+      profile.max_wall_ms === null
+        ? undefined
+        : setTimeout(() => {
+            this.abortCause.set(run.id, "timeout")
+            abort.abort("timeout")
+          }, profile.max_wall_ms)
     let thrown: string | null = null
     const input = new TurnInput(prompt)
     let sessionSaved: string | null = null

@@ -248,7 +248,14 @@ export function App() {
               : currentProject?.name || repoName(workspace.health?.project?.root_path)}
             <ChevronDown size={12} />
           </Button>
-          {!demo && workspace.repo?.git && <RepoBadge git={workspace.repo.git} />}
+          {!demo && workspace.repo?.git && (
+            <RepoBadge
+              git={workspace.repo.git}
+              {...(workspace.mode === "live"
+                ? { call: workspace.call, onChanged: () => void workspace.refreshRepo() }
+                : {})}
+            />
+          )}
           {!demo && workspace.repo && !workspace.repo.git && (
             <span className="repo-badge muted">sin git</span>
           )}
@@ -788,9 +795,14 @@ export function App() {
     </div>
   )
 }
-/** Rama, adelanto o atraso y cambios del repo del proyecto activo. */
+/**
+ * Rama, adelanto o atraso y cambios del repo del proyecto activo. ADR-0028: un clic
+ * consulta el remoto; si va atrás, «Actualizar» hace pull sólo avanzando.
+ */
 function RepoBadge({
   git,
+  call,
+  onChanged,
 }: {
   git: {
     branch: string | null
@@ -799,14 +811,62 @@ function RepoBadge({
     behind: number
     changed: number
   }
+  call?: ReturnType<typeof useWorkspace>["call"]
+  onChanged?: () => void
 }) {
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState("")
+  async function act(method: "projects.base_check" | "projects.pull") {
+    if (!call) return
+    setBusy(true)
+    setNote("")
+    try {
+      const r =
+        method === "projects.pull"
+          ? await call("projects.pull", { ...mutationMeta() })
+          : await call("projects.base_check", {})
+      if (r.error) setNote(r.error)
+      onChanged?.()
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
   return (
-    <span className="repo-badge" data-testid="repo-badge" title={git.head ?? "sin commits"}>
-      <GitBranch size={12} />
-      {git.branch ?? `HEAD ${git.head?.slice(0, 7) ?? "—"}`}
+    <span
+      className="repo-badge"
+      data-testid="repo-badge"
+      title={note || (git.head ?? "sin commits")}
+    >
+      <button
+        type="button"
+        className="repo-badge-check"
+        disabled={!call || busy}
+        aria-label="Consultar el remoto"
+        onClick={() => void act("projects.base_check")}
+      >
+        <GitBranch size={12} />
+        {git.branch ?? `HEAD ${git.head?.slice(0, 7) ?? "—"}`}
+      </button>
       {git.ahead > 0 && <span>↑{git.ahead}</span>}
       {git.behind > 0 && <span>↓{git.behind}</span>}
+      {git.behind > 0 && call && (
+        <button
+          type="button"
+          className="text-link"
+          disabled={busy}
+          onClick={() => void act("projects.pull")}
+        >
+          {busy ? "…" : "Actualizar"}
+        </button>
+      )}
       {git.changed > 0 && <span className="amber">{git.changed} cambios</span>}
+      {note && (
+        <span className="error" title={note}>
+          !
+        </span>
+      )}
     </span>
   )
 }

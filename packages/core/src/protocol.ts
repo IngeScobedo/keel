@@ -459,6 +459,14 @@ export const ConnectionViewSchema = z.object({
     .nullable()
     .optional(),
 })
+export const BaseStateSchema = z.object({
+  branch: z.string().nullable(),
+  upstream: z.string().nullable(),
+  ahead: z.number().int(),
+  behind: z.number().int(),
+  fetched: z.boolean(),
+  error: z.string().nullable(),
+})
 export const VaultStatusSchema = z.object({
   state: z.enum(["unlocked", "locked", "uninitialized"]),
   keystore: z.enum(["keychain", "passphrase", "none"]),
@@ -717,6 +725,19 @@ export const Methods = {
     result: ProjectViewSchema,
   },
   /** Rama, HEAD, upstream y cambios del repo del proyecto (`@keel/git`). */
+  /**
+   * ADR-0028: la rama del proyecto contra su remoto, después de un `git fetch` sin
+   * terminal. `error` dice por qué no se pudo consultar (sin red, sin permiso).
+   */
+  "projects.base_check": {
+    params: z.object({ project_id: z.string().optional() }),
+    result: BaseStateSchema,
+  },
+  /** ADR-0028: `git pull --ff-only` del checkout del humano, a pedido suyo. */
+  "projects.pull": {
+    params: MutationMeta.extend({ project_id: z.string().optional() }),
+    result: BaseStateSchema,
+  },
   "projects.status": {
     params: z.object({ project_id: z.string().optional() }),
     result: z.object({

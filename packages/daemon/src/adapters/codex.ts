@@ -71,7 +71,8 @@ export type CodexProfile = {
   reasoning_effort: "minimal" | "low" | "medium" | "high" | null
   /** Red del sandbox en runs `execute`; apagada por defecto (ADR-0008 §3). */
   network_access: boolean
-  max_wall_ms: number
+  /** ADR-0028: null = sin tope de tiempo (por defecto). */
+  max_wall_ms: number | null
   cwd: string
   /** Ruta al `codex` del usuario; null = el que encuentre el SDK. */
   codex_path: string | null
@@ -101,7 +102,8 @@ export const DEFAULT_CODEX_PROFILE: CodexProfile = {
   model: null,
   reasoning_effort: "low",
   network_access: false,
-  max_wall_ms: 30 * 60_000,
+  // ADR-0028: sin tope de tiempo; la guarda de costo es el presupuesto.
+  max_wall_ms: null,
   cwd: process.cwd(),
   codex_path: null,
   mcp_servers: {},
@@ -295,10 +297,13 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     })
     const abort = new AbortController()
     this.running.set(run.id, abort)
-    const deadline = setTimeout(() => {
-      this.abortCause.set(run.id, "timeout")
-      abort.abort("timeout")
-    }, profile.max_wall_ms)
+    const deadline =
+      profile.max_wall_ms === null
+        ? undefined
+        : setTimeout(() => {
+            this.abortCause.set(run.id, "timeout")
+            abort.abort("timeout")
+          }, profile.max_wall_ms)
 
     const rootAgentId = `${run.id}:root`
     const signals: RunSignals = { authMode: profile.auth_mode }
@@ -384,10 +389,13 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     this.recordProcess(ctx, server, launch)
     const abort = new AbortController()
     this.running.set(run.id, abort)
-    const deadline = setTimeout(() => {
-      this.abortCause.set(run.id, "timeout")
-      abort.abort("timeout")
-    }, profile.max_wall_ms)
+    const deadline =
+      profile.max_wall_ms === null
+        ? undefined
+        : setTimeout(() => {
+            this.abortCause.set(run.id, "timeout")
+            abort.abort("timeout")
+          }, profile.max_wall_ms)
 
     const rootAgentId = `${run.id}:root`
     const signals: RunSignals = { authMode: profile.auth_mode }

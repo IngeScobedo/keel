@@ -231,6 +231,17 @@ export class Vault {
     this.emit("vault.item_deleted", { item_id: id, actor })
   }
 
+  /** El secreto vivo con esa etiqueta (la frase de una llave para git, ADR-0028). */
+  findByLabel(label: string): string | null {
+    return (
+      this.db
+        .query<{ id: string }, [string]>(
+          "SELECT id FROM vault_items WHERE label = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1",
+        )
+        .get(label)?.id ?? null
+    )
+  }
+
   item(id: string): VaultItemRow {
     const row = this.db
       .query<VaultItemRow, [string]>(

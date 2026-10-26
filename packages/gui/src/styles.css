@@ -3935,3 +3935,21 @@ button.rc-ledger-row:hover {
   display: flex;
   gap: 10px;
 }
+
+/* ADR-0028: la base al día. */
+.repo-badge-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  color: inherit;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+.base-guard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

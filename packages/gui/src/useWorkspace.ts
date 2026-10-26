@@ -224,12 +224,18 @@ export function useWorkspace() {
   const lastKind = events[events.length - 1]?.kind ?? ""
   useEffect(() => {
     if (mode !== "live" || !client.current) return
-    if (!/^(worktree\.|workspace\.|run\.updated)/.test(lastKind)) return
+    if (!/^(worktree\.|workspace\.|run\.updated|project\.pulled)/.test(lastKind)) return
     void client.current
       .call("projects.status", {})
       .then(setRepo)
       .catch(() => {})
   }, [lastKind, mode])
+
+  /** ADR-0028: relee la rama del proyecto (después de consultar el remoto). */
+  const refreshRepo = useCallback(async () => {
+    if (!client.current) return
+    setRepo(await client.current.call("projects.status", {}))
+  }, [])
 
   async function create(title: string, spec: string, kind = "feature"): Promise<WorkItem> {
     if (mode === "demo") {
@@ -287,6 +293,7 @@ export function useWorkspace() {
     phase,
     projects,
     repo,
+    refreshRepo,
     switchProject,
     openProject,
     connect,

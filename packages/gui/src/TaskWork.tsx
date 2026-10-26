@@ -1,6 +1,7 @@
 import type { TaskFlowView } from "@keel/core"
 import { Flag, MessageSquare, Play, Send } from "lucide-react"
 import { useEffect, useState } from "react"
+import { useBaseGuard } from "./BaseGuard.js"
 import { STAGE_LABEL } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { LiveTaskActions } from "./LiveTaskActions.js"
@@ -52,8 +53,14 @@ export function TaskWork({
     }
   }, [call, task.id, task.revision, task.stage, runState])
   const done = task.lifecycle === "done"
+  // ADR-0028: el primer run abre el worktree; antes, la base al día.
+  const base = useBaseGuard(call)
   async function work() {
     if (busy) return
+    if (!latest && !task.parent_work_item_id) await base.guard(start)
+    else await start()
+  }
+  async function start() {
     setBusy(true)
     setError("")
     try {
@@ -75,6 +82,8 @@ export function TaskWork({
   const gate = flow?.pending_gate
   return (
     <section className="task-work" data-testid="task-work">
+      {base.modal}
+      {base.checking && <p className="muted">Consultando el remoto antes de abrir el worktree…</p>}
       <h3>Trabajo</h3>
       {flow && (
         <StageTrack

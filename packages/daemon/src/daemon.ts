@@ -80,6 +80,7 @@ import type { LiveChange } from "./adapters/provider.js"
 import { AgentTokens } from "./agent-tokens.js"
 import { ApprovalGate, type ApprovalResolution, QUESTION_TOOLS } from "./approvals.js"
 import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
+import { checkBase, pullBase } from "./base-sync.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
@@ -412,6 +413,7 @@ export class Daemon {
     const reconciled = this.reconcile()
     // ADR-0025: el vault se abre con el llavero si se puede; sin él espera la frase.
     if (!this.opts.askpass) writeAskpass(join(dirname(this.opts.dbPath), "bin", "keel-askpass"))
+    writeNoAskpass(this.noAskpassPath())
     this.track(this.vault.open().catch(() => "locked"))
     // Lo que quedó pendiente antes de una caída: despachos y liberaciones (DoD Fase 0).
     this.track(this.outbox.drain())
@@ -2086,6 +2088,40 @@ export class Daemon {
           throw brokerFailure(e)
         }
       },
+      "projects.base_check": async (params, ctx) => {
+        requireHuman(ctx, "consultar la rama base")
+        const p = params as Params<"projects.base_check">
+        const pid = this.scopeOf(ctx, p.project_id)
+        const root = repo.projectRoot(pid) ?? this.rootPath
+        const g = this.credentials.gitEnv(pid, this.noAskpassPath())
+        try {
+          return await checkBase(root, g.env)
+        } finally {
+          g.done()
+        }
+      },
+      "projects.pull": async (params, ctx) => {
+        requireHuman(ctx, "actualizar la rama base")
+        const p = params as Params<"projects.pull">
+        const pid = this.scopeOf(ctx, p.project_id)
+        const root = repo.projectRoot(pid) ?? this.rootPath
+        const g = this.credentials.gitEnv(pid, this.noAskpassPath())
+        try {
+          const state = await pullBase(root, g.env)
+          this.emitSystem("project.pulled", null, {
+            project_id: pid,
+            branch: state.branch,
+            upstream: state.upstream,
+            behind: state.behind,
+            actor: actorOf(ctx),
+          })
+          return state
+        } catch (e) {
+          throw rpcError(ErrorCode.conflict, e instanceof Error ? e.message : String(e))
+        } finally {
+          g.done()
+        }
+      },
       "vault.status": (_params, ctx) => {
         requireHuman(ctx, "ver el vault")
         return this.vault.status()
@@ -2915,6 +2951,11 @@ export class Daemon {
       if (e instanceof BrokerError) throw brokerFailure(e)
       throw e
     }
+  }
+
+  /** El askpass que nunca contesta: usuario y contraseña de git no pasan por Keel. */
+  private noAskpassPath(): string {
+    return join(dirname(this.opts.dbPath), "bin", "keel-noaskpass")
   }
 
   private vaultPut(p: Parameters<Vault["put"]>[0]): Promise<string> {
@@ -4779,4 +4820,10 @@ function writeAskpass(path: string): void {
     : `exec '${process.execPath}' askpass "$@"`
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
   writeFileSync(path, `#!/bin/sh\n${cmd}\n`, { mode: 0o700 })
+}
+
+/** ADR-0028: para GIT_ASKPASS; git no pide usuario ni contraseña por Keel. */
+function writeNoAskpass(path: string): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
+  writeFileSync(path, "#!/bin/sh\nexit 1\n", { mode: 0o700 })
 }
