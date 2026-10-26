@@ -292,6 +292,50 @@ describe("ADR-0022: feature y subtareas", () => {
     expect(existsSync(join(reviewCwd, "web/photos/T3.ts"))).toBe(true)
   }, 60_000)
 
+  test("si el run de diseño sigue vivo al aprobar, la primera hija espera lugar y arranca al liberarse", async () => {
+    const { daemon, human, scripts, until, events } = await boot()
+    const d = () => daemon
+    const parent = (await human.call("work_items.create", {
+      ...meta(),
+      title: "Lugar ocupado",
+      kind: "feature",
+    })) as { id: string }
+    let release: () => void = () => {}
+    const designDone = new Promise<void>((r) => {
+      release = r
+    })
+    scripts.push(async (t) => {
+      await put(t, "brief", BRIEF)
+      await advance(t, "design", { ceremony: "formal", reason: "contrato" })
+    })
+    scripts.push(async (t) => {
+      await put(t, "spec", SPEC)
+      await put(t, "design", DESIGN)
+      await put(t, "tasks", "- [ ] A → `api/a/**` → R1\n- [ ] B → `web/b/**` → R2\n")
+      await advance(t, "implement")
+      // El run de diseño no termina hasta después de la aprobación del gate (b).
+      await designDone
+    })
+    scripts.push(subtaskScript(d), subtaskScript(d))
+    await human.call("tasks.work", { ...meta(), work_item_id: parent.id })
+    await until(() => daemon.repo.pendingStageGate(parent.id) !== null, "gate (a)")
+    await approveGate(human, daemon, parent.id)
+    await until(
+      () =>
+        daemon.repo.getFlow(parent.id)?.stage === "design" &&
+        daemon.repo.pendingStageGate(parent.id) !== null,
+      "gate (b)",
+    )
+    await approveGate(human, daemon, parent.id, { auto_integrate: true })
+    await until(() => events("feature.waiting").length > 0, "la hija espera lugar")
+    release()
+    await until(
+      () => daemon.repo.childrenOf(parent.id).every((c) => c.lifecycle === "done"),
+      "las dos hijas integradas",
+      30_000,
+    )
+  }, 60_000)
+
   test("sin integración automática el humano aprueba cada integración; una subtarea no publica", async () => {
     const { daemon, human, scripts, until } = await boot()
     const d = () => daemon

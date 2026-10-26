@@ -2600,6 +2600,8 @@ export class Daemon {
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
     this.afterFlowRun(final)
+    // ADR-0022 §3: un run que termina libera lugar para la hija que esperaba.
+    for (const parentId of [...this.waitingFeatures]) this.scheduleFeature(parentId)
   }
 
   /**
@@ -3273,6 +3275,9 @@ export class Daemon {
 
   // --- feature y subtareas (ADR-0022) ------------------------------------------------
 
+  /** Features cuya siguiente hija no pudo arrancar por límites: se reintenta al liberar. */
+  private readonly waitingFeatures = new Set<string>()
+
   /** La feature de un padre, si sus subtareas ya nacieron. */
   private featureOf(workItemId: string): FeatureInfo | null {
     const raw = this.repo.getFlow(workItemId)?.feature_json
@@ -3502,8 +3507,10 @@ export class Daemon {
           run_id: run.id,
         })
       })
+      this.waitingFeatures.delete(parentId)
     } catch (e) {
-      // Sin lugar de concurrencia o sin presupuesto: arranca cuando se libere.
+      // Sin lugar de concurrencia o sin presupuesto: arranca cuando termine otro run.
+      this.waitingFeatures.add(parentId)
       this.emitSystem("feature.waiting", repo.lastRunFor(parentId)?.id ?? null, {
         work_item_id: parentId,
         subtask_id: next.id,
