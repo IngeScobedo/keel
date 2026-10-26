@@ -195,6 +195,14 @@ Windows y POSIX sin presuponer resultados submilisegundo.
       respuestas. Evidencia: `packages/daemon/test/run-chat.test.ts`,
       `packages/gui/e2e/run-chat.spec.ts`; lo pendiente en
       `docs/reviews/2026-10-26-chat-de-foco-implementado.md`.
+- [x] Keel conduce el método (ADR-0021, aceptado el 2026-10-26). Una tarea se
+      trabaja con «Trabajar»: etapas brief, diseño, implementar, revisión y
+      cierre con los gates del método de Casa Matte, documentos validados de
+      forma determinista, verificación con delta-verde que corre Keel, harness
+      del proyecto y plugin `keel-method`. Evidencia:
+      `packages/daemon/test/method-flow.test.ts`,
+      `packages/gui/e2e/method.spec.ts` y una corrida real con haiku; lo
+      pendiente en `docs/reviews/2026-10-26-metodo-implementado.md`.
 - [ ] DAG validado y versionado, estimaciones, C1–C5, roles y scopes por repo.
 - [ ] C1–C2 con un worker; paralelismo superior justificado y acotado por
       presupuesto.

@@ -222,6 +222,14 @@ describe("ADR-0021: trabajo directo", () => {
       expect(r).toMatchObject({ flow: { stage: "implement" }, gate: null })
     })
     // 2. Implementación: Keel abre el run solo al terminar el de planeación.
+    let proposed: (id: string) => void = () => {}
+    const planId = new Promise<string>((r) => {
+      proposed = r
+    })
+    let closePlan: () => void = () => {}
+    const closed = new Promise<void>((r) => {
+      closePlan = r
+    })
     let release: () => void = () => {}
     const hold = new Promise<void>((r) => {
       release = r
@@ -238,6 +246,13 @@ describe("ADR-0021: trabajo directo", () => {
       expect(await t.use("Bash", { command: "rm ok.txt" })).toMatchObject({ behavior: "deny" })
       await put(t, w.id, "qa", "## Veredicto: PASS\n")
       await advance(t, w.id, "close")
+      // Cierre: el agente propone el commit y espera a que el humano lo apruebe.
+      const plan = (await t.agent.call("git.propose", {
+        ...meta(),
+        message: "feat: capítulos en el detalle",
+      })) as { plan_id: string }
+      proposed(plan.plan_id)
+      await closed
     })
     const work = (await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })) as {
       delivered: string
@@ -271,8 +286,20 @@ describe("ADR-0021: trabajo directo", () => {
     ])
     expect(s.daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("running")
     release()
-    await s.until(() => s.daemon.repo.getWorkItem(w.id)?.lifecycle === "needs_review")
+    // El humano aprueba el plan de cierre con el run todavía vivo.
+    const id = await planId
+    const approval = s.daemon.repo.getApproval(id) as { operation_hash: string }
+    await s.human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: id,
+      operation_hash: approval.operation_hash,
+      decision: "approve_once",
+    })
+    await s.until(() => s.events("git.plan.completed").length === 1)
+    closePlan()
+    await s.until(() => s.daemon.repo.getWorkItem(w.id)?.lifecycle === "done")
     expect(s.daemon.repo.getFlow(w.id)?.stage).toBe("close")
+    expect(s.events("task.closed")).toHaveLength(1)
     // La transición directa quedó a nombre del humano que pidió trabajar la tarea.
     expect(s.events("task.stage_changed")[0]).toMatchObject({
       from: "brief",
@@ -282,9 +309,9 @@ describe("ADR-0021: trabajo directo", () => {
     const view = (await s.human.call("work_items.get", { work_item_id: w.id })) as {
       item: { stage: string; board_status: string }
     }
-    expect(view.item).toMatchObject({ stage: "close", board_status: "in_review" })
-    // Ningún permiso se le preguntó al humano: las negaciones fueron del método.
-    expect(s.events("approval.requested")).toHaveLength(0)
+    expect(view.item).toMatchObject({ stage: "close", board_status: "completed" })
+    // Al humano sólo se le preguntó el plan de cierre: lo demás lo decidió el método.
+    expect(s.events("approval.requested").map((a) => a.tool)).toEqual(["git.plan"])
   })
 })
 

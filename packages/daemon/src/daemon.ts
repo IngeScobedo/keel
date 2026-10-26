@@ -227,6 +227,11 @@ export class Daemon {
   private readonly background = new Set<Promise<unknown>>()
   /** El perfil detectado de cada proyecto, mientras el humano no confirme uno (ADR-0021 §5). */
   private readonly detectedProfiles = new Map<string, ProjectProfile>()
+  /**
+   * Cierre aplicado con el run aún vivo (ADR-0021 §4): quién aprobó el plan. Al
+   * asentar el run, la tarea pasa de `needs_review` a `done` a su nombre.
+   */
+  private readonly closedByPlan = new Map<string, string>()
   /** Una verificación a la vez por tarea: la segunda espera a la primera. */
   private readonly verifying = new Map<string, Promise<unknown>>()
   private lagMs = 0
@@ -3076,6 +3081,9 @@ export class Daemon {
     // ADR-0021 §4: en el cierre del método, el plan aprobado es el gate (c): la tarea termina.
     const flow = this.repo.getFlow(item.id)
     const current = this.repo.getWorkItem(item.id)
+    // Si el run sigue vivo, la tarea aún no espera la revisión: se cierra al asentarlo.
+    if (r.ok && flow?.stage === "close" && current?.lifecycle === "running")
+      this.closedByPlan.set(item.id, approver ?? "system:daemon")
     if (r.ok && flow?.stage === "close" && current?.lifecycle === "needs_review")
       runUnitOfWork(
         this.uowDeps(),
@@ -3300,8 +3308,22 @@ export class Daemon {
           ? "planned"
           : "failed"
     const w = this.repo.getWorkItem(final.work_item_id)
-    if (w?.lifecycle === "running")
-      this.transition(uow, w, to, "system", { runId: final.id, reason: `run ${final.status}` })
+    if (w?.lifecycle === "running") {
+      const settled = this.transition(uow, w, to, "system", {
+        runId: final.id,
+        reason: `run ${final.status}`,
+      })
+      // El plan de cierre ya se aplicó con el run vivo: el humano lo aprobó, la tarea termina.
+      const approver = this.closedByPlan.get(w.id)
+      if (approver && settled.lifecycle === "needs_review") {
+        this.closedByPlan.delete(w.id)
+        this.transition(uow, settled, "done", "human_close", {
+          runId: final.id,
+          reason: `el humano (${approver}) aprobó el plan de cierre`,
+        })
+        uow.emit("task.closed", final.id, { work_item_id: w.id, approver })
+      }
+    }
     if (releasesOnFinish(final.status)) this.enqueueRelease(uow, final.id, origin)
   }
 

@@ -144,6 +144,11 @@ async function scenario(text: string) {
     turnCompleted("completed")
     return
   }
+  if (text.startsWith("nosteer")) {
+    // El turno espera un mensaje y lo rechaza: así la prueba controla el turno siguiente.
+    noSteer = true
+    return
+  }
   // Cualquier otro texto: un turno que contesta y termina.
   notify("item/completed", {
     item: { type: "agentMessage", id: `m-${Date.now()}`, text: `eco: ${text}` },
@@ -153,6 +158,7 @@ async function scenario(text: string) {
   turnCompleted("completed")
 }
 
+let noSteer = false
 let buf = ""
 process.stdin.on("data", (chunk: Buffer) => {
   buf += chunk.toString("utf8")
@@ -205,13 +211,24 @@ async function handle(msg: Json) {
       return reply({ thread: { id: (msg.params as Json).threadId } })
     case "turn/steer": {
       log({ steer: msg.params })
+      // «nosteer»: el turno no acepta mensajes; el mensaje queda para el siguiente turno.
+      if (noSteer) {
+        noSteer = false
+        send({ id, error: { code: -32600, message: "fake: el turno no acepta steer" } })
+        turnCompleted("completed")
+        return
+      }
       reply({ turnId: TURN })
       const text = ((msg.params as Json).input as { text: string }[])[0]?.text ?? ""
       steered?.(text)
       return
     }
     case "turn/start":
-      log({ turnStart: (msg.params as Json).input })
+      log({
+        turnStart: (msg.params as Json).input,
+        sandboxPolicy: (msg.params as Json).sandboxPolicy ?? null,
+        approvalPolicy: (msg.params as Json).approvalPolicy ?? null,
+      })
       return startTurn(msg)
     case "turn/interrupt":
       log({ interrupt: msg.params })

@@ -268,4 +268,28 @@ describe("ADR-0019 §3: conversación con Codex (app_server)", () => {
     })
     expect(daemon.repo.getRun(child.id)?.status).toBe("completed")
   })
+
+  test("ADR-0021: revisar con Codex vuelve el sandbox del turno siguiente a sólo lectura", async () => {
+    const { daemon, human, task, until, fake } = await boot(
+      talking({ options: [], inputs: [] }, false),
+    )
+    const w = await task(true)
+    const run = (await human.call("runs.start", {
+      ...meta(),
+      work_item_id: w.id,
+      purpose: "execute",
+      profile: "codex",
+      prompt: "nosteer",
+    })) as { id: string }
+    await until(() => fake().some((e) => "turnStart" in e))
+    // Lo que hace Keel al entrar a revisión con el run vivo.
+    expect(await daemon.codex.setMode(run.id, "plan")).toEqual({ applies: "next_turn" })
+    await human.call("runs.message", { ...meta(), run_id: run.id, text: "revisa" })
+    await daemon.idle()
+    const turns = fake().filter((e) => "turnStart" in e)
+    expect(turns).toHaveLength(2)
+    expect(turns[0]?.sandboxPolicy).toBeNull()
+    expect(turns[1]).toMatchObject({ sandboxPolicy: { type: "readOnly" } })
+    expect(await daemon.codex.setMode(run.id, "ask")).toMatchObject({ error: expect.any(String) })
+  })
 })

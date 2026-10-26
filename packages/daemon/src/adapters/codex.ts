@@ -155,7 +155,12 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
    */
   private readonly turnOverrides = new Map<
     string,
-    { execute: boolean; base: CodexProfile["approval_policy"]; next: Record<string, unknown> }
+    {
+      execute: boolean
+      network: boolean
+      base: CodexProfile["approval_policy"]
+      next: Record<string, unknown>
+    }
   >()
   private readonly deps: CodexAdapterDeps
   constructor(deps: CodexAdapterDeps = {}, transport: CodexProfile["transport"] = "app_server") {
@@ -175,6 +180,19 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     const o = this.turnOverrides.get(runId)
     if (!o) return { error: "Codex sólo cambia de modo en vivo con el app-server" }
     o.next.approvalPolicy = o.execute && mode !== "bypass" ? o.base : "never"
+    // ADR-0021 §3: `plan` en un run que ejecuta es la revisión: el sandbox del turno
+    // vuelve a sólo lectura; los demás modos devuelven la escritura en el worktree.
+    if (o.execute)
+      o.next.sandboxPolicy =
+        mode === "plan"
+          ? { type: "readOnly" }
+          : {
+              type: "workspaceWrite",
+              writableRoots: [],
+              networkAccess: o.network,
+              excludeTmpdirEnvVar: false,
+              excludeSlashTmp: false,
+            }
     return { applies: "next_turn" }
   }
 
@@ -387,7 +405,12 @@ export class CodexAdapter implements ProviderAdapter<CodexProfile> {
     let markReady: (id: string | null) => void = () => {}
     const queue: string[] = []
     let finished = false
-    const overrides = { execute, base: profile.approval_policy, next: {} }
+    const overrides = {
+      execute,
+      network: execute && profile.network_access,
+      base: profile.approval_policy,
+      next: {},
+    }
     this.turnOverrides.set(run.id, overrides)
     this.live.set(run.id, (text) => {
       // Tras el último turno ya nadie leería la cola: el run no acepta más mensajes.
