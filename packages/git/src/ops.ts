@@ -5,7 +5,7 @@
  * protegidas; nunca fuerza un push.
  */
 import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { git } from "./exec.js"
 
@@ -132,7 +132,13 @@ export async function commitPaths(
   opts: { message: string; files: string[]; env?: Record<string, string> },
 ): Promise<{ sha: string; files: string[] }> {
   const env = { ...process.env, ...opts.env }
-  await git(["add", "-A", "--", ...opts.files], { cwd: path, env })
+  // Una ruta borrada cuyo borrado ya está en el índice (`git rm`) no casa con `git add`
+  // («pathspec did not match»): las borradas se pasan con `git rm --cached`, que no falla.
+  const gone = opts.files.filter((f) => !existsSync(join(path, f)))
+  const present = opts.files.filter((f) => existsSync(join(path, f)))
+  if (gone.length)
+    await git(["rm", "-q", "--cached", "--ignore-unmatch", "--", ...gone], { cwd: path, env })
+  if (present.length) await git(["add", "-A", "--", ...present], { cwd: path, env })
   await git(["commit", "-q", "-m", opts.message, "--", ...opts.files], { cwd: path, env })
   const sha = (await headSha(path)) as string
   const { stdout } = await git(["show", "--name-only", "--format=", sha], { cwd: path })

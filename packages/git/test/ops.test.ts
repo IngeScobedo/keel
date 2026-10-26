@@ -80,3 +80,25 @@ test("cambios, hash de contenido, numstat, commit con autor y push sin forzar", 
   expect(p).toEqual({ old_sha: null, new_sha: c.sha })
   expect(sh(remote, "rev-parse", "refs/heads/keel/K-1/run")).toBe(c.sha)
 }, 30_000)
+
+test("commitPaths confirma un borrado que ya estaba en el índice (git rm)", async () => {
+  const work = mkdtempSync(join(tmpdir(), "keel-ops-rm-"))
+  dirs.push(work)
+  sh(work, "init", "-q", "-b", "main")
+  sh(work, "config", "user.name", "t")
+  sh(work, "config", "user.email", "t@t")
+  for (const f of ["x.txt", "y.txt", "z.txt"]) writeFileSync(join(work, f), f)
+  sh(work, "add", ".")
+  sh(work, "commit", "-q", "-m", "base")
+  // KEEL-2: el agente borró con `git rm` y el plan falló en `git add`.
+  sh(work, "rm", "-q", "x.txt")
+  rmSync(join(work, "y.txt"))
+  writeFileSync(join(work, "z.txt"), "cambio")
+  writeFileSync(join(work, "w.txt"), "nuevo")
+  const c = await commitPaths(work, {
+    message: "borra y cambia",
+    files: ["x.txt", "y.txt", "z.txt", "w.txt"],
+  })
+  expect(c.files).toEqual(["w.txt", "x.txt", "y.txt", "z.txt"])
+  expect(sh(work, "status", "--porcelain")).toBe("")
+})
