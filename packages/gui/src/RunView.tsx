@@ -148,6 +148,11 @@ function LiveRunView({
   const chainEvents = events.filter((e) => e.run_id !== null && chain.has(e.run_id))
   const where = workspaceOf(run, runEvents)
   const running = !TERMINAL.has(run.status)
+  // ADR-0021: Keel sigue la conversación en otro run al cambiar de etapa; la vista lo sigue.
+  const child = runs?.find((r) => r.parent_run_id === run.id)
+  useEffect(() => {
+    if (child && onRun) onRun(child)
+  }, [child, onRun])
   const mode = run.options?.permission_mode ?? "ask"
   const started = runEvents.find((e) => e.kind === "run.created")?.received_at ?? null
   return (
@@ -606,9 +611,10 @@ function workspaceOf(
   run: Run,
   events: EventNotification[],
 ): { branch?: string; base?: string; label: string } {
-  const created = events.find((e) => e.kind === "worktree.created")?.payload as
-    | { branch_name?: string; base_sha?: string }
-    | undefined
+  // Un run que continúa la conversación hereda el worktree del anterior (ADR-0019 §3).
+  const created = events.find(
+    (e) => e.kind === "worktree.created" || e.kind === "worktree.inherited",
+  )?.payload as { branch_name?: string; base_sha?: string } | undefined
   if (created?.branch_name)
     return {
       branch: created.branch_name,

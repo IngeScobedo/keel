@@ -87,6 +87,7 @@ import {
   flowView,
   projectAllowRules,
   stageInstructions,
+  stageMessage,
   validationContext,
   workPrompt,
 } from "./flows.js"
@@ -773,15 +774,15 @@ export class Daemon {
         const w = this.requireWorkItem(p.work_item_id)
         if (w.lifecycle === "done")
           throw rpcError(ErrorCode.invalidTransition, "la tarea está terminada")
+        let started: Stage | null = null
         if (!repo.getFlow(w.id)) {
-          const stage: Stage =
+          started =
             w.lifecycle === "triage"
               ? "brief"
               : w.lifecycle === "needs_review"
                 ? "close"
                 : "implement"
-          repo.createFlow(w.id, stage, uow.actorId)
-          uow.emit("task.flow_started", null, { work_item_id: w.id, stage, actor: actorOf(ctx) })
+          repo.createFlow(w.id, started, uow.actorId)
           uow.emit("work_item.updated", null, repo.workItemView(w))
         }
         const live = repo.liveRunFor(w.id)
@@ -805,6 +806,13 @@ export class Daemon {
           profile: p.profile,
           ...(p.options ? { options: p.options } : {}),
         })
+        // Con el run ya creado, para que el chat de la conversación lo muestre.
+        if (started)
+          uow.emit("task.flow_started", run.id, {
+            work_item_id: w.id,
+            stage: started,
+            actor: actorOf(ctx),
+          })
         return {
           delivered: hadRun ? ("continued" as const) : ("started" as const),
           run,
@@ -2464,6 +2472,13 @@ export class Daemon {
     uow.emit("work_item.updated", run?.id ?? null, this.repo.workItemView(item))
     uow.afterCommit(() => {
       const live = this.repo.liveRunFor(w.id)
+      // El agente que sigue vivo recibe el objetivo de la etapa nueva: el encabezado del
+      // prompt sólo lo vio al empezar el run.
+      if (live && live.purpose === purposeForStage(to)) {
+        const text = stageMessage(to, this.repo.getFlow(w.id)?.ceremony ?? null)
+        if (this.providerOf(live).sendMessage(live.id, text))
+          this.emitSystem("run.keel_message", live.id, { text })
+      }
       // Revisar es sólo lectura también para el SDK; implementar vuelve al modo del run.
       if (live?.purpose === "execute") {
         const mode = to === "review" ? "plan" : runOptionsFor(live).permission_mode

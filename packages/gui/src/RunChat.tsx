@@ -8,10 +8,12 @@ import {
   buildChat,
   buildLedger,
   type ChatItem,
+  METHOD_TOOLS,
   type ToolCall,
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { Markdown } from "./Markdown.js"
+import { GateCard, MethodRow } from "./MethodCards.js"
 import type { Run } from "./model.js"
 import { RunLedger } from "./RunLedger.js"
 import { type Density, ExploreGroup, isExplore, StoryLine, ToolCard } from "./ToolCards.js"
@@ -52,6 +54,7 @@ export function RunChat({
   const [sending, setSending] = useState(false)
   const [error, setError] = useState("")
   const [peek, setPeek] = useState<string | null>(null)
+  const [docPeek, setDocPeek] = useState<{ kind: string; version?: number } | null>(null)
   /** Lo que el humano eligió con el run terminado: va en `runs.continue`. */
   const [next, setNext] = useState<{
     model?: string
@@ -146,6 +149,7 @@ export function RunChat({
                   fresh={(k) => !seen.current?.has(k)}
                   firstPending={firstPending}
                   onOpenTask={setPeek}
+                  onDoc={(kind, version) => setDocPeek({ kind, ...(version ? { version } : {}) })}
                   agent={provider === "codex" ? "Codex" : "Claude"}
                   {...(call ? { call } : {})}
                 />
@@ -195,6 +199,8 @@ export function RunChat({
         onJump={jump}
         peek={peek}
         onPeek={setPeek}
+        docPeek={docPeek}
+        onDocPeek={setDocPeek}
         {...(onTask ? { onTask } : {})}
         {...(call ? { call } : {})}
       />
@@ -209,6 +215,7 @@ type LayoutRow =
 
 /** ¿Hay que mostrarla entera aunque la densidad sea «Historia»? */
 function needsYou(item: ChatItem): boolean {
+  if (item.kind === "approval" && item.tool === "stage.gate") return true
   if (item.kind === "approval") return item.decision === null || QUESTIONS.has(item.tool)
   if (item.kind === "tool")
     return (item.approval !== null && item.approval.decision === null) || QUESTIONS.has(item.name)
@@ -228,6 +235,8 @@ function layout(items: ChatItem[], density: Density): LayoutRow[] {
     run = []
   }
   for (const item of items) {
+    // Las tools del método ya se ven como eventos de Keel; sólo la vista cruda las muestra.
+    if (item.kind === "tool" && METHOD_TOOLS.has(item.name) && density !== "raw") continue
     if (density === "raw") {
       rows.push({ kind: "item", key: item.key, item })
       continue
@@ -257,6 +266,7 @@ function Row({
   fresh,
   firstPending,
   onOpenTask,
+  onDoc,
   agent,
 }: {
   row: LayoutRow
@@ -265,6 +275,7 @@ function Row({
   fresh: (key: string) => boolean
   firstPending: string | null
   onOpenTask: (id: string) => void
+  onDoc: (kind: string, version?: number) => void
   agent: string
 }) {
   const c = call ? { call } : {}
@@ -285,6 +296,8 @@ function Row({
           {item.text}
         </Said>
       )
+    case "method":
+      return <MethodRow item={item} onDoc={onDoc} />
     case "divider":
       return (
         <p className="rc-divider" data-testid="chat-divider">
@@ -364,6 +377,7 @@ function Pending({
 }) {
   const active = a.decision === null && a.approval_id === firstPending
   const c = call ? { call } : {}
+  if (a.tool === "stage.gate") return <GateCard a={a} active={active} {...c} />
   if (a.tool === "AskUserQuestion")
     return <QuestionCard a={a} active={active} agent={agent} {...c} />
   if (a.tool === "ExitPlanMode") return <PlanCard a={a} active={active} {...c} />

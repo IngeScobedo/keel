@@ -31,6 +31,7 @@ import { Inspector } from "./Inspector.js"
 import { LiveConnections } from "./LiveConnections.js"
 import { LiveInbox } from "./LiveInbox.js"
 import { LivePlugins } from "./LivePlugins.js"
+import { LiveProfile } from "./LiveProfile.js"
 import { LiveProviders } from "./LiveProviders.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
 import { Permissions } from "./Permissions.js"
@@ -500,6 +501,7 @@ export function App() {
             />
             {workspace.mode === "live" && (
               <div className="padded">
+                <LiveProfile call={workspace.call} />
                 <LiveProviders call={workspace.call} />
                 <LivePlugins call={workspace.call} />
               </div>

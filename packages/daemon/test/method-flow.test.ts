@@ -202,6 +202,10 @@ describe("ADR-0021: trabajo directo", () => {
     const w = await s.task("Capítulos en el detalle")
     // 1. Brief en un run de planeación, en el worktree de la tarea.
     s.scripts.push(async (t) => {
+      // Las tools de Keel pasan aunque la etapa sea de sólo lectura (en modo plan llegan al gate).
+      expect(await t.use("mcp__keel__task_doc_put", { kind: "brief" })).toMatchObject({
+        behavior: "allow",
+      })
       const touch = await t.use("Bash", { command: "touch x.txt" })
       expect(touch).toMatchObject({ behavior: "deny" })
       expect((touch as { message: string }).message).toContain("sólo lectura")

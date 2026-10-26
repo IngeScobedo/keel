@@ -139,3 +139,10 @@ export async function nativeShell(page: Page, daemon: Daemon) {
     })
   })
 }
+
+/** Abre «Avanzado» en la tarea: el control manual de runs y transiciones (ADR-0021). */
+export async function advanced(page: Page) {
+  const details = page.locator(".task-advanced")
+  if (!(await details.evaluate((d) => (d as HTMLDetailsElement).open)))
+    await details.locator("summary").click()
+}

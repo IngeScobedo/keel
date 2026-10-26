@@ -4,6 +4,7 @@ import {
   Coins,
   Cpu,
   FileDiff as FileDiffIcon,
+  FileText,
   Hand,
   ListChecks,
   NotebookPen,
@@ -13,9 +14,17 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { MODES } from "./Composer.js"
-import { type Approval, EFFORT_LABEL, type Ledger, modelLabel, questionsOf } from "./chat-model.js"
+import {
+  type Approval,
+  DOC_LABEL,
+  EFFORT_LABEL,
+  type Ledger,
+  modelLabel,
+  questionsOf,
+} from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { Markdown } from "./Markdown.js"
+import { DocPeek, StageTrack } from "./MethodCards.js"
 import { formatCost, type Run } from "./model.js"
 import { shortPath } from "./ToolCards.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -34,6 +43,8 @@ export function RunLedger({
   onJump,
   peek,
   onPeek,
+  docPeek,
+  onDocPeek,
   onTask,
   call,
 }: {
@@ -43,9 +54,23 @@ export function RunLedger({
   onJump: (key: string) => void
   peek: string | null
   onPeek: (id: string | null) => void
+  docPeek: { kind: string; version?: number } | null
+  onDocPeek: (doc: { kind: string; version?: number } | null) => void
   onTask?: (id: string) => void
   call?: Call
 }) {
+  if (docPeek && call && task)
+    return (
+      <aside className="rc-ledger" aria-label="En este run">
+        <DocPeek
+          workItemId={task.id}
+          kind={docPeek.kind}
+          version={docPeek.version}
+          call={call}
+          onClose={() => onDocPeek(null)}
+        />
+      </aside>
+    )
   if (peek && call)
     return (
       <aside className="rc-ledger" aria-label="En este run">
@@ -61,6 +86,31 @@ export function RunLedger({
   const mode = MODES.find((m) => m.id === (run.options?.permission_mode ?? "ask"))
   return (
     <aside className="rc-ledger" aria-label="En este run">
+      {ledger.stage && (
+        <Section title="Método">
+          <StageTrack
+            stage={ledger.stage.stage}
+            ceremony={ledger.stage.ceremony}
+            waiting={ledger.waiting.some((a) => a.tool === "stage.gate")}
+          />
+          {ledger.docs.map((d) => (
+            <button
+              key={d.doc}
+              type="button"
+              className="rc-ledger-row"
+              onClick={() => onDocPeek({ kind: d.doc })}
+            >
+              <FileText size={14} />
+              <span>
+                {DOC_LABEL[d.doc] ?? d.doc} v{d.version}
+              </span>
+              <span className={d.ok ? "mono added" : "mono removed"}>
+                {d.ok ? "valida" : "pendiente"}
+              </span>
+            </button>
+          ))}
+        </Section>
+      )}
       <Section title="Esperando por ti" count={ledger.waiting.length}>
         {ledger.waiting.length === 0 && <p className="muted">Nada: el agente sigue solo.</p>}
         {ledger.waiting.map((a) => (
@@ -176,6 +226,16 @@ function Section({
 }
 
 function waitingLabel(a: Approval): string {
+  if (a.tool === "stage.gate") {
+    const g = (a.input as { gate?: string; reason?: string } | null) ?? {}
+    return g.reason === "contract"
+      ? "Cambio de contrato"
+      : g.gate === "design"
+        ? "Congelar el contrato"
+        : g.gate === "close"
+          ? "Aprobar el cierre"
+          : "Aprobar el brief"
+  }
   if (a.tool === "AskUserQuestion")
     return `Pregunta: ${questionsOf(a.input)[0]?.header ?? "del agente"}`
   if (a.tool === "ExitPlanMode") return "Revisar el plan"

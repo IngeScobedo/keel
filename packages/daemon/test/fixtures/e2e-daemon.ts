@@ -13,21 +13,27 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Daemon } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
-import { chatQuery, firstPrompt, replayQuery } from "../replay.ts"
+import { chatQuery, firstPrompt, methodQuery, replayQuery } from "../replay.ts"
 
 const dir = mkdtempSync(join(tmpdir(), "keel-e2e-"))
 initRepo(join(dir, "repo"))
 // Un segundo repo para abrirlo desde la GUI (ADR-0019 §2).
 const otherRepo = initRepo(join(dir, "otro"))
-const daemon = new Daemon({
+const daemon: Daemon = new Daemon({
   dbPath: join(dir, "keel.sqlite"),
   socketPath: join(dir, "keel.sock"),
   rootPath: join(dir, "repo"),
   worktreesDir: join(dir, "worktrees"),
   // «chat…» corre el guion del chat de foco (ADR-0020); lo demás, la corrida grabada.
   adapterDeps: {
-    queryFn: (a) =>
-      firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a),
+    // Una tarea cuyo título empieza con «método» la trabaja el agente del método (ADR-0021).
+    queryFn: (a) => {
+      const runId = String((a.options.env as Record<string, string>).KEEL_RUN_ID)
+      const run = daemon.repo.getRun(runId)
+      const task = run ? daemon.repo.getWorkItem(run.work_item_id) : null
+      if (task?.title.startsWith("método")) return methodQuery(daemon)(a)
+      return firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a)
+    },
     binary: "/fake/claude",
   },
   mcpBridge: false,

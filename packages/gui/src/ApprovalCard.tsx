@@ -20,7 +20,7 @@ type Loose = Record<string, unknown>
 const SHELL = new Set(["Bash", "shell", "local_shell", "exec_command"])
 
 /** Las teclas de la tarjeta activa, salvo mientras se escribe en un campo. */
-function useKeys(active: boolean, onKey: (e: KeyboardEvent) => void) {
+export function useKeys(active: boolean, onKey: (e: KeyboardEvent) => void) {
   const handler = useRef(onKey)
   handler.current = onKey
   useEffect(() => {
@@ -36,7 +36,7 @@ function useKeys(active: boolean, onKey: (e: KeyboardEvent) => void) {
   }, [active])
 }
 
-function useResolve(a: Approval, call?: Call) {
+export function useResolve(a: Approval, call?: Call) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   async function resolve(params: Record<string, unknown>) {
@@ -60,7 +60,7 @@ function useResolve(a: Approval, call?: Call) {
 }
 
 /** «esperando por ti · sin límite» o la cuenta atrás si el humano fijó un límite. */
-function Waiting({ a }: { a: Approval }) {
+export function Waiting({ a }: { a: Approval }) {
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
     if (!a.expires_at || a.decision !== null) return

@@ -196,7 +196,9 @@ export function LiveInbox({
                             run {approval.run_id} · hash {approval.operation_hash.slice(0, 12)}
                           </p>
                           {/* Una pregunta del agente se contesta con sus opciones, en el chat (ADR-0020 §7). */}
-                          {op.tool === "AskUserQuestion" || op.tool === "ExitPlanMode" ? (
+                          {op.tool === "AskUserQuestion" ||
+                          op.tool === "ExitPlanMode" ||
+                          op.tool === "stage.gate" ? (
                             <Button
                               variant="primary"
                               onClick={() => {
@@ -206,7 +208,9 @@ export function LiveInbox({
                             >
                               {op.tool === "AskUserQuestion"
                                 ? "Contestar en el chat"
-                                : "Revisar el plan en el chat"}
+                                : op.tool === "stage.gate"
+                                  ? "Decidir el gate en el chat"
+                                  : "Revisar el plan en el chat"}
                             </Button>
                           ) : (
                             <ApprovalActions

@@ -78,7 +78,7 @@ const STAGE_GOAL: Record<Stage, string> = {
 /** Las líneas de método que Keel añade al encabezado del prompt (ADR-0017 §1). */
 export function stageInstructions(f: TaskFlowRow, profile: ProjectProfile | null): string {
   const lines = [
-    `[Keel · método] Etapa ${f.stage}${f.ceremony ? ` · ceremonia ${f.ceremony}` : ""}${isReadOnlyStage(f.stage) ? " · sólo lectura: no edites ni corras comandos que cambien algo" : ""}.`,
+    `[Keel · método] Etapa ${f.stage}${f.ceremony ? ` · ceremonia ${f.ceremony}` : ""}${isReadOnlyStage(f.stage) ? " · sólo lectura: no edites ni corras comandos que cambien algo. Las tools de Keel (task_doc_put, stage_advance, verify_run) sí funcionan en modo plan: no tocan el repo" : ""}.`,
     `Objetivo: ${STAGE_GOAL[f.stage]}.`,
     "Avanza con la tool stage_advance (Keel valida la transición y los documentos y te dice qué falta); no uses ExitPlanMode. Los documentos de la tarea (brief, spec, design, tasks, story, qa) se leen y guardan con task_doc_get y task_doc_put; no los escribas en el repo.",
   ]
@@ -87,6 +87,11 @@ export function stageInstructions(f: TaskFlowRow, profile: ProjectProfile | null
       `La verificación del proyecto (${profile.verify.map((v) => v.name).join(", ")}) la corre Keel con verify_run.`,
     )
   return lines.join(" ")
+}
+
+/** Lo que Keel le dice al agente que sigue vivo cuando su tarea cambia de etapa. */
+export function stageMessage(stage: Stage, ceremony: Ceremony | null): string {
+  return `[Keel · método] La tarea está ahora en la etapa ${stage}${ceremony ? ` (${ceremony})` : ""}${isReadOnlyStage(stage) ? "; es de sólo lectura para el repo, pero task_doc_put, stage_advance y verify_run de Keel sí funcionan" : ""}. Objetivo: ${STAGE_GOAL[stage]}.`
 }
 
 /** El mensaje con el que Keel retoma la conversación en otra etapa. */

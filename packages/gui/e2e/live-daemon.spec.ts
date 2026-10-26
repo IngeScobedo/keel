@@ -5,7 +5,7 @@
 import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
-import { bootDaemon, type Daemon, Line, meta, nativeShell } from "./daemon-bridge.js"
+import { advanced, bootDaemon, type Daemon, Line, meta, nativeShell } from "./daemon-bridge.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -32,6 +32,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.getByRole("button", { name: "Create task", exact: true }).click()
   await expect(page.getByRole("heading", { name: "Retry con backoff" })).toBeVisible()
   await expect(page.locator(".task-spec")).toHaveText("Reintentos acotados.")
+  await advanced(page)
   await page.locator(".live-actions").getByRole("button", { name: "Planear" }).click()
   await expect(page.locator(".rc-head")).toContainText("Succeeded", { timeout: 20_000 })
   // El run se lee como conversación: instrucción, herramientas y respuesta, lo nuevo abajo.
@@ -49,6 +50,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
 
   // 2. Pasarla a planned y ejecutar con Codex: el comando pide aprobación.
   await page.locator(".rc-head .text-link").click()
+  await advanced(page)
   await page.getByRole("button", { name: "Mover a planned" }).click()
   await page.getByLabel("Proveedor").selectOption("codex")
   if (process.env.KEEL_E2E_SHOTS)
@@ -199,6 +201,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.getByRole("button", { name: "New task", exact: false }).click()
   await page.getByLabel("Title", { exact: true }).fill("Con Codex")
   await page.getByRole("button", { name: "Create task", exact: true }).click()
+  await advanced(page)
   await page.getByRole("button", { name: "Mover a planned" }).click()
   await page.getByLabel("Proveedor").selectOption("codex")
   await page.getByLabel("Instrucción para el agente").fill("wait")
@@ -285,7 +288,7 @@ test("Codex con la suscripción: el humano lo enciende en Ajustes y queda a su n
   // El estado lo confirma el daemon: la casilla cambia cuando responde.
   await toggle.click()
   await expect(toggle).toBeChecked()
-  await expect(page.locator(".plugins").first()).toContainText("Encendido por")
+  await expect(page.locator(".plugins", { hasText: "Proveedores" })).toContainText("Encendido por")
   off.proc.stdin?.end()
   await new Promise((r) => off.proc.once("exit", r))
 })

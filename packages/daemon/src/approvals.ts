@@ -154,6 +154,9 @@ export class ApprovalGate implements ToolGate {
   async decide(ctx: RunContext, req: ToolRequest): Promise<ToolDecision> {
     const { repo, waitApproval } = this.deps
     const run = ctx.run
+    // Las tools de Keel las autoriza el daemon en cada operación (ADR-0009): en modo
+    // plan Claude Code igual las manda aquí, y negarlas dejaría al agente sin método.
+    if (req.tool.startsWith("mcp__keel__")) return { behavior: "allow", input: req.input }
     const stage = this.deps.stageOf?.(run) ?? { stage: null, readOnly: false, inMethod: false }
     // En el método, salir de plan es avanzar de etapa: lo decide Keel, no un permiso.
     if (stage.inMethod && req.tool === "ExitPlanMode")

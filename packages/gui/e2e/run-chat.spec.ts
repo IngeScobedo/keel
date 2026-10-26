@@ -5,7 +5,7 @@
  */
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
-import { bootDaemon, type Daemon, nativeShell } from "./daemon-bridge.js"
+import { advanced, bootDaemon, type Daemon, nativeShell } from "./daemon-bridge.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -28,6 +28,7 @@ test("chat de foco: diff, tarea de Keel, pregunta contestada, permiso por patró
   await page.getByRole("button", { name: "New task", exact: false }).click()
   await page.getByLabel("Title", { exact: true }).fill("Capítulos en el detalle del proyecto")
   await page.getByRole("button", { name: "Create task", exact: true }).click()
+  await advanced(page)
   await page.getByRole("button", { name: "Mover a planned" }).click()
   await page.getByLabel("Instrucción para el agente").fill("chat: agrega capítulos al detalle")
   await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()

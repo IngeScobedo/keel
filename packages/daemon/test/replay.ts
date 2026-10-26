@@ -3,10 +3,10 @@
  * spike (fixtures redactados) en el orden en que llegaron, invocando los hooks
  * registrados en `options.hooks` igual que lo haría el SDK.
  */
-import { readFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { HookCallback, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
-import type { QueryFn } from "../src/index.ts"
+import { type Daemon, IpcClient, type QueryFn } from "../src/index.ts"
 
 type Entry =
   | { at: string; kind: "message"; message: Record<string, unknown> }
@@ -374,5 +374,97 @@ export function chatQuery(): QueryFn {
       } as unknown as SDKMessage
     })()
     return Object.assign(run, control) as never
+  }
+}
+
+/**
+ * Un agente que sigue el método de Keel (ADR-0021) para las pruebas de la GUI:
+ * en cada run mira la etapa de su tarea y hace lo que toca, hablando con el
+ * daemon por la puerta de agentes con el token de su run, como el puente MCP.
+ * Ciclo formal: brief → gate (a) → diseño → gate (b) → implementar, revisar y
+ * cerrar.
+ */
+export function methodQuery(daemon: Daemon): QueryFn {
+  return ({ options }) => {
+    const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
+    const session = `s-method-${runId}`
+    let n = 0
+    const say = (text: string) =>
+      ({
+        type: "assistant",
+        uuid: `u-m-${runId}-${++n}`,
+        session_id: session,
+        parent_tool_use_id: null,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }) as unknown as SDKMessage
+    const run = (async function* () {
+      const row = daemon.repo.getRun(runId)
+      if (!row) return
+      const { file } = daemon.agentTokens.issue({
+        run_id: runId,
+        project_id: row.project_id,
+        work_item_id: row.work_item_id,
+      })
+      const agent = await IpcClient.connect(daemon.agentServer.path)
+      await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+      let k = 0
+      const m = () => ({ request_id: "r", idempotency_key: `${runId}-${++k}` })
+      const w = row.work_item_id
+      const put = (kind: string, content_markdown: string) =>
+        agent.call("task_docs.put", { ...m(), work_item_id: w, kind, content_markdown })
+      const advance = (to: string, extra: Record<string, unknown> = {}) =>
+        agent.call("stages.advance", { ...m(), work_item_id: w, to, ...extra })
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: session,
+        model: "claude-opus-5-5",
+        uuid: `u-m-init-${runId}`,
+      } as unknown as SDKMessage
+      const stage = daemon.repo.getFlow(w)?.stage
+      if (stage === "brief") {
+        yield say("Leí el repo: el detalle no pide capítulos. Escribo el brief.")
+        await put(
+          "brief",
+          "# Brief\n## Problema\nEl detalle no muestra capítulos.\n## Alcance\nMostrarlos en el detalle.\n## Fuera de alcance\nLa tienda.\n## Criterios de aceptación\n- se ven los capítulos\n",
+        )
+        await advance("design", { ceremony: "formal", reason: "cambia el contrato del detalle" })
+        yield say("Toca el contrato del detalle: es ciclo formal. Te pido aprobar el brief.")
+      } else if (stage === "design") {
+        await put(
+          "spec",
+          "## Requisitos\n### R1 — Capítulos visibles\n#### Escenario: con capítulos\n- **Dado** un proyecto con capítulos\n- **Cuando** abro el detalle\n- **Entonces** los veo\n",
+        )
+        await put(
+          "design",
+          "## Contrato congelado\n`GET /projects/:id` devuelve `chapters: Chapter[]`.\n## Fronteras de archivos\n| responsable | archivos |\n| --- | --- |\n| backend | `api/**` |\n",
+        )
+        await advance("implement")
+        yield say("Spec y diseño listos. Te pido congelar el contrato.")
+      } else if (stage === "implement") {
+        writeFileSync(join(String(options.cwd), "chapters.txt"), "capítulos\n")
+        yield say("Implementado contra el contrato.")
+        await advance("review")
+        await put("qa", "## Veredicto: PASS\n## Evidencia\n- el escenario R1 se cumple\n")
+        await advance("close")
+        yield say("Revisión PASS. Queda el cierre.")
+      }
+      agent.close()
+      yield {
+        type: "result",
+        subtype: "success",
+        uuid: `u-m-res-${runId}`,
+        session_id: session,
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.01,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      } as unknown as SDKMessage
+    })()
+    return Object.assign(run, {
+      setPermissionMode: async () => {},
+      setModel: async () => {},
+      applyFlagSettings: async () => {},
+    }) as never
   }
 }

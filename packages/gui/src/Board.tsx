@@ -10,6 +10,7 @@ import {
   SquarePlus,
 } from "lucide-react"
 import { useState } from "react"
+import { STAGE_LABEL } from "./chat-model.js"
 import {
   COLUMNS,
   filterTasks,
@@ -50,6 +51,12 @@ export function TaskCard({
         <Status state={item.visual_state} />
       </span>
       <span className="card-title">{item.title}</span>
+      {item.stage && (
+        <span className="card-stage" data-testid="card-stage">
+          {STAGE_LABEL[item.stage] ?? item.stage}
+          {item.ceremony ? ` · ${item.ceremony === "direct" ? "directo" : "formal"}` : ""}
+        </span>
+      )}
       {run?.status === "running" && (
         <span className="agent-strip">
           <Bot size={12} />

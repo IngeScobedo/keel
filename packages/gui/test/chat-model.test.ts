@@ -207,3 +207,50 @@ test("etiquetas: modelo, opción recomendada y diff unificado", () => {
     removed: 1,
   })
 })
+
+describe("ADR-0021: el método en el chat", () => {
+  test("etapas, documentos, verificación y lo que Keel le dice al agente; el panel resume la etapa", () => {
+    const events = [
+      at("run.prompt", { text: "Trabaja la tarea", source: "human" }),
+      at("task.flow_started", { stage: "brief" }),
+      at("task.doc_put", {
+        kind: "brief",
+        version: 1,
+        report: { ok: false, checks: [{ ok: false, msg: "sección «Alcance» con contenido" }] },
+      }),
+      at("task.doc_put", { kind: "brief", version: 2, report: { ok: true, checks: [] } }),
+      at("task.stage_changed", {
+        from: "brief",
+        to: "implement",
+        ceremony: "direct",
+        delegated: true,
+      }),
+      at("run.prompt", { text: "La tarea pasó a implement.", source: "keel" }),
+      at("verify.completed", {
+        baseline: false,
+        results: [{ name: "test", ok: true, duration_ms: 1200, tail: "" }],
+        delta: { green: true, newRed: [], stillRed: [], fixed: ["test"] },
+      }),
+      at("hook.PreToolUse", {
+        tool_name: "mcp__keel__stage_advance",
+        tool_use_id: "m1",
+        tool_input: {},
+      }),
+    ]
+    const chat = buildChat(events)
+    expect(chat.map((c) => (c.kind === "method" ? `method:${c.event}` : c.kind))).toEqual([
+      "human",
+      "method:started",
+      "method:doc",
+      "method:doc",
+      "method:stage",
+      "method:keel",
+      "method:verify",
+      "tool",
+    ])
+    expect(chat[2]).toMatchObject({ ok: false, missing: ["sección «Alcance» con contenido"] })
+    const ledger = buildLedger(chat, events)
+    expect(ledger.stage).toEqual({ stage: "implement", ceremony: "direct" })
+    expect(ledger.docs).toMatchObject([{ doc: "brief", version: 2, ok: true }])
+  })
+})

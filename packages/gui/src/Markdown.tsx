@@ -35,6 +35,44 @@ export function Markdown({ text, className }: { text: string; className?: string
       i++
       continue
     }
+    // Tabla: una fila de encabezado, la línea de guiones y las filas.
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1] ?? "")) {
+      const cells = (l: string) =>
+        l
+          .trim()
+          .replace(/^\||\|$/g, "")
+          .split("|")
+          .map((c) => c.trim())
+      const head = cells(line)
+      const rows: string[][] = []
+      i += 2
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i] as string))
+        rows.push(cells(lines[i++] as string))
+      blocks.push(
+        <table key={blocks.length} className="md-table">
+          <thead>
+            <tr>
+              {head.map((h, n) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: columnas fijas de la tabla
+                <th key={n}>{inline(h)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, rn) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: filas de un texto estático
+              <tr key={rn}>
+                {r.map((c, n) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: columnas fijas de la tabla
+                  <td key={n}>{inline(c)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>,
+      )
+      continue
+    }
     if (/^\s*([-*+]|\d+[.)])\s+/.test(line)) {
       const ordered = /^\s*\d/.test(line)
       const items: string[] = []

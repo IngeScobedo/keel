@@ -13,7 +13,6 @@ import { useEffect, useState } from "react"
 import { mutationMeta } from "./client.js"
 import { EvidencePanel } from "./Evidence.js"
 import { demoActivity, demoDiff } from "./fixtures.js"
-import { LiveTaskActions } from "./LiveTaskActions.js"
 import {
   actorLabel,
   formatCost,
@@ -23,6 +22,7 @@ import {
   type WorkItem,
 } from "./model.js"
 import { ResearchPanel } from "./Research.js"
+import { TaskWork } from "./TaskWork.js"
 import { Button, Empty, Hint, Modal, Status, Tabs } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -167,7 +167,7 @@ export function Inspector({
             <Hint>El protocolo aún no entrega el manifest de worktrees.</Hint>
           )}
         </section>
-        {!demo && call && <LiveTaskActions task={task} runs={taskRuns} call={call} onRun={onRun} />}
+        {!demo && call && <TaskWork task={task} runs={taskRuns} call={call} onRun={onRun} />}
         <section>
           <h3>Human review</h3>
           <Button icon={ShieldCheck} disabled={!canComplete} onClick={() => setConfirmDone(true)}>

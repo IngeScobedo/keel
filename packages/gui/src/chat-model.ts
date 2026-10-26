@@ -48,8 +48,41 @@ export type Approval = {
   reason: string | null
 }
 
+/** Lo que hizo el método (ADR-0021): etapas, documentos, verificación y avisos de Keel. */
+export type MethodItem =
+  | {
+      kind: "method"
+      key: string
+      event: "stage"
+      from: string
+      to: string
+      ceremony: string | null
+      delegated: boolean
+      reason: string | null
+      returned: boolean
+    }
+  | {
+      kind: "method"
+      key: string
+      event: "doc"
+      doc: string
+      version: number
+      ok: boolean
+      missing: string[]
+    }
+  | {
+      kind: "method"
+      key: string
+      event: "verify"
+      baseline: boolean
+      results: { name: string; ok: boolean; duration_ms: number; tail: string }[]
+      delta: { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] }
+    }
+  | { kind: "method"; key: string; event: "keel" | "stalled" | "closed" | "started"; text: string }
+
 export type ChatItem =
   | { kind: "prompt" | "human" | "agent" | "divider"; key: string; text: string }
+  | MethodItem
   | { kind: "status"; key: string; text: string; tone: "info" | "error" }
   | ToolCall
   | Approval
@@ -108,7 +141,9 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
       case "run.prompt":
         if (typeof p.text === "string") {
           said.add(p.text)
-          items.push({ kind: p.source === "human" ? "human" : "prompt", key, text: p.text })
+          // Lo que escribe Keel al cambiar de etapa no es del humano (ADR-0021).
+          if (p.source === "keel") items.push({ kind: "method", key, event: "keel", text: p.text })
+          else items.push({ kind: p.source === "human" ? "human" : "prompt", key, text: p.text })
         }
         break
       case "run.user_message":
@@ -146,6 +181,69 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         })
         break
       }
+      case "task.flow_started":
+        items.push({ kind: "method", key, event: "started", text: String(p.stage) })
+        break
+      case "task.stage_changed":
+        items.push({
+          kind: "method",
+          key,
+          event: "stage",
+          from: String(p.from),
+          to: String(p.to),
+          ceremony: typeof p.ceremony === "string" ? p.ceremony : null,
+          delegated: p.delegated === true,
+          reason: typeof p.reason === "string" ? p.reason : null,
+          returned: p.returned === true,
+        })
+        break
+      case "task.doc_put": {
+        const report = (p.report ?? { ok: true, checks: [] }) as {
+          ok: boolean
+          checks: { ok: boolean; msg: string; detail?: string }[]
+        }
+        items.push({
+          kind: "method",
+          key,
+          event: "doc",
+          doc: String(p.kind),
+          version: Number(p.version),
+          ok: report.ok,
+          missing: report.checks
+            .filter((c) => !c.ok)
+            .map((c) => `${c.msg}${c.detail ? ` (${c.detail})` : ""}`),
+        })
+        break
+      }
+      case "verify.completed":
+        items.push({
+          kind: "method",
+          key,
+          event: "verify",
+          baseline: p.baseline === true,
+          results: (p.results ?? []) as {
+            name: string
+            ok: boolean
+            duration_ms: number
+            tail: string
+          }[],
+          delta: (p.delta ?? { green: true, newRed: [], stillRed: [], fixed: [] }) as {
+            green: boolean
+            newRed: string[]
+            stillRed: string[]
+            fixed: string[]
+          },
+        })
+        break
+      case "run.keel_message":
+        items.push({ kind: "method", key, event: "keel", text: String(p.text) })
+        break
+      case "task.flow_stalled":
+        items.push({ kind: "method", key, event: "stalled", text: String(p.message) })
+        break
+      case "task.closed":
+        items.push({ kind: "method", key, event: "closed", text: "" })
+        break
       case "run.live_change_failed":
         items.push({
           kind: "status",
@@ -407,6 +505,9 @@ export function fromUnified(path: string, diff: string): FileDiff {
 export type Todo = { content: string; status: string; activeForm?: string }
 
 export type Ledger = {
+  /** Etapa del método y sus documentos (ADR-0021), si la tarea se trabaja con él. */
+  stage: { stage: string; ceremony: string | null } | null
+  docs: { doc: string; version: number; ok: boolean; key: string }[]
   waiting: Approval[]
   files: { path: string; added: number; removed: number; key: string }[]
   tasks: { display_id: string; title: string; id: string; created: boolean; key: string }[]
@@ -423,7 +524,14 @@ export function buildLedger(items: ChatItem[], events: EventNotification[]): Led
   const notes: Ledger["notes"] = []
   const waiting: Approval[] = []
   let todos: Todo[] | null = null
+  let stage: Ledger["stage"] = null
+  const docs = new Map<string, Ledger["docs"][number]>()
   for (const it of items) {
+    if (it.kind === "method" && it.event === "started") stage = { stage: it.text, ceremony: null }
+    if (it.kind === "method" && it.event === "stage")
+      stage = { stage: it.to, ceremony: it.ceremony }
+    if (it.kind === "method" && it.event === "doc")
+      docs.set(it.doc, { doc: it.doc, version: it.version, ok: it.ok, key: it.key })
     if (it.kind === "approval" && it.decision === null) waiting.push(it)
     if (it.kind !== "tool") continue
     if (it.approval && it.approval.decision === null) waiting.push(it.approval)
@@ -477,6 +585,8 @@ export function buildLedger(items: ChatItem[], events: EventNotification[]): Led
     if (e.kind === "run.user_message" || e.kind === "run.prompt") suggestion = null
   }
   return {
+    stage,
+    docs: [...docs.values()],
     waiting,
     files: [...files.values()],
     tasks: [...tasks.values()],
@@ -605,4 +715,31 @@ export function optionLabel(label: string): { text: string; recommended: boolean
 export function questionsOf(input: unknown): Question[] {
   const qs = ((input ?? {}) as Loose).questions
   return Array.isArray(qs) ? (qs as Question[]) : []
+}
+
+/** Las tools del método: su efecto ya se ve como evento de Keel, la tarjeta sobra. */
+export const METHOD_TOOLS = new Set([
+  "mcp__keel__stage_current",
+  "mcp__keel__stage_advance",
+  "mcp__keel__task_doc_put",
+  "mcp__keel__task_doc_get",
+  "mcp__keel__task_docs_list",
+  "mcp__keel__verify_run",
+  "mcp__keel__project_profile",
+])
+
+export const STAGE_LABEL: Record<string, string> = {
+  brief: "Brief",
+  design: "Diseño",
+  implement: "Implementar",
+  review: "Revisión",
+  close: "Cierre",
+}
+export const DOC_LABEL: Record<string, string> = {
+  brief: "Brief",
+  spec: "Spec",
+  design: "Diseño",
+  tasks: "Tareas",
+  story: "Story",
+  qa: "QA",
 }
