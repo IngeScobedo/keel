@@ -29,6 +29,7 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0017](./0017-contexto-para-agentes-y-busqueda.md)              | Contexto para agentes: tarea vinculada, recursos MCP y búsqueda                                                      | Aceptado (2026-10-23) | Media      |
 | [0018](./0018-identidad-del-agente-en-el-sistema.md)            | Identidad del agente fuera de las tools: dos puertas, shell aislada y atribución                                     | Aceptado (2026-10-23) | **Máxima** |
 | [0019](./0019-uso-interactivo-desde-la-gui.md)                  | Uso interactivo desde la GUI: daemon de usuario, proyectos, conversación y permisos                                  | Aceptado (2026-10-23) | Alta       |
+| [0020](./0020-chat-del-run-como-superficie-de-foco.md)          | El chat del run como superficie de foco: tarjetas por intención, aprobaciones por patrón y control en vivo           | Propuesto             | Alta       |
 
 ## Estado
 
@@ -42,9 +43,10 @@ que se encuentren al implementarlo van a `../reviews/`.
 ## Orden de lectura
 
 0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0018 → 0008 → 0010 →
-0011 → 0012 → 0013 → 0015 → 0014 → 0016 → 0017 → 0019. Los dos primeros son el
-porqué; 0006 es lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son
-consecuencias; 0007 reparte el código en librerías reutilizables y producto.
+0011 → 0012 → 0013 → 0015 → 0014 → 0016 → 0017 → 0019 → 0020. Los dos primeros
+son el porqué; 0006 es lo que bloquea el primer componente de UI; 0004, 0005 y
+0003 son consecuencias; 0007 reparte el código en librerías reutilizables y
+producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 
