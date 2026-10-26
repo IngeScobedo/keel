@@ -1,6 +1,6 @@
 # ADR-0025: Vault y broker: Keel guarda las conexiones y el agente sólo pide operaciones
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-26)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Máxima
 - **Relacionados:**
