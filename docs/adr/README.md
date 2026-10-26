@@ -36,7 +36,7 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0024](./0024-la-conversacion-del-proyecto.md)                  | La conversación del proyecto: consultas sin tarea, de donde nacen tareas                                             | Aceptado (2026-10-26)  | Media      |
 | [0025](./0025-vault-y-broker.md)                                | Vault y broker: Keel guarda las conexiones y el agente sólo pide operaciones                                         | Aceptado (2026-10-26)  | **Máxima** |
 | [0026](./0026-prod-pregunta-y-se-puede-quitar.md)               | En producción Keel pregunta, y el humano puede quitar la pregunta asumiendo el riesgo                                | Propuesto              | Alta       |
-| [0027](./0027-cerrar-a-mano-con-evidencia.md)                   | Cerrar a mano una tarea, con su motivo y su evidencia                                                                | Aceptado (2026-10-26)              | Media      |
+| [0027](./0027-cerrar-a-mano-con-evidencia.md)                   | Cerrar a mano una tarea, con su motivo y su evidencia                                                                | Aceptado (2026-10-26)  | Media      |
 
 ## Estado
 
