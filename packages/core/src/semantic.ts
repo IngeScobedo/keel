@@ -43,6 +43,10 @@ export const SEMANTIC_SCHEMAS = {
       plan_sha256: z.string(),
       summary: z.string().nullable(),
       plan_ref: z.string().nullable(),
+      /** ADR-0031: qué herramienta (sin él, Terraform) y su ejecución en vivo. */
+      tool: z.enum(["terraform", "ansible"]).optional(),
+      run_key: z.string().optional(),
+      details: z.unknown().optional(),
     }),
   },
   "iac.apply.completed": {
@@ -52,6 +56,46 @@ export const SEMANTIC_SCHEMAS = {
       plan_sha256: z.string(),
       exit_code: z.number().int().nullable(),
       output_ref: z.string().nullable(),
+      tool: z.enum(["terraform", "ansible"]).optional(),
+      run_key: z.string().optional(),
+      details: z.unknown().optional(),
+    }),
+  },
+  /** Arranca un check o un despliegue: la tarjeta en vivo se abre con esto. */
+  "iac.run.started": {
+    schema_version: 1,
+    schema: z.object({
+      tool: z.enum(["terraform", "ansible"]),
+      run_key: z.string(),
+      connection: z.string(),
+      environment: z.string(),
+      mode: z.enum(["check", "plan", "apply"]),
+      playbook: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+      hosts: z
+        .array(z.object({ name: z.string(), connection: z.string(), host: z.string() }))
+        .optional(),
+      commit: z.string().nullable().optional(),
+    }),
+  },
+  "ansible.task.started": {
+    schema_version: 1,
+    schema: z.object({
+      run_key: z.string(),
+      index: z.number().int(),
+      task: z.string(),
+      action: z.string(),
+    }),
+  },
+  "ansible.host.result": {
+    schema_version: 1,
+    schema: z.object({
+      run_key: z.string(),
+      host: z.string(),
+      task: z.string(),
+      status: z.enum(["ok", "changed", "failed", "ignored", "skipped", "unreachable"]),
+      changed: z.boolean(),
+      msg: z.string().nullable(),
     }),
   },
   "git.commit.created": {

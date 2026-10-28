@@ -52,12 +52,21 @@ const FIELDS: Record<Kind, { key: string; label: string }[]> = {
     { key: "proxy_jump", label: "Salto (ProxyJump)" },
   ],
   terraform: [{ key: "dir", label: "Carpeta de Terraform" }],
+  // ADR-0031: el playbook y a qué conexión SSH va cada host del inventario.
+  ansible: [
+    { key: "dir", label: "Carpeta del playbook (en el proyecto)" },
+    { key: "playbook", label: "Playbook" },
+    { key: "hosts", label: "Hosts (host=conexión, separados por coma)" },
+    { key: "tags", label: "Tags por defecto (separados por coma)" },
+  ],
 }
 const METHODS: Record<Kind, Method[]> = {
   ssh: ["agent", "file", "key", "password", "ask"],
   postgres: ["password", "ask"],
   sqlite: [],
   terraform: [],
+  // La contraseña de ansible-vault: guardada en el vault o pedida cada vez.
+  ansible: ["password", "ask"],
 }
 const METHOD_HINT: Record<Method, string> = {
   agent: "Usa tu ssh-agent. Keel no guarda nada.",
@@ -751,6 +760,20 @@ function NewConnection({
     for (const f of FIELDS[type]) {
       const v = config[f.key]?.trim()
       if (v) cfg[f.key] = f.key === "port" ? Number(v) : v
+    }
+    if (type === "ansible") {
+      const list = (v: unknown) =>
+        String(v ?? "")
+          .split(",")
+          .map((x) => x.trim())
+          .filter(Boolean)
+      cfg.hosts = Object.fromEntries(
+        list(cfg.hosts).map((pair) => {
+          const [host, conn] = pair.split("=").map((x) => x.trim())
+          return [host, conn ?? host]
+        }),
+      )
+      cfg.tags = list(cfg.tags)
     }
     if (method === "file" && identity) cfg.identity_file = identity
     const managed = methods.length > 0

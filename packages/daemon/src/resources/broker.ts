@@ -8,13 +8,36 @@
  */
 import type { Database } from "bun:sqlite"
 import { spawn, spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs"
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { join } from "node:path"
 import { CONNECTION_OPERATIONS, type ConnectionType, WRITE_OPERATIONS } from "@keel/core"
 import { SQL } from "bun"
 import type { ArtifactStore, Sensitivity } from "../artifacts.js"
 import { canonicalJson, sha256Hex, ulid } from "../ids.js"
 import { tableFromText } from "../semantic.js"
+import {
+  AnsibleError,
+  type AnsibleEvent,
+  type AnsibleHost,
+  ansibleEnv,
+  ansibleSpec,
+  deployDigest,
+  playbookArgs,
+  playbookDir,
+  prepareRunDir,
+  runPlaybook,
+  secretLeaves,
+  summarize,
+  vaultFiles,
+} from "./ansible.js"
 import { redactKnownPatterns, redactSecrets, resolveSecret } from "./secrets.js"
 
 export type ConnectionRow = {
@@ -49,6 +72,30 @@ export type Credentials = {
     ctx: ExecuteContext,
   ): Promise<{ args: string[]; env: Record<string, string>; redact: string[]; done: () => void }>
   password(conn: ConnectionRow, ctx: ExecuteContext): Promise<string | null>
+  /** ADR-0031: los `ssh` de cada host y el script de la contraseña de `ansible-vault`. */
+  ansible?(
+    conn: ConnectionRow,
+    hosts: ConnectionRow[],
+    ctx: ExecuteContext,
+    runDir: string,
+  ): Promise<{
+    ssh: Map<string, string>
+    vaultPass: string | null
+    env: Record<string, string>
+    redact: () => string[]
+    done: () => void
+  }>
+}
+
+/** ADR-0031 §3: el checkout desde el que se despliega, al día y limpio. */
+export type DeployBase = {
+  root: string
+  commit: string | null
+  upstream: string | null
+  behind: number
+  /** Cambios sin commit en la carpeta del playbook (los ignorados por git no cuentan). */
+  dirty: string[]
+  error: string | null
 }
 
 export type ExecuteContext = {
@@ -68,6 +115,8 @@ export type BrokerResult = {
   output?: string
   exit_code?: number | null
   plan_sha256?: string
+  /** Resumen estructurado y corto para el agente y la tarjeta (ADR-0031 §5). */
+  details?: unknown
   evidence_id: string | null
   result_ref: string | null
 }
@@ -99,6 +148,8 @@ export type BrokerDeps = {
   env?: Record<string, string | undefined>
   /** ADR-0025: credenciales del vault para las conexiones con método. */
   credentials?: Credentials
+  /** ADR-0031 §3: el checkout del proyecto y si está al día; `dir` relativo a él. */
+  deployBase?: (projectId: string, dir: string) => Promise<DeployBase>
 }
 
 export class BrokerError extends Error {
@@ -119,6 +170,8 @@ const DEFAULT_GUARANTEES: Record<ConnectionType, string> = {
   sqlite: "Las lecturas abren el archivo en modo sólo lectura (mode=ro): la base rechaza escribir.",
   ssh: "En producción cada comando pregunta (salvo que quites la pregunta asumiendo el riesgo) y la salida se redacta; la garantía real es un usuario restringido o un comando forzado en el servidor.",
   terraform: "apply sólo ejecuta el archivo de plan aprobado, atado a su hash.",
+  ansible:
+    "El despliegue sólo corre lo que se revisó en el check: mismo commit, mismos archivos y mismos hosts. Entra por las conexiones SSH del vault con su huella.",
 }
 
 export class ResourceBroker {
@@ -156,6 +209,28 @@ export class ResourceBroker {
     tags?: string[] | undefined
     host_key?: string | null | undefined
   }): ConnectionRow {
+    // ADR-0031: cada host del playbook va a una conexión SSH del vault, y el destino es
+    // tan sensible como la más sensible de ellas.
+    if (p.type === "ansible") {
+      try {
+        const spec = ansibleSpec(p.config)
+        const rank = { dev: 0, staging: 1, prod: 2 } as const
+        let env: ConnectionRow["environment"] = "dev"
+        for (const c of Object.values(spec.hosts)) {
+          const h = this.find(p.project_id, c)
+          if (h.conn_type !== "ssh") throw new BrokerError("invalid", `${c} no es una conexión SSH`)
+          if (rank[h.environment] > rank[env]) env = h.environment
+        }
+        if (rank[env] > rank[p.environment])
+          throw new BrokerError(
+            "invalid",
+            `el destino despliega a una conexión ${env}: su entorno no puede ser ${p.environment}`,
+          )
+      } catch (e) {
+        if (e instanceof AnsibleError) throw new BrokerError("invalid", e.message)
+        throw e
+      }
+    }
     // La configuración no lleva secretos: si trae algo con forma de contraseña, se rechaza.
     for (const k of Object.keys(p.config))
       if (/pass|secret|token|key/i.test(k) && typeof p.config[k] === "string")
@@ -435,9 +510,13 @@ export class ResourceBroker {
             : "sin credencial"
       const started = performance.now()
       const raw =
-        conn.conn_type === "ssh" && ssh
-          ? await runManagedSsh(conn, config, p.input, ssh)
-          : await this.run(conn, config, p.operation, p.input, secret, tfVars)
+        conn.conn_type === "ansible"
+          ? await this.runAnsible(ctx, conn, config, p.operation, p.input, secrets, (l) => {
+              live = l
+            })
+          : conn.conn_type === "ssh" && ssh
+            ? await runManagedSsh(conn, config, p.input, ssh)
+            : await this.run(conn, config, p.operation, p.input, secret, tfVars)
       const duration_ms = Math.round(performance.now() - started)
       // Redacción exacta (ADR-0013 §3) y por patrones conocidos (ADR-0025 §8).
       const clean = redactKnownPatterns(redactSecrets(raw, [...secrets, ...live]))
@@ -535,9 +614,237 @@ export class ResourceBroker {
       ...(r.output !== undefined ? { output: r.output.slice(0, 20_000) } : {}),
       ...(r.exit_code !== undefined ? { exit_code: r.exit_code } : {}),
       ...(r.plan_sha256 ? { plan_sha256: r.plan_sha256 } : {}),
+      ...(r.details !== undefined ? { details: r.details } : {}),
       evidence_id: evidenceId,
       result_ref: stored.ref,
     }
+  }
+
+  /**
+   * ADR-0031: el check (`iac.plan`) o el despliegue (`iac.apply`) de un playbook. Cada
+   * tarea llega en vivo como evento; al agente vuelve un resumen corto.
+   */
+  private async runAnsible(
+    ctx: ExecuteContext,
+    conn: ConnectionRow,
+    config: Record<string, unknown>,
+    operation: string,
+    input: Record<string, unknown>,
+    secrets: string[],
+    setLive: (l: string[]) => void,
+  ): Promise<RawResult> {
+    const creds = this.deps.credentials
+    if (!creds?.ansible || !this.deps.deployBase)
+      throw new BrokerError("failed", "este daemon no tiene credenciales para Ansible")
+    let spec: ReturnType<typeof ansibleSpec>
+    try {
+      spec = ansibleSpec(config)
+    } catch (e) {
+      throw new BrokerError("invalid", (e as Error).message)
+    }
+    const base = await this.deps.deployBase(ctx.projectId, spec.dir)
+    if (base.behind > 0)
+      throw new BrokerError(
+        "denied",
+        `${base.upstream ?? "el remoto"} va ${base.behind} commit(s) adelante: actualiza el checkout antes de desplegar`,
+      )
+    if (base.dirty.length)
+      throw new BrokerError(
+        "denied",
+        `hay cambios sin commit en ${spec.dir} (${base.dirty.slice(0, 5).join(", ")}): lo que se despliega tiene que estar en un commit`,
+      )
+    let dir: string
+    try {
+      dir = playbookDir(base.root, spec)
+    } catch (e) {
+      throw new BrokerError("invalid", (e as Error).message)
+    }
+    const hostConns = Object.entries(spec.hosts).map(([name, c]) => ({
+      name,
+      conn: this.find(ctx.projectId, c),
+    }))
+    const mode = operation === "iac.plan" ? "check" : "apply"
+    const runKey = ulid()
+    const runDir = join(this.deps.plansDir, "ansible-runs", runKey)
+    mkdirSync(runDir, { recursive: true, mode: 0o700 })
+    const prep = await creds.ansible(
+      conn,
+      hostConns.map((h) => h.conn),
+      ctx,
+      runDir,
+    )
+    const redact = (s: string) =>
+      redactKnownPatterns(redactSecrets(s, [...secrets, ...prep.redact()]))
+    try {
+      const hosts: AnsibleHost[] = hostConns.map(({ name, conn: c }) => {
+        const cfg = JSON.parse(c.config_json) as Record<string, unknown>
+        const key = c.host_key ? (JSON.parse(c.host_key) as { fingerprint?: string }) : null
+        return {
+          name,
+          connection: c.name,
+          host: String(cfg.host ?? ""),
+          user: cfg.user ? String(cfg.user) : null,
+          port: Number(cfg.port ?? 22),
+          ssh: prep.ssh.get(c.id) as string,
+          fingerprint: key?.fingerprint ?? null,
+        }
+      })
+      prepareRunDir(runDir, hosts)
+      const plansDir = join(this.deps.plansDir, "ansible")
+      mkdirSync(plansDir, { recursive: true, mode: 0o700 })
+      let choice = {
+        tags: Array.isArray(input.tags) ? input.tags.map(String) : spec.tags,
+        limit: input.limit ? String(input.limit) : spec.limit,
+      }
+      if (mode === "apply") {
+        const sha = String(input.plan_sha256 ?? "")
+        if (!/^[0-9a-f]{64}$/.test(sha))
+          throw new BrokerError("invalid", "falta input.plan_sha256: el hash del check aprobado")
+        const file = join(plansDir, `${sha}.json`)
+        if (!existsSync(file))
+          throw new BrokerError(
+            "not_found",
+            "ese check no existe: corre iac_plan antes de desplegar",
+          )
+        choice = (JSON.parse(readFileSync(file, "utf8")) as { choice: typeof choice }).choice
+        if (deployDigest(dir, base.commit, spec, hosts, choice) !== sha)
+          throw new BrokerError(
+            "denied",
+            "el commit, los archivos del playbook o los hosts cambiaron desde el check: vuelve a correr el check",
+          )
+      }
+      const digest = deployDigest(dir, base.commit, spec, hosts, choice)
+      const env = ansibleEnv(runDir, prep.env)
+      // ADR-0031 §6: lo que guarda el vault de Ansible se redacta de todo lo que salga.
+      if (prep.vaultPass) {
+        const vaultBin = spec.ansible_path.replace(/ansible-playbook$/, "ansible-vault")
+        for (const f of vaultFiles(dir)) {
+          // Asíncrono: el script de la contraseña le pregunta al propio daemon por askpass.
+          const r = await capture(
+            vaultBin,
+            ["view", "--vault-password-file", prep.vaultPass, f],
+            dir,
+            env,
+          )
+          if (r.status !== 0)
+            throw new BrokerError(
+              "denied",
+              `no se pudo abrir ${f} con la contraseña de ansible-vault: ${redact(r.stderr).slice(-300)}`,
+            )
+          secrets.push(...secretLeaves(r.stdout))
+        }
+      }
+      setLive(prep.redact())
+      const head = {
+        tool: "ansible",
+        run_key: runKey,
+        connection: conn.name,
+        environment: conn.environment,
+        mode,
+        playbook: spec.playbook,
+        tags: choice.tags,
+        hosts: hosts.map((h) => ({ name: h.name, connection: h.connection, host: h.host })),
+        commit: base.commit,
+      }
+      this.deps.emit(ctx.projectId, ctx.runId, "iac.run.started", head)
+      let index = 0
+      let outcome: Awaited<ReturnType<typeof runPlaybook>>
+      try {
+        outcome = await runPlaybook(
+          {
+            bin: spec.ansible_path,
+            args: playbookArgs(runDir, spec, mode, choice, prep.vaultPass),
+            cwd: dir,
+            env,
+            eventsFile: join(runDir, "events.ndjson"),
+            mode,
+            timeoutMs: (mode === "check" ? 30 : 60) * 60_000,
+          },
+          (e) => this.emitAnsible(ctx, runKey, e, ++index, redact),
+        )
+      } catch (e) {
+        if (e instanceof AnsibleError) throw new BrokerError("failed", e.message)
+        throw e
+      }
+      setLive(prep.redact())
+      const { summary, details } = summarize(outcome, spec, base.commit, choice.tags)
+      if (mode === "check")
+        writeFileSync(
+          join(plansDir, `${digest}.json`),
+          JSON.stringify({ choice, commit: base.commit, created_at: new Date().toISOString() }),
+          { mode: 0o600 },
+        )
+      const cleanDetails = JSON.parse(redact(JSON.stringify(details))) as typeof details
+      const body = redact(outcome.output)
+      return {
+        summary,
+        body,
+        media_type: "text/plain",
+        evidence_kind: "log",
+        exit_code: outcome.exit_code,
+        plan_sha256: digest,
+        details: {
+          ...cleanDetails,
+          run_key: runKey,
+          ...(base.error ? { base_warning: base.error } : {}),
+        },
+        semantic:
+          mode === "check"
+            ? {
+                kind: "iac.plan.created",
+                payload: (ref) => ({
+                  server: spec.dir,
+                  plan_sha256: digest,
+                  summary,
+                  plan_ref: ref,
+                  tool: "ansible",
+                  run_key: runKey,
+                  details: cleanDetails,
+                }),
+              }
+            : {
+                kind: "iac.apply.completed",
+                payload: (ref) => ({
+                  server: spec.dir,
+                  plan_sha256: digest,
+                  exit_code: outcome.exit_code,
+                  output_ref: ref,
+                  tool: "ansible",
+                  run_key: runKey,
+                  details: cleanDetails,
+                }),
+              },
+      }
+    } finally {
+      prep.done()
+      rmSync(runDir, { recursive: true, force: true })
+    }
+  }
+
+  /** Cada tarea y cada resultado por host, en vivo y redactados (ADR-0011, ADR-0031 §5). */
+  private emitAnsible(
+    ctx: ExecuteContext,
+    runKey: string,
+    e: AnsibleEvent,
+    index: number,
+    redact: (s: string) => string,
+  ): void {
+    if (e.kind === "task")
+      this.deps.emit(ctx.projectId, ctx.runId, "ansible.task.started", {
+        run_key: runKey,
+        index,
+        task: redact(e.name),
+        action: e.action,
+      })
+    else if (e.kind === "result")
+      this.deps.emit(ctx.projectId, ctx.runId, "ansible.host.result", {
+        run_key: runKey,
+        host: e.host,
+        task: redact(e.task),
+        status: e.status,
+        changed: e.changed,
+        msg: e.msg ? redact(e.msg) : null,
+      })
   }
 }
 
@@ -551,7 +858,38 @@ type RawResult = {
   output?: string
   exit_code?: number | null
   plan_sha256?: string
+  details?: unknown
   semantic: { kind: string; payload: (ref: string) => Record<string, unknown> }
+}
+
+/** Corre un proceso sin bloquear el daemon y devuelve su salida. */
+function capture(
+  bin: string,
+  args: string[],
+  cwd: string,
+  env: Record<string, string>,
+  timeoutMs = 120_000,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((done) => {
+    const child = spawn(bin, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] })
+    let stdout = ""
+    let stderr = ""
+    child.stdout.on("data", (d: Buffer) => {
+      stdout += d.toString("utf8")
+    })
+    child.stderr.on("data", (d: Buffer) => {
+      stderr += d.toString("utf8")
+    })
+    const timer = setTimeout(() => child.kill("SIGTERM"), timeoutMs)
+    child.on("error", (e) => {
+      clearTimeout(timer)
+      done({ status: null, stdout, stderr: e.message })
+    })
+    child.on("close", (c) => {
+      clearTimeout(timer)
+      done({ status: c, stdout, stderr })
+    })
+  })
 }
 
 // --- SQL (PostgreSQL y SQLite por Bun.SQL) -------------------------------------------------

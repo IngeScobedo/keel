@@ -68,6 +68,17 @@ con la contraseña de prueba `clave-de-prueba`. `captures/` está en `.gitignore
   (`ControlMaster=no`) se rechaza: «Host key verification failed». Keel tiene
   que usar una carpeta de sockets de control propia por ejecución.
 
+- **Envoltorio de `ssh` por host** (`ansible_ssh_executable`): las 7 llamadas de
+  un `stat` pasaron por él, también la copia del módulo con
+  `ANSIBLE_SSH_TRANSFER_METHOD=piped` (sin `sftp`, que leería la config del
+  humano). Ansible añade su propio `-o StrictHostKeyChecking=no` cuando el
+  proyecto apaga la verificación, pero en `ssh` gana la primera opción: con la
+  del envoltorio primero, una huella distinta se rechaza igual.
+- **`ansible-vault view` no puede correr con `spawnSync` en el daemon.** El
+  script de la contraseña le pregunta al propio daemon por askpass, y con el
+  daemon bloqueado se esperan mutuamente (lo encontró la prueba de
+  `ansible.test.ts`).
+
 ## Falta medir
 
 - `--check --tags deploy` del `site.yml` de Casa Matte: necesita la contraseña

@@ -86,3 +86,34 @@ export async function pullBase(root: string, env: Record<string, string>): Promi
   if (p.code !== 0) throw new Error(gitError(p.err, `git pull terminó con ${p.code}`))
   return checkBase(root, env)
 }
+
+/**
+ * ADR-0031 §3: desde dónde se despliega. La base al día (con fetch, como ADR-0028), el
+ * commit y los cambios sin commit en la carpeta del playbook; lo ignorado por git
+ * (`vault.yml`, el inventario) no cuenta como cambio.
+ */
+export async function deployState(
+  root: string,
+  dir: string,
+  env: Record<string, string>,
+): Promise<{
+  commit: string | null
+  upstream: string | null
+  behind: number
+  dirty: string[]
+  error: string | null
+}> {
+  const base = await checkBase(root, env)
+  const head = await git(root, ["rev-parse", "HEAD"], {})
+  const status = await git(root, ["status", "--porcelain", "--untracked-files=all", "--", dir], {})
+  return {
+    commit: head.code === 0 ? head.out : null,
+    upstream: base.upstream,
+    behind: base.behind,
+    dirty: status.out
+      .split(/\r?\n/)
+      .map((l) => l.slice(3).trim())
+      .filter(Boolean),
+    error: base.error,
+  }
+}

@@ -430,6 +430,8 @@ export const CONNECTION_OPERATIONS = {
   sqlite: ["schema.read", "query.read", "query.write"],
   ssh: ["command.run"],
   terraform: ["iac.plan", "iac.apply"],
+  /** ADR-0031: `iac.plan` es el check (`--check --diff`); `iac.apply`, el despliegue. */
+  ansible: ["iac.plan", "iac.apply"],
 } as const
 export type ConnectionType = keyof typeof CONNECTION_OPERATIONS
 /** Operaciones que nunca son `auto` en producción (ADR-0013 §4). */
@@ -442,7 +444,7 @@ export type AuthMethod = z.infer<typeof AuthMethodSchema>
 export const ConnectionViewSchema = z.object({
   id: z.string(),
   name: z.string(),
-  type: z.enum(["postgres", "sqlite", "ssh", "terraform"]),
+  type: z.enum(["postgres", "sqlite", "ssh", "terraform", "ansible"]),
   environment: z.enum(["dev", "staging", "prod"]),
   /** Configuración sin secretos (host, base, ruta…). */
   config: z.record(z.string(), z.unknown()),
@@ -1214,7 +1216,7 @@ export const Methods = {
   "connections.add": {
     params: MutationMeta.extend({
       name: z.string().min(1).max(80),
-      type: z.enum(["postgres", "sqlite", "ssh", "terraform"]),
+      type: z.enum(["postgres", "sqlite", "ssh", "terraform", "ansible"]),
       environment: z.enum(["dev", "staging", "prod"]),
       config: z.record(z.string(), z.unknown()),
       secret_ref: z.string().optional(),

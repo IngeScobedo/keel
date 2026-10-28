@@ -11,8 +11,9 @@
  */
 import { randomBytes } from "node:crypto"
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { ulid } from "../ids.js"
+import { shQuote, sshWrapper } from "../resources/ansible.js"
 import type {
   ConnectionRow,
   Credentials,
@@ -33,6 +34,11 @@ type AskEntry = {
   expires: number
   /** Valores entregados por askpass en esta sesión: se redactan de la salida. */
   served: string[]
+  /**
+   * El mismo valor para toda la operación: la contraseña de `ansible-vault` se pide una
+   * vez aunque Ansible la lea varias (ADR-0031 §6).
+   */
+  reuse?: boolean
 }
 /** A quién se refiere una pregunta de secreto: una conexión o la llave de git. */
 type PromptTarget = { project_id: string; id: string; name: string; environment: string }
@@ -195,6 +201,71 @@ export class CredentialService implements Credentials {
     }
   }
 
+  /**
+   * ADR-0031 §2 y §6: lo que necesita `ansible-playbook` para un despliegue. Cada host
+   * entra por un envoltorio de `ssh` con las opciones y el askpass de su conexión; la
+   * contraseña de `ansible-vault` sale por un script con un token de esta operación.
+   */
+  async ansible(
+    conn: ConnectionRow,
+    hosts: ConnectionRow[],
+    ctx: ExecuteContext,
+    runDir: string,
+  ): Promise<{
+    ssh: Map<string, string>
+    vaultPass: string | null
+    env: Record<string, string>
+    redact: () => string[]
+    done: () => void
+  }> {
+    const served: string[][] = []
+    const finish: (() => void)[] = []
+    const ssh = new Map<string, string>()
+    try {
+      for (const [i, h] of hosts.entries()) {
+        if (h.conn_type !== "ssh" || !h.auth_method)
+          throw new BrokerError(
+            "invalid",
+            `${h.name} no es una conexión SSH del vault: Ansible entra sólo por conexiones con método de entrada`,
+          )
+        const p = await this.prepare(h, "agent", ctx)
+        finish.push(p.done)
+        served.push(p.redact)
+        const path = join(runDir, `ssh-${i}`)
+        const cfg = JSON.parse(h.config_json) as { ssh_path?: string }
+        sshWrapper(path, cfg.ssh_path ?? "ssh", p.args, p.env)
+        ssh.set(h.id, path)
+      }
+    } catch (e) {
+      for (const f of finish) f()
+      throw e
+    }
+    let vaultPass: string | null = null
+    if (conn.auth_method) {
+      if (conn.auth_method === "password" && conn.vault_item_id) this.requireVaultOpen()
+      const { token, entry } = this.issueToken(conn, "agent", ctx)
+      entry.reuse = true
+      served.push(entry.served)
+      finish.push(() => this.tokens.delete(token))
+      vaultPass = join(runDir, "vault-pass")
+      writeFileSync(
+        vaultPass,
+        `#!/bin/sh\nexport KEEL_ASKPASS_TOKEN=${shQuote(token)}\nexport KEEL_SOCKET=${shQuote(this.deps.humanDoor())}\nexec ${shQuote(this.deps.askpass)} ${shQuote(`Contraseña de ansible-vault (${conn.name})`)}\n`,
+        { mode: 0o700 },
+      )
+    }
+    return {
+      ssh,
+      vaultPass,
+      env: this.baseEnv(),
+      // Se lee al final: lo que askpass entregue durante la ejecución también se redacta.
+      redact: () => served.flat(),
+      done: () => {
+        for (const f of finish) f()
+      },
+    }
+  }
+
   /** La contraseña de una base de datos (ADR-0025 §3). */
   async password(conn: ConnectionRow, ctx: ExecuteContext): Promise<string | null> {
     const method = conn.auth_method as Method
@@ -226,6 +297,8 @@ export class CredentialService implements Credentials {
     // Una confirmación de huella nunca la contesta Keel: la acepta el humano.
     if (/yes\/no|fingerprint/i.test(prompt)) return { value: null, ask: false }
     if (entry.connection_id === null) return this.gitAskpass(entry, prompt)
+    if (entry.reuse && entry.served.length > 0)
+      return { value: entry.served[0] as string, ask: false }
     const conn = this.deps.broker.find(entry.project_id, entry.connection_id)
     const what = conn.auth_method === "file" ? "passphrase" : "password"
     let value: string | null = null

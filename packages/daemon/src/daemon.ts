@@ -80,7 +80,7 @@ import type { LiveChange } from "./adapters/provider.js"
 import { AgentTokens } from "./agent-tokens.js"
 import { ApprovalGate, type ApprovalResolution, QUESTION_TOOLS } from "./approvals.js"
 import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
-import { checkBase, pullBase } from "./base-sync.js"
+import { checkBase, deployState, pullBase } from "./base-sync.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
@@ -317,6 +317,17 @@ export class Daemon {
       credentials: {
         ssh: (c, x) => this.credentials.ssh(c, x),
         password: (c, x) => this.credentials.password(c, x),
+        ansible: (c, h, x, d) => this.credentials.ansible(c, h, x, d),
+      },
+      // ADR-0031 §3: se despliega desde el checkout del proyecto, al día y limpio.
+      deployBase: async (projectId, dir) => {
+        const root = this.repo.projectRoot(projectId) ?? this.rootPath
+        const g = this.credentials.gitEnv(projectId, this.noAskpassPath())
+        try {
+          return { root, ...(await deployState(root, dir, g.env)) }
+        } finally {
+          g.done()
+        }
       },
     })
     const stateDir = dirname(opts.dbPath)

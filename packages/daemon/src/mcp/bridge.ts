@@ -365,19 +365,26 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
     ),
     tool(
       "iac_plan",
-      "Planea Terraform en una conexión del proyecto. Devuelve plan_sha256: sólo ese plan se podrá aplicar.",
-      z.object({ connection: z.string() }),
+      "Planea en una conexión de infraestructura: Terraform (plan) o Ansible (check con --check --diff; tags y limit opcionales). Devuelve plan_sha256 y un resumen corto: sólo eso se podrá aplicar. En Ansible, las tareas de comando no se previsualizan y el resumen dice cuántas.",
+      z.object({
+        connection: z.string(),
+        tags: z.array(z.string()).optional(),
+        limit: z.string().optional(),
+      }),
       (a) =>
         client.call("resources.execute", {
           ...mutation(),
           connection: a.connection,
           operation: "iac.plan",
-          input: {},
+          input: {
+            ...(a.tags ? { tags: a.tags } : {}),
+            ...(a.limit ? { limit: a.limit } : {}),
+          },
         }),
     ),
     tool(
       "iac_apply",
-      "Aplica un plan de Terraform ya planeado, por su plan_sha256. Requiere aprobación; si el plan cambió, se rechaza.",
+      "Aplica lo planeado con iac_plan, por su plan_sha256: el plan de Terraform o el despliegue de Ansible con los mismos tags. Requiere aprobación; si algo cambió desde el plan, se rechaza y hay que volver a planear.",
       z.object({ connection: z.string(), plan_sha256: z.string() }),
       (a) =>
         client.call("resources.execute", {
