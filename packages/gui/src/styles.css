@@ -4446,3 +4446,15 @@ button.rc-ledger-row:hover {
   background: var(--color-status-waiting-human-bg);
   border-color: var(--color-status-waiting-human-border);
 }
+
+/* ADR-0033 §3: el resultado de «Probar conexión». */
+.conn-test.ok {
+  border-color: var(--color-status-succeeded-border);
+}
+.conn-test.bad {
+  border-color: var(--color-status-failed-border);
+}
+.conn-test-error {
+  color: var(--color-status-failed);
+  white-space: pre-wrap;
+}

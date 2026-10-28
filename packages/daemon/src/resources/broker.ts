@@ -49,6 +49,7 @@ import {
   type TfDetails,
   terraform,
 } from "./terraform.js"
+import { TunnelError, TunnelPool } from "./tunnel.js"
 
 export type ConnectionRow = {
   id: string
@@ -186,8 +187,165 @@ const DEFAULT_GUARANTEES: Record<ConnectionType, string> = {
 
 export class ResourceBroker {
   private readonly deps: BrokerDeps
+  /** ADR-0033: los túneles SSH hacia las bases, abiertos por uso. */
+  readonly tunnels = new TunnelPool()
   constructor(deps: BrokerDeps) {
     this.deps = deps
+  }
+
+  /** Al apagar el daemon: ningún túnel queda abierto. */
+  close(): void {
+    this.tunnels.closeWhere(() => true)
+  }
+
+  /**
+   * ADR-0033 §2: la base detrás de una conexión SSH. Devuelve la config con el puerto
+   * local del túnel en lugar del host y el puerto que ve el servidor.
+   */
+  private async viaTunnel(
+    ctx: ExecuteContext,
+    conn: ConnectionRow,
+    config: Record<string, unknown>,
+  ): Promise<{
+    config: Record<string, unknown>
+    opened_ms: number
+    release: () => void
+    redact: () => string[]
+  } | null> {
+    const via = typeof config.via === "string" && config.via ? config.via : null
+    if (!via) return null
+    const creds = this.deps.credentials
+    if (!creds) throw new BrokerError("failed", "este daemon no tiene credenciales para túneles")
+    const ssh = this.find(ctx.projectId, via)
+    if (ssh.conn_type !== "ssh" || !ssh.auth_method)
+      throw new BrokerError("invalid", `${via} no es una conexión SSH del vault`)
+    const sshCfg = JSON.parse(ssh.config_json) as Record<string, unknown>
+    let served: string[] = []
+    try {
+      const t = await this.tunnels.acquire(
+        `${ctx.runId ?? "human"}:${conn.id}`,
+        String(sshCfg.host ?? ""),
+        { host: String(config.host ?? "127.0.0.1"), port: Number(config.port ?? 5432) },
+        async () => {
+          const prep = await creds.ssh(ssh, ctx)
+          served = prep.redact
+          return { ...prep, ssh: String(sshCfg.ssh_path ?? "ssh") }
+        },
+      )
+      return {
+        config: { ...config, host: "127.0.0.1", port: t.port },
+        opened_ms: t.opened_ms,
+        release: t.release,
+        redact: () => served,
+      }
+    } catch (e) {
+      if (e instanceof TunnelError)
+        throw new BrokerError("failed", `${via}: ${redactSecrets(e.message, served)}`)
+      throw e
+    }
+  }
+
+  /**
+   * ADR-0033 §3: «Probar conexión». Por el mismo camino que una consulta (túnel incluido),
+   * en una transacción de sólo lectura y con la credencial con que lee el agente.
+   */
+  async test(
+    ctx: ExecuteContext,
+    nameOrId: string,
+  ): Promise<{
+    ok: boolean
+    user: string | null
+    database: string | null
+    version: string | null
+    read_only: boolean | null
+    ro_credential: boolean
+    tunnel_ms: number | null
+    db_ms: number | null
+    via: string | null
+    error: string | null
+  }> {
+    const conn = this.find(ctx.projectId, nameOrId)
+    if (conn.conn_type !== "postgres" && conn.conn_type !== "sqlite")
+      throw new BrokerError("invalid", "por ahora se prueban las bases (PostgreSQL y SQLite)")
+    const config = JSON.parse(conn.config_json) as Record<string, unknown>
+    const roCredential = conn.secret_ref_ro !== null || Boolean(config.user_ro)
+    const out = {
+      ok: false,
+      user: null as string | null,
+      database: null as string | null,
+      version: null as string | null,
+      read_only: null as boolean | null,
+      ro_credential: roCredential,
+      tunnel_ms: null as number | null,
+      db_ms: null as number | null,
+      via: typeof config.via === "string" ? config.via : null,
+      error: null as string | null,
+    }
+    const secrets: string[] = []
+    let tunnel: Awaited<ReturnType<ResourceBroker["viaTunnel"]>> = null
+    try {
+      if (conn.conn_type === "sqlite") {
+        const started = performance.now()
+        const db = new SQL(`sqlite://${String(config.path ?? "")}?mode=ro`)
+        try {
+          const [v] = (await db.unsafe("select sqlite_version() as v")) as { v: string }[]
+          out.version = `SQLite ${v?.v ?? "?"}`
+          out.database = String(config.path ?? "")
+          out.read_only = true
+        } finally {
+          await db.close()
+        }
+        out.db_ms = Math.round(performance.now() - started)
+        out.ok = true
+        return out
+      }
+      const managed = Boolean(conn.auth_method) && Boolean(this.deps.credentials)
+      const ref = conn.secret_ref_ro ?? conn.secret_ref
+      const secret = managed
+        ? await (this.deps.credentials as Credentials).password(conn, ctx)
+        : ref
+          ? resolveSecret(ref, this.deps.env ?? process.env)
+          : null
+      if (secret) secrets.push(secret)
+      tunnel = await this.viaTunnel(ctx, conn, config)
+      if (tunnel) out.tunnel_ms = tunnel.opened_ms
+      const cfg = tunnel?.config ?? config
+      const started = performance.now()
+      const db = new SQL({
+        hostname: String(cfg.host ?? "localhost"),
+        port: Number(cfg.port ?? 5432),
+        database: String(cfg.database ?? ""),
+        username: String(cfg.user_ro || cfg.user || ""),
+        ...(secret ? { password: secret } : {}),
+        max: 1,
+        connectionTimeout: 15,
+      })
+      try {
+        const row = (await db.begin(async (tx) => {
+          await tx.unsafe("SET TRANSACTION READ ONLY")
+          const [r] = (await tx.unsafe(
+            "select current_user as u, current_database() as d, version() as v, current_setting('transaction_read_only') as ro",
+          )) as { u: string; d: string; v: string; ro: string }[]
+          return r
+        })) as { u: string; d: string; v: string; ro: string } | undefined
+        out.user = row?.u ?? null
+        out.database = row?.d ?? null
+        out.version = row?.v ? (row.v.split(" on ")[0] ?? row.v) : null
+        out.read_only = row ? row.ro === "on" : null
+      } finally {
+        await db.close()
+      }
+      out.db_ms = Math.round(performance.now() - started)
+      out.ok = true
+    } catch (e) {
+      const all = [...secrets, ...(tunnel?.redact() ?? [])]
+      out.error = redactKnownPatterns(
+        redactSecrets(e instanceof Error ? e.message : String(e), all),
+      )
+    } finally {
+      tunnel?.release()
+    }
+    return out
   }
 
   // --- conexiones y permisos ---------------------------------------------------------
@@ -219,6 +377,19 @@ export class ResourceBroker {
     tags?: string[] | undefined
     host_key?: string | null | undefined
   }): ConnectionRow {
+    // ADR-0033 §1: una base por túnel va por una conexión SSH del proyecto, y no es menos
+    // sensible que el servidor por el que pasa.
+    if (p.type === "postgres" && typeof p.config.via === "string" && p.config.via) {
+      const ssh = this.find(p.project_id, p.config.via)
+      if (ssh.conn_type !== "ssh")
+        throw new BrokerError("invalid", `${p.config.via} no es una conexión SSH`)
+      const rank = { dev: 0, staging: 1, prod: 2 } as const
+      if (rank[ssh.environment] > rank[p.environment])
+        throw new BrokerError(
+          "invalid",
+          `la base pasa por ${ssh.name} (${ssh.environment}): su entorno no puede ser ${p.environment}`,
+        )
+    }
     // ADR-0031: cada host del playbook va a una conexión SSH del vault, y el destino es
     // tan sensible como la más sensible de ellas.
     if (p.type === "ansible") {
@@ -484,6 +655,7 @@ export class ResourceBroker {
     const secrets: string[] = []
     const env = this.deps.env ?? process.env
     let cleanup = () => {}
+    const cleanups: (() => void)[] = []
     let live: string[] = []
     try {
       // ADR-0025: con método de entrada, la credencial sale del vault (o se le pregunta
@@ -518,6 +690,10 @@ export class ResourceBroker {
           : ref
             ? "rw"
             : "sin credencial"
+      // ADR-0033: una base detrás de una conexión SSH llega por su túnel.
+      const tunnel = conn.conn_type === "postgres" ? await this.viaTunnel(ctx, conn, config) : null
+      if (tunnel) cleanups.push(tunnel.release)
+      const runConfig = tunnel?.config ?? config
       const started = performance.now()
       // SSH: la tarjeta se abre al empezar y se cierra con el exit y la duración.
       const sshKey = conn.conn_type === "ssh" ? ulid() : null
@@ -538,10 +714,11 @@ export class ResourceBroker {
             ? await this.runTerraform(ctx, conn, config, p.operation, p.input, secrets, tfVars)
             : conn.conn_type === "ssh" && ssh
               ? await runManagedSsh(conn, config, p.input, ssh)
-              : await this.run(conn, config, p.operation, p.input, secret)
+              : await this.run(conn, runConfig, p.operation, p.input, secret)
       const duration_ms = Math.round(performance.now() - started)
       // Redacción exacta (ADR-0013 §3) y por patrones conocidos (ADR-0025 §8).
-      const all = [...secrets, ...live]
+      // Lo que askpass entregó para abrir el túnel también se redacta.
+      const all = [...secrets, ...live, ...(tunnel?.redact() ?? [])]
       const clean = redactKnownPatterns(redactSecrets(raw, all))
       // El payload del evento es una función: lo que devuelve también pasa por la redacción.
       clean.semantic = {
@@ -572,6 +749,7 @@ export class ResourceBroker {
       throw new BrokerError("failed", `${p.operation} en ${conn.name} falló: ${message}`)
     } finally {
       cleanup()
+      for (const c of cleanups) c()
     }
   }
 

@@ -18,6 +18,7 @@ import {
   FolderOpen,
   KeyRound,
   Lock,
+  PlugZap,
   Plus,
   Rocket,
   Search,
@@ -102,9 +103,12 @@ function target(c: Connection): string {
   const host = String(cfg.host ?? "")
   const user = cfg.user ? `${cfg.user}@` : ""
   const port = cfg.port ? `:${cfg.port}` : ""
-  return c.type === "postgres" && cfg.database
-    ? `${user}${host}${port}/${cfg.database}`
-    : `${user}${host}${port}`
+  const dest =
+    c.type === "postgres" && cfg.database
+      ? `${user}${host}${port}/${cfg.database}`
+      : `${user}${host}${port}`
+  // ADR-0033: el host es el que ve el servidor; sin decir por dónde, «127.0.0.1» engaña.
+  return cfg.via ? `${dest} vía ${String(cfg.via)}` : dest
 }
 
 export function LiveConnections({
@@ -442,6 +446,31 @@ function Detail({
   const [keyPath, setKeyPath] = useState("")
   const [guarantee, setGuarantee] = useState(c.guarantees.server ?? "")
   const [terminal, setTerminal] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [tested, setTested] = useState<ConnTest | null>(null)
+  const canTest = c.type === "postgres" || c.type === "sqlite"
+  async function probe() {
+    setTesting(true)
+    setTested(null)
+    try {
+      setTested(await call("connections.test", { connection_id: c.id }))
+    } catch (e) {
+      setTested({
+        ok: false,
+        user: null,
+        database: null,
+        version: null,
+        read_only: null,
+        ro_credential: false,
+        tunnel_ms: null,
+        db_ms: null,
+        via: null,
+        error: e instanceof Error ? e.message : String(e),
+      })
+    } finally {
+      setTesting(false)
+    }
+  }
   const methods = METHODS[c.type]
   const method = (c.auth_method ?? null) as Method | null
   const update = (patch: Record<string, unknown>) =>
@@ -464,6 +493,11 @@ function Detail({
             Huella
           </Button>
         )}
+        {canTest && (
+          <Button icon={PlugZap} disabled={testing} onClick={() => void probe()}>
+            {testing ? "Probando…" : "Probar conexión"}
+          </Button>
+        )}
         <Button
           variant="ghost"
           icon={Trash2}
@@ -473,6 +507,7 @@ function Detail({
           }
         />
       </header>
+      {tested && <TestResult r={tested} />}
       {(c.type === "ansible" || c.type === "terraform") && (
         <Deploy c={c} call={call} events={events} />
       )}
@@ -508,6 +543,12 @@ function Detail({
               </dd>
             </>
           )}
+          {c.config.via ? (
+            <>
+              <dt>Túnel SSH</dt>
+              <dd className="mono">por {String(c.config.via)}</dd>
+            </>
+          ) : null}
           {c.config.proxy_jump ? (
             <>
               <dt>Salto</dt>
@@ -766,11 +807,14 @@ function NewConnection({
   prefill,
   connections = [],
   projectRoot = "",
+  fixedType,
   onClose,
   onCreated,
 }: {
   call: Call
   prefill?: SetupPrefill
+  /** Un tipo fijo: la conexión SSH que se crea desde el formulario de una base (ADR-0033). */
+  fixedType?: Kind
   /** La carpeta del proyecto: el diálogo de archivos abre ahí. */
   projectRoot?: string
   /** Las conexiones que ya hay: un destino de Ansible elige entre las SSH. */
@@ -782,10 +826,17 @@ function NewConnection({
   const str = (k: string) => (p[k] === undefined || p[k] === null ? "" : String(p[k]))
   const [name, setName] = useState(str("name"))
   const [type, setType] = useState<Kind>(
-    (["ssh", "postgres", "sqlite", "terraform"].includes(str("type"))
-      ? str("type")
-      : "ssh") as Kind,
+    fixedType ??
+      ((["ssh", "postgres", "sqlite", "terraform"].includes(str("type"))
+        ? str("type")
+        : "ssh") as Kind),
   )
+  // ADR-0033 §1: una base puede llegar por una conexión SSH, existente o creada aquí.
+  const [via, setVia] = useState("")
+  const [createdSsh, setCreatedSsh] = useState<Connection[]>([])
+  const [nestedSsh, setNestedSsh] = useState(false)
+  const [nestedKey, setNestedKey] = useState("")
+  const sshConnections = [...connections, ...createdSsh].filter((c) => c.type === "ssh")
   const [env, setEnv] = useState<Env>(
     (["dev", "staging", "prod"].includes(str("environment")) ? str("environment") : "dev") as Env,
   )
@@ -806,6 +857,9 @@ function NewConnection({
   const [target, setTarget] = useState<AnsibleTarget | null>(null)
   // ADR-0031 §1: el destino es tan sensible como la más sensible de sus conexiones.
   const derivedEnv = useMemo(() => {
+    // ADR-0033 §1: la base no es menos sensible que el servidor por el que pasa.
+    if (type === "postgres" && via)
+      return sshConnections.find((c) => c.name === via)?.environment ?? null
     if (type !== "ansible" || !target) return null
     const rank: Record<Env, number> = { dev: 0, staging: 1, prod: 2 }
     let max: Env = "dev"
@@ -814,7 +868,7 @@ function NewConnection({
       if (c && rank[c.environment] > rank[max]) max = c.environment
     }
     return max
-  }, [type, target, connections])
+  }, [type, target, connections, via, sshConnections])
   useEffect(() => {
     if (derivedEnv) setEnv(derivedEnv)
   }, [derivedEnv])
@@ -839,6 +893,7 @@ function NewConnection({
       const v = config[f.key]?.trim()
       if (v) cfg[f.key] = f.key === "port" ? Number(v) : v
     }
+    if (type === "postgres" && via) cfg.via = via
     if (type === "ansible" && target) {
       cfg.dir = target.dir
       cfg.playbook = target.playbook
@@ -874,161 +929,230 @@ function NewConnection({
     }
   }
   return (
-    <Modal title="Nueva conexión" onClose={onClose}>
-      <form onSubmit={(e) => void submit(e)} className="conn-form" data-testid="new-connection">
-        {prefill && (
-          <p className="muted">
-            Propuesta por el agente
-            {p.why ? `: ${String(p.why).replace(/\.$/, "")}` : ""}. Revisa y completa; el agente
-            nunca ve el secreto.
-          </p>
-        )}
-        <div className="conn-form-row">
-          <label>
-            Nombre
-            <input
-              aria-label="Nombre de la conexión"
-              required
-              data-autofocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-            />
-          </label>
-          <label>
-            Tipo
-            <select
-              aria-label="Tipo"
-              value={type}
-              onChange={(e) => {
-                const t = e.target.value as Kind
-                setType(t)
-                // Ansible: la contraseña de ansible-vault se pide hasta que la guardes.
-                setMethod(t === "postgres" ? "password" : t === "ansible" ? "ask" : "key")
-              }}
-            >
-              <option value="ssh">SSH</option>
-              <option value="postgres">PostgreSQL</option>
-              <option value="sqlite">SQLite</option>
-              <option value="terraform">Terraform</option>
-              <option value="ansible">Ansible</option>
-            </select>
-          </label>
-          <label>
-            Entorno
-            <select
-              aria-label="Entorno"
-              value={env}
-              disabled={derivedEnv !== null}
-              title={derivedEnv ? "Lo deciden las conexiones de los hosts" : undefined}
-              onChange={(e) => setEnv(e.target.value as Env)}
-            >
-              <option value="dev">dev</option>
-              <option value="staging">staging</option>
-              <option value="prod">prod</option>
-            </select>
-          </label>
-        </div>
-        {env === "prod" && (
-          <p className="prod-note">
-            Producción: cada ejecución te pide permiso. Puedes quitar la pregunta después, desde la
-            conexión, asumiendo el riesgo.
-          </p>
-        )}
-        {type === "ansible" ? (
-          <AnsiblePicker
-            call={call}
-            connections={connections}
-            projectRoot={projectRoot}
-            onChange={setTarget}
-          />
-        ) : (
+    <>
+      <Modal
+        title={fixedType === "ssh" ? "Nueva conexión SSH" : "Nueva conexión"}
+        onClose={onClose}
+      >
+        <form onSubmit={(e) => void submit(e)} className="conn-form" data-testid="new-connection">
+          {prefill && (
+            <p className="muted">
+              Propuesta por el agente
+              {p.why ? `: ${String(p.why).replace(/\.$/, "")}` : ""}. Revisa y completa; el agente
+              nunca ve el secreto.
+            </p>
+          )}
           <div className="conn-form-row">
-            {FIELDS[type].map((f) => (
-              <label key={f.key}>
-                {f.label}
-                <input
-                  aria-label={f.label}
-                  className="mono"
-                  value={config[f.key] ?? ""}
-                  onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
-                />
-              </label>
-            ))}
+            <label>
+              Nombre
+              <input
+                aria-label="Nombre de la conexión"
+                required
+                data-autofocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+            </label>
+            <label>
+              Tipo
+              <select
+                aria-label="Tipo"
+                value={type}
+                disabled={fixedType !== undefined}
+                onChange={(e) => {
+                  const t = e.target.value as Kind
+                  setType(t)
+                  // Ansible: la contraseña de ansible-vault se pide hasta que la guardes.
+                  setMethod(t === "postgres" ? "password" : t === "ansible" ? "ask" : "key")
+                }}
+              >
+                <option value="ssh">SSH</option>
+                <option value="postgres">PostgreSQL</option>
+                <option value="sqlite">SQLite</option>
+                <option value="terraform">Terraform</option>
+                <option value="ansible">Ansible</option>
+              </select>
+            </label>
+            <label>
+              Entorno
+              <select
+                aria-label="Entorno"
+                value={env}
+                disabled={derivedEnv !== null}
+                title={derivedEnv ? "Lo deciden las conexiones de los hosts" : undefined}
+                onChange={(e) => setEnv(e.target.value as Env)}
+              >
+                <option value="dev">dev</option>
+                <option value="staging">staging</option>
+                <option value="prod">prod</option>
+              </select>
+            </label>
           </div>
-        )}
-        {methods.length > 0 ? (
-          <>
-            <span className="label">
-              {type === "ansible" ? "Contraseña de ansible-vault" : "Cómo entra"}
-            </span>
-            <fieldset className="segmented methods" aria-label="Método de entrada">
-              {methods.map((m) => (
-                <button
-                  type="button"
-                  key={m}
-                  aria-pressed={method === m}
-                  className={type === "ansible" ? "" : "mono"}
-                  onClick={() => setMethod(m)}
-                >
-                  {type === "ansible" ? (VAULT_METHOD[m] ?? m) : m}
-                </button>
-              ))}
-            </fieldset>
-            <Hint>{METHOD_HINT[method]}</Hint>
-            {method === "file" && (
-              <input
-                aria-label="Ruta de la llave"
-                className="mono"
-                placeholder="~/.ssh/id_ed25519"
-                value={identity}
-                onChange={(e) => setIdentity(e.target.value)}
-              />
-            )}
-            {(method === "password" || method === "file") && (
-              <input
-                type="password"
-                aria-label={method === "file" ? "Frase de la llave" : "Contraseña"}
-                placeholder={method === "file" ? "frase (opcional)" : "contraseña"}
-                value={secret}
-                onChange={(e) => setSecret(e.target.value)}
-              />
-            )}
-          </>
-        ) : (
-          <label>
-            Referencia del secreto (opcional)
-            <input
-              aria-label="Referencia del secreto"
-              className="mono"
-              placeholder="env:NOMBRE · keychain:servicio/cuenta · op://…"
-              value={ref}
-              onChange={(e) => setRef(e.target.value)}
+          {env === "prod" && (
+            <p className="prod-note">
+              Producción: cada ejecución te pide permiso. Puedes quitar la pregunta después, desde
+              la conexión, asumiendo el riesgo.
+            </p>
+          )}
+          {type === "ansible" ? (
+            <AnsiblePicker
+              call={call}
+              connections={connections}
+              projectRoot={projectRoot}
+              onChange={setTarget}
             />
-          </label>
-        )}
-        {error && (
-          <p role="alert" className="error">
-            {error}
-          </p>
-        )}
-        {!ansibleReady && (
-          <p className="muted" data-testid="ansible-missing">
-            Para añadirlo falta{" "}
-            {target ? "elegir la conexión SSH de cada host" : "elegir el playbook"}.
-          </p>
-        )}
-        <div className="modal-actions">
-          <Button onClick={onClose}>Cancelar</Button>
-          <button
-            type="submit"
-            className="button primary"
-            disabled={!name.trim() || busy || !ansibleReady}
-          >
-            {prefill ? "Guardar y avisar al agente" : "Añadir"}
-          </button>
-        </div>
-      </form>
-    </Modal>
+          ) : (
+            <>
+              {type === "postgres" && (
+                <div className="conn-form-row" data-testid="db-via">
+                  <label>
+                    Cómo llega Keel a la base
+                    <select
+                      aria-label="Cómo llega Keel a la base"
+                      value={via}
+                      onChange={(e) => {
+                        const v = e.target.value
+                        if (v === "__new__") {
+                          setNestedSsh(true)
+                          return
+                        }
+                        setVia(v)
+                        // Detrás de un túnel, la base suele escuchar en el propio servidor.
+                        if (v)
+                          setConfig((o) => ({
+                            ...o,
+                            host: o.host || "127.0.0.1",
+                            port: o.port || "5432",
+                          }))
+                      }}
+                    >
+                      <option value="">Directo: el daemon alcanza la base</option>
+                      {sshConnections.map((c) => (
+                        <option key={c.id} value={c.name}>
+                          Por túnel SSH · {c.name} ({c.environment})
+                        </option>
+                      ))}
+                      <option value="__new__">Por túnel SSH · crear una conexión SSH nueva…</option>
+                    </select>
+                  </label>
+                  {via && (
+                    <p className="muted">
+                      Host y puerto como los ve el servidor <span className="mono">{via}</span> (por
+                      ejemplo, <span className="mono">127.0.0.1:5432</span> si la base sólo escucha
+                      ahí). Keel abre el túnel en cada consulta y lo cierra.
+                    </p>
+                  )}
+                  {nestedKey && (
+                    <p className="muted">
+                      Agrega esta llave en el servidor: <code className="mono">{nestedKey}</code>
+                    </p>
+                  )}
+                </div>
+              )}
+              <div className="conn-form-row">
+                {FIELDS[type].map((f) => (
+                  <label key={f.key}>
+                    {f.label}
+                    <input
+                      aria-label={f.label}
+                      className="mono"
+                      value={config[f.key] ?? ""}
+                      onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
+                    />
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
+          {methods.length > 0 ? (
+            <>
+              <span className="label">
+                {type === "ansible" ? "Contraseña de ansible-vault" : "Cómo entra"}
+              </span>
+              <fieldset className="segmented methods" aria-label="Método de entrada">
+                {methods.map((m) => (
+                  <button
+                    type="button"
+                    key={m}
+                    aria-pressed={method === m}
+                    className={type === "ansible" ? "" : "mono"}
+                    onClick={() => setMethod(m)}
+                  >
+                    {type === "ansible" ? (VAULT_METHOD[m] ?? m) : m}
+                  </button>
+                ))}
+              </fieldset>
+              <Hint>{METHOD_HINT[method]}</Hint>
+              {method === "file" && (
+                <input
+                  aria-label="Ruta de la llave"
+                  className="mono"
+                  placeholder="~/.ssh/id_ed25519"
+                  value={identity}
+                  onChange={(e) => setIdentity(e.target.value)}
+                />
+              )}
+              {(method === "password" || method === "file") && (
+                <input
+                  type="password"
+                  aria-label={method === "file" ? "Frase de la llave" : "Contraseña"}
+                  placeholder={method === "file" ? "frase (opcional)" : "contraseña"}
+                  value={secret}
+                  onChange={(e) => setSecret(e.target.value)}
+                />
+              )}
+            </>
+          ) : (
+            <label>
+              Referencia del secreto (opcional)
+              <input
+                aria-label="Referencia del secreto"
+                className="mono"
+                placeholder="env:NOMBRE · keychain:servicio/cuenta · op://…"
+                value={ref}
+                onChange={(e) => setRef(e.target.value)}
+              />
+            </label>
+          )}
+          {error && (
+            <p role="alert" className="error">
+              {error}
+            </p>
+          )}
+          {!ansibleReady && (
+            <p className="muted" data-testid="ansible-missing">
+              Para añadirlo falta{" "}
+              {target ? "elegir la conexión SSH de cada host" : "elegir el playbook"}.
+            </p>
+          )}
+          <div className="modal-actions">
+            <Button onClick={onClose}>Cancelar</Button>
+            <button
+              type="submit"
+              className="button primary"
+              disabled={!name.trim() || busy || !ansibleReady}
+            >
+              {prefill ? "Guardar y avisar al agente" : "Añadir"}
+            </button>
+          </div>
+        </form>
+      </Modal>
+      {nestedSsh && (
+        <NewConnection
+          call={call}
+          fixedType="ssh"
+          connections={sshConnections}
+          onClose={() => setNestedSsh(false)}
+          onCreated={(c, key) => {
+            setCreatedSsh((o) => [...o, c])
+            setVia(c.name)
+            setConfig((o) => ({ ...o, host: o.host || "127.0.0.1", port: o.port || "5432" }))
+            if (key) setNestedKey(key.line)
+            setNestedSsh(false)
+          }}
+        />
+      )}
+    </>
   )
 }
 
@@ -1600,5 +1724,64 @@ function AnsiblePicker({
         </p>
       )}
     </div>
+  )
+}
+
+type ConnTest = {
+  ok: boolean
+  user: string | null
+  database: string | null
+  version: string | null
+  read_only: boolean | null
+  ro_credential: boolean
+  tunnel_ms: number | null
+  db_ms: number | null
+  via: string | null
+  error: string | null
+}
+
+/** ADR-0033 §3: lo que encontró «Probar conexión», tramo por tramo. */
+function TestResult({ r }: { r: ConnTest }) {
+  return (
+    <article
+      className={`conn-card conn-test ${r.ok ? "ok" : "bad"}`}
+      data-testid="connection-test"
+      role="status"
+    >
+      <h3>{r.ok ? "La conexión funciona" : "La conexión falló"}</h3>
+      {r.error && <p className="mono conn-test-error">{r.error}</p>}
+      <dl>
+        {r.via && (
+          <>
+            <dt>Túnel SSH</dt>
+            <dd className="mono">
+              {r.via}
+              {r.tunnel_ms !== null ? ` · abrió en ${r.tunnel_ms} ms` : " · no abrió"}
+            </dd>
+          </>
+        )}
+        {r.ok && (
+          <>
+            <dt>Base</dt>
+            <dd className="mono">
+              {r.database}
+              {r.user ? ` · como ${r.user}` : ""}
+              {r.db_ms !== null ? ` · ${r.db_ms} ms` : ""}
+            </dd>
+            <dt>Versión</dt>
+            <dd className="mono">{r.version}</dd>
+            <dt>Lectura</dt>
+            <dd>
+              {r.read_only
+                ? "transacción de sólo lectura, garantizada por la base"
+                : "sin garantía"}
+              {r.ro_credential
+                ? " · el agente lee con la credencial de sólo lectura"
+                : " · sin credencial de sólo lectura: el agente lee con la de escritura en una transacción READ ONLY"}
+            </dd>
+          </>
+        )}
+      </dl>
+    </article>
   )
 }

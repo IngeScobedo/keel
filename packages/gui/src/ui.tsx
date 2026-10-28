@@ -12,7 +12,7 @@ import {
   Unplug,
   X,
 } from "lucide-react"
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useRef } from "react"
+import { type ButtonHTMLAttributes, type ReactNode, useEffect, useId, useRef } from "react"
 
 export const stateLabels: Record<VisualState, string> = {
   queued: "Queued",
@@ -108,6 +108,9 @@ export function Modal({
   wide?: boolean
 }) {
   const ref = useRef<HTMLDialogElement>(null)
+  // Un id por modal: con dos abiertos (una conexión SSH creada desde la de una base), cada
+  // uno se anuncia con su propio título.
+  const titleId = useId()
   useEffect(() => {
     ref.current?.showModal()
     // showModal enfoca el primer control (el botón de cerrar); el campo marcado gana.
@@ -118,14 +121,14 @@ export function Modal({
     <dialog
       ref={ref}
       className={`modal ${wide ? "wide" : ""}`}
-      aria-labelledby="modal-title"
+      aria-labelledby={titleId}
       onCancel={(event) => {
         event.preventDefault()
         onClose()
       }}
     >
       <header>
-        <h2 id="modal-title">{title}</h2>
+        <h2 id={titleId}>{title}</h2>
         <Button variant="ghost" icon={X} aria-label="Cerrar diálogo" onClick={onClose} />
       </header>
       {children}

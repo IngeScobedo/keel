@@ -453,6 +453,8 @@ export class Daemon {
   stop(): void {
     if (this.lagTimer) clearInterval(this.lagTimer)
     this.credentials.stop()
+    // ADR-0033: ningún túnel a una base queda abierto al apagar.
+    this.broker.close()
     this.plugins.stopAll()
     this.server.stop()
     this.agentServer.stop()
@@ -2170,6 +2172,22 @@ export class Daemon {
             return v
           },
         )(params, ctx)
+      },
+      "connections.test": async (params, ctx) => {
+        requireHuman(ctx, "probar una conexión")
+        const p = params as Params<"connections.test">
+        const pid = this.scopeOf(ctx)
+        return brokerCallAsync(() =>
+          this.broker.test(
+            {
+              projectId: pid,
+              runId: null,
+              workItemId: null,
+              actor: { id: actorOf(ctx).id, kind: "human" },
+            },
+            p.connection_id,
+          ),
+        )
       },
       "ansible.discover": (params, ctx) => {
         requireHuman(ctx, "buscar playbooks")
@@ -4696,6 +4714,8 @@ export class Daemon {
 
   /** Tras un run terminal, la tarea sale de `running` y, si el final lo pide, se encola la liberación. */
   private settleWorkItem(final: RunRow, origin: ReleaseOrigin): void {
+    // ADR-0033 §2: los túneles a bases de este run se cierran con él.
+    this.broker.tunnels.closeWhere((k) => k.startsWith(`${final.id}:`))
     runUnitOfWork(this.uowDeps(), this.systemScope(final.project_id), (uow) =>
       this.settleInTransaction(uow, final, origin),
     )
@@ -4941,6 +4961,14 @@ function brokerFailure(e: unknown): RpcFailure {
 function brokerCall<T>(f: () => T): T {
   try {
     return f()
+  } catch (e) {
+    throw brokerFailure(e)
+  }
+}
+
+async function brokerCallAsync<T>(f: () => Promise<T>): Promise<T> {
+  try {
+    return await f()
   } catch (e) {
     throw brokerFailure(e)
   }

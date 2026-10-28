@@ -91,6 +91,54 @@ async function addConn(human: IpcClient, p: Record<string, unknown>) {
   }
 }
 
+describe("ADR-0033: probar la conexión y el túnel declarado", () => {
+  test("«Probar» entra a la base en sólo lectura y dice qué encontró", async () => {
+    const { human, ledger } = await boot()
+    const c = await addConn(human, {
+      name: "contabilidad",
+      type: "sqlite",
+      environment: "dev",
+      config: { path: ledger },
+    })
+    const r = (await human.call("connections.test", { connection_id: c.id })) as {
+      ok: boolean
+      version: string | null
+      read_only: boolean | null
+      error: string | null
+    }
+    expect(r).toMatchObject({ ok: true, read_only: true, error: null })
+    expect(r.version).toStartWith("SQLite")
+  })
+
+  test("una base por túnel va por una conexión SSH y no es menos sensible que ella", async () => {
+    const { human, ledger } = await boot()
+    await addConn(human, {
+      name: "archivo",
+      type: "sqlite",
+      environment: "dev",
+      config: { path: ledger },
+    })
+    await addConn(human, {
+      name: "prod-vps",
+      type: "ssh",
+      environment: "prod",
+      config: { host: "203.0.113.30", user: "root" },
+      auth_method: "agent",
+    })
+    const pg = (via: string, environment: string) =>
+      addConn(human, {
+        name: `pg-${via}-${environment}`,
+        type: "postgres",
+        environment,
+        config: { via, host: "127.0.0.1", port: 5432, database: "app", user: "lector" },
+      })
+    await expect(pg("archivo", "dev")).rejects.toThrow("no es una conexión SSH")
+    await expect(pg("prod-vps", "dev")).rejects.toThrow("no puede ser dev")
+    const ok = (await pg("prod-vps", "prod")) as { id: string }
+    expect(ok.id).toBeTruthy()
+  })
+})
+
 describe("ADR-0013: intermediario de recursos", () => {
   test("query.read con grant auto en dev: el agente ve filas, no la credencial; queda evidencia y evento instrumentado", async () => {
     const { human, agent, ledger, exec, w } = await boot()

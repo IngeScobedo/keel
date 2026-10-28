@@ -1,6 +1,6 @@
 # ADR-0033: Bases de datos detrás de un túnel SSH
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-28)
 - **Fecha:** 2026-10-28
 - **Criticidad:** Alta
 - **Relacionados:**

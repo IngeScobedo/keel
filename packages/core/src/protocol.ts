@@ -1337,6 +1337,25 @@ export const Methods = {
       ),
     }),
   },
+  /**
+   * ADR-0033 §3: «Probar conexión» de una base, por el mismo camino que una consulta
+   * (túnel incluido), en sólo lectura y con la credencial con que lee el agente.
+   */
+  "connections.test": {
+    params: z.object({ connection_id: z.string() }),
+    result: z.object({
+      ok: z.boolean(),
+      user: z.string().nullable(),
+      database: z.string().nullable(),
+      version: z.string().nullable(),
+      read_only: z.boolean().nullable(),
+      ro_credential: z.boolean(),
+      tunnel_ms: z.number().nullable(),
+      db_ms: z.number().nullable(),
+      via: z.string().nullable(),
+      error: z.string().nullable(),
+    }),
+  },
   "connections.ssh_session": {
     params: z.object({ connection: z.string() }),
     result: z.object({
