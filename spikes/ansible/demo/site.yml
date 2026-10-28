@@ -1,0 +1,16 @@
+- name: Demo local
+  hosts: all
+  gather_facts: false
+  vars_files: [vault.yml]
+  tasks:
+    - name: Lee el secreto (no se imprime)
+      ansible.builtin.assert:
+        that: [secreto | length > 0]
+        quiet: true
+    - name: Escribe un archivo
+      ansible.builtin.copy:
+        dest: "{{ out_dir }}/hola.txt"
+        content: "hola\n"
+    - name: Falla ignorada
+      ansible.builtin.command: /bin/false
+      ignore_errors: true

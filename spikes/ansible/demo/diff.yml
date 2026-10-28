@@ -1,0 +1,9 @@
+- name: Diff con secreto
+  hosts: all
+  gather_facts: false
+  vars_files: [vault.yml]
+  tasks:
+    - name: Plantilla con el secreto
+      ansible.builtin.copy:
+        dest: "{{ out_dir }}/env"
+        content: "API_KEY={{ secreto }}\n"
