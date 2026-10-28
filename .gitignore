@@ -21,3 +21,6 @@ packages/gui/src-tauri/gen/
 spikes/codex-app-server/captures/
 spikes/browser-live/captures/
 spikes/ansible/captures/
+
+# bytecode de Python (callbacks de Ansible)
+__pycache__/
