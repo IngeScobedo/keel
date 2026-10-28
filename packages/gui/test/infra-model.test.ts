@@ -191,6 +191,7 @@ describe("tarjetas de infraestructura", () => {
         environment: "prod",
         server: "root@203.0.113.20",
         command: "docker ps",
+        risk: { class: "read", segment: "docker ps", reason: "sólo lectura" },
       }),
       at("ssh.command.completed", {
         run_key: "s",
@@ -208,6 +209,8 @@ describe("tarjetas de infraestructura", () => {
       exit_code: 0,
       duration_ms: 812,
       output_ref: "artifact:sha256:x",
+      // ADR-0032: la clase viaja con el inicio y se queda en la tarjeta.
+      risk: { class: "read", segment: "docker ps" },
     })
   })
 })

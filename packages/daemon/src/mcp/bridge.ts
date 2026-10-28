@@ -353,7 +353,7 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
     ),
     tool(
       "ssh_run",
-      "Ejecuta un comando en un servidor del proyecto por SSH. Keel entra con la credencial de la conexión (del vault o del agente SSH del humano), nunca expuesta, y redacta la salida. En producción le pregunta al humano.",
+      "Ejecuta un comando en un servidor del proyecto por SSH. Keel entra con la credencial de la conexión (del vault o del agente SSH del humano), nunca expuesta, y redacta la salida. Antes de mandarlo, Keel lo clasifica: lectura (ls, cat, docker ps, systemctl status… sin redirecciones ni sudo) corre sin preguntar fuera de producción; servicio (restart, compose up, git pull, o lo que no reconoce) pregunta; destructivo (rm -r, dd, mkfs, DROP, prune, reboot) pregunta siempre. Prefiere lecturas separadas y la alternativa menos destructiva; no encadenes una lectura con una escritura.",
       z.object({ connection: z.string(), command: z.string().min(1) }),
       (a) =>
         client.call("resources.execute", {

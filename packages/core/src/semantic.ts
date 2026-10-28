@@ -49,6 +49,14 @@ export const SEMANTIC_SCHEMAS = {
       environment: z.string(),
       server: z.string(),
       command: z.string(),
+      /** ADR-0032 §3: la clase del comando y el segmento que la decidió. */
+      risk: z
+        .object({
+          class: z.enum(["read", "service", "destructive"]),
+          segment: z.string(),
+          reason: z.string(),
+        })
+        .optional(),
     }),
   },
   "terraform.resource.progress": {

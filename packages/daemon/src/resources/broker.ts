@@ -18,7 +18,14 @@ import {
   writeFileSync,
 } from "node:fs"
 import { join } from "node:path"
-import { CONNECTION_OPERATIONS, type ConnectionType, WRITE_OPERATIONS } from "@keel/core"
+import {
+  CONNECTION_OPERATIONS,
+  type ConnectionType,
+  classifySshCommand,
+  type SshRisk,
+  sshProgramsCovered,
+  WRITE_OPERATIONS,
+} from "@keel/core"
 import { SQL } from "bun"
 import type { ArtifactStore, Sensitivity } from "../artifacts.js"
 import { canonicalJson, sha256Hex, ulid } from "../ids.js"
@@ -162,6 +169,13 @@ export type BrokerDeps = {
   /** ADR-0031 §3: el checkout del proyecto y si está al día; `dir` relativo a él. */
   deployBase?: (projectId: string, dir: string) => Promise<DeployBase>
 }
+
+/** Cómo se nombra cada clase de comando ante el agente y el humano (ADR-0032 §3). */
+export const RISK_LABEL = {
+  read: "lectura",
+  service: "servicio",
+  destructive: "destructivo",
+} as const
 
 export class BrokerError extends Error {
   readonly code: "not_found" | "invalid" | "denied" | "failed"
@@ -506,9 +520,19 @@ export class ResourceBroker {
     policy: Policy,
     actor: string,
     expiresAt: string | null,
-    o: { riskConfirm?: string | undefined; workItemId?: string | undefined } = {},
+    o: {
+      riskConfirm?: string | undefined
+      workItemId?: string | undefined
+      /** ADR-0032 §2: aprobado desde un comando; el grant cubre sólo su clase y programas. */
+      sshRisk?: SshRisk | undefined
+    } = {},
   ): { risk_accepted: boolean } {
     this.assertOperation(conn, operation)
+    if (o.sshRisk?.class === "destructive")
+      throw new BrokerError(
+        "invalid",
+        "un comando destructivo se aprueba cada vez: ningún permiso lo cubre (ADR-0032)",
+      )
     // ADR-0026: en producción ejecutar pregunta; quitar la pregunta exige escribir el
     // nombre de la conexión, y queda a nombre del humano.
     const risky =
@@ -522,7 +546,8 @@ export class ResourceBroker {
       )
     const db = this.deps.db
     // Un permiso de tarea no revoca el del proyecto; uno del proyecto reemplaza al anterior.
-    if (!o.workItemId)
+    // Uno acotado a una clase de comando tampoco: es un permiso más angosto, al lado.
+    if (!o.workItemId && !o.sshRisk)
       db.query(
         "UPDATE permission_grants SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL AND json_extract(scope_json, '$.work_item_id') IS NULL",
       ).run(conn.id, operation)
@@ -538,6 +563,7 @@ export class ResourceBroker {
         operation,
         environment: conn.environment,
         ...(o.workItemId ? { work_item_id: o.workItemId } : {}),
+        ...(o.sshRisk ? { ssh: { class: o.sshRisk.class, programs: o.sshRisk.programs } } : {}),
       }),
       actor,
       expiresAt,
@@ -551,37 +577,54 @@ export class ResourceBroker {
    * La política vigente: sin grant se pregunta. En prod ejecutar pregunta, salvo que el
    * humano haya quitado la pregunta asumiendo el riesgo (ADR-0026). Un permiso de la
    * tarea («esta tarea», ADR-0025 §7) vale sólo para ella y caduca.
+   *
+   * Con la clase de un comando SSH (ADR-0032 §2): lo destructivo pregunta siempre; una
+   * lectura fuera de prod no pregunta, y en prod sólo si la conexión lo tiene encendido;
+   * un grant aprobado desde un comando cubre sólo su clase y sus programas.
    */
   policy(
     conn: ConnectionRow,
     operation: string,
     workItemId: string | null = null,
+    risk: SshRisk | null = null,
   ): { policy: Policy; effective: Policy; risk_accepted_at: string | null } {
     const now = new Date().toISOString()
-    const row = (scoped: boolean) =>
+    type Row = { policy: string; risk_accepted_at: string | null; scope_json: string }
+    const rows = (scoped: boolean) =>
       this.deps.db
-        .query<
-          { policy: string; risk_accepted_at: string | null },
-          [string, string, string, string]
-        >(
-          `SELECT policy, risk_accepted_at FROM permission_grants WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL
+        .query<Row, [string, string, string, string]>(
+          `SELECT policy, risk_accepted_at, scope_json FROM permission_grants WHERE connection_id = ? AND operation = ? AND revoked_at IS NULL
              AND (expires_at IS NULL OR expires_at > ?)
              AND ${scoped ? "json_extract(scope_json, '$.work_item_id') = ?" : "(json_extract(scope_json, '$.work_item_id') IS NULL AND ? IS NOT NULL)"}
-           ORDER BY rowid DESC LIMIT 1`,
+           ORDER BY rowid DESC LIMIT 50`,
         )
-        .get(conn.id, operation, now, scoped ? (workItemId as string) : "x")
-    const g = (workItemId ? row(true) : null) ?? row(false)
+        .all(conn.id, operation, now, scoped ? (workItemId as string) : "x")
+    // Un grant acotado a comandos sólo vale para un comando que cubre.
+    const applies = (r: Row) => {
+      const ssh = (JSON.parse(r.scope_json) as { ssh?: { class: string; programs: string[] } }).ssh
+      if (!ssh) return true
+      if (!risk) return false
+      return ssh.class === "read" ? risk.class === "read" : sshProgramsCovered(ssh.programs, risk)
+    }
+    const g =
+      (workItemId ? rows(true).find(applies) : undefined) ?? rows(false).find(applies) ?? null
     const policy = (g?.policy === "dry_run_then_ask" ? "ask" : (g?.policy ?? "ask")) as Policy
     const forced =
       policy === "auto" &&
       conn.environment === "prod" &&
       (WRITE_OPERATIONS as readonly string[]).includes(operation) &&
       !g?.risk_accepted_at
-    return {
-      policy,
-      effective: forced ? "ask" : policy,
-      risk_accepted_at: g?.risk_accepted_at ?? null,
+    let effective: Policy = forced ? "ask" : policy
+    if (risk && effective !== "deny") {
+      if (risk.class === "destructive") effective = "ask"
+      else if (risk.class === "read") {
+        const readsAuto = Boolean(
+          (JSON.parse(conn.config_json) as { reads_auto?: unknown }).reads_auto,
+        )
+        if (conn.environment !== "prod" || readsAuto) effective = "auto"
+      }
     }
+    return { policy, effective, risk_accepted_at: g?.risk_accepted_at ?? null }
   }
 
   view(conn: ConnectionRow) {
@@ -634,7 +677,17 @@ export class ResourceBroker {
   ): Promise<BrokerResult> {
     const conn = this.find(ctx.projectId, p.connection)
     this.assertOperation(conn, p.operation)
-    const { effective } = this.policy(conn, p.operation, ctx.workItemId)
+    // ADR-0032: la clase del comando la decide Keel antes de mandarlo.
+    const risk =
+      conn.conn_type === "ssh" && p.operation === "command.run"
+        ? classifySshCommand(String(p.input.command ?? ""))
+        : null
+    if (risk)
+      assertAllowedCommand(
+        JSON.parse(conn.config_json) as Record<string, unknown>,
+        String(p.input.command ?? ""),
+      )
+    const { effective } = this.policy(conn, p.operation, ctx.workItemId, risk)
     if (effective === "deny")
       throw new BrokerError("denied", `${p.operation} en ${conn.name} está denegado para el agente`)
     // El humano decide por sí mismo; un agente sin grant vigente pregunta.
@@ -651,12 +704,21 @@ export class ResourceBroker {
           environment: conn.environment,
           operation: p.operation,
           ...p.input,
+          ...(risk ? { risk } : {}),
+          // ADR-0032 §2: en prod, lo destructivo se aprueba escribiendo el nombre.
+          ...(risk?.class === "destructive" && conn.environment === "prod"
+            ? { confirm_name: conn.name }
+            : {}),
         },
       })
       if (decision !== "approved")
         throw new BrokerError(
           "denied",
-          `el humano no aprobó ${p.operation} en ${conn.name} (${decision})`,
+          `el humano no aprobó ${p.operation} en ${conn.name} (${decision})${
+            risk && risk.class !== "read"
+              ? `. Keel lo clasificó ${RISK_LABEL[risk.class]} por «${risk.segment}» (${risk.reason}); si hay una alternativa menos destructiva, propónla`
+              : ""
+          }`,
         )
     }
     const read = !(WRITE_OPERATIONS as readonly string[]).includes(p.operation)
@@ -714,6 +776,15 @@ export class ResourceBroker {
           environment: conn.environment,
           server: String(config.user ? `${config.user}@${config.host}` : (config.host ?? "")),
           command: redactKnownPatterns(redactSecrets(String(p.input.command ?? ""), secrets)),
+          ...(risk
+            ? {
+                risk: {
+                  class: risk.class,
+                  segment: redactKnownPatterns(redactSecrets(risk.segment, secrets)),
+                  reason: risk.reason,
+                },
+              }
+            : {}),
         })
       const raw =
         conn.conn_type === "ansible"
@@ -751,7 +822,11 @@ export class ResourceBroker {
             ),
           ),
       }
-      return this.record(ctx, conn, p.operation, p.input, clean, { role, duration_ms })
+      return this.record(ctx, conn, p.operation, p.input, clean, {
+        role,
+        duration_ms,
+        ...(risk ? { risk: risk.class } : {}),
+      })
     } catch (e) {
       const all = [...secrets, ...live]
       if (e instanceof BrokerError) throw new BrokerError(e.code, redactSecrets(e.message, all))
@@ -788,7 +863,7 @@ export class ResourceBroker {
     operation: string,
     input: Record<string, unknown>,
     r: RawResult,
-    meta: { role: string; duration_ms: number },
+    meta: { role: string; duration_ms: number; risk?: string },
   ): Promise<BrokerResult> {
     const sensitivity: Sensitivity = conn.environment === "prod" ? "restricted" : "internal"
     const inputHash = await sha256Hex(canonicalJson({ operation, input }))
@@ -801,6 +876,8 @@ export class ResourceBroker {
         environment: conn.environment,
       },
       role: meta.role,
+      // ADR-0032 §3: la auditoría guarda la clase del comando con la operación.
+      ...(meta.risk ? { risk: meta.risk } : {}),
       operation,
       input_sha256: inputHash,
       duration_ms: meta.duration_ms,
@@ -1387,18 +1464,26 @@ async function runSql(
 // --- SSH (el ssh del usuario: sus llaves y su agente, nunca las de Keel) -------------------
 const SHELL_META = /[;&|`<>\n\r]|\$\(/
 
-function runSsh(config: Record<string, unknown>, input: Record<string, unknown>): RawResult {
-  const command = String(input.command ?? "")
-  if (!command) throw new BrokerError("invalid", "falta input.command")
+/**
+ * La lista permitida de la conexión. Capa de Keel; la garantía real es el usuario o el
+ * comando forzado del servidor. Va antes de preguntar: lo que la lista rechaza no se
+ * le pregunta al humano.
+ */
+function assertAllowedCommand(config: Record<string, unknown>, command: string): void {
   const allowed = Array.isArray(config.allowed_commands)
     ? config.allowed_commands.map(String)
     : null
-  // Capa de Keel; la garantía real es el usuario o el comando forzado del servidor.
   if (
     allowed &&
     (SHELL_META.test(command) || !allowed.some((a) => command === a || command.startsWith(`${a} `)))
   )
     throw new BrokerError("denied", `el comando no está en la lista permitida de la conexión`)
+}
+
+function runSsh(config: Record<string, unknown>, input: Record<string, unknown>): RawResult {
+  const command = String(input.command ?? "")
+  if (!command) throw new BrokerError("invalid", "falta input.command")
+  assertAllowedCommand(config, command)
   const dest = config.user ? `${config.user}@${config.host}` : String(config.host ?? "")
   const args = [
     "-o",

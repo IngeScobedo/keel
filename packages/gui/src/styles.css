@@ -4561,3 +4561,69 @@ button.rc-ledger-row:hover {
 .comment-form:has(.grow-input) {
   align-items: flex-end;
 }
+
+/* ADR-0032: la clase de un comando SSH. */
+.risk-badge {
+  font-size: var(--text-micro-size);
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+.risk-badge[data-risk="read"] {
+  color: var(--color-status-succeeded);
+  background: var(--color-status-succeeded-bg);
+  border-color: var(--color-status-succeeded-border);
+}
+.risk-badge[data-risk="service"] {
+  color: var(--color-status-waiting-human);
+  background: var(--color-status-waiting-human-bg);
+  border-color: var(--color-status-waiting-human-border);
+}
+.risk-badge[data-risk="destructive"] {
+  color: var(--color-status-failed);
+  background: var(--color-status-failed-bg);
+  border-color: var(--color-status-failed-border);
+}
+.rc-risk {
+  display: flex;
+  gap: var(--space-4);
+  align-items: baseline;
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-meta-size);
+  color: var(--color-text-secondary);
+}
+.rc-risk[data-risk="destructive"] {
+  color: var(--color-status-failed);
+}
+.rc-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+  font-size: var(--text-meta-size);
+  color: var(--color-text-secondary);
+}
+.rc-confirm input {
+  max-width: 280px;
+}
+.ssh-classes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--text-meta-size);
+  color: var(--color-text-secondary);
+}
+.ssh-classes p {
+  margin: 0;
+}
+.ssh-classes .check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text-primary);
+}

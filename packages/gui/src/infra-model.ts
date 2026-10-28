@@ -30,6 +30,19 @@ export type HostRow = {
   error: { task: string; msg: string | null } | null
 }
 
+export type SshRiskView = {
+  class: "read" | "service" | "destructive"
+  segment: string
+  reason: string
+}
+
+/** La clase de un comando, si viene bien formada. */
+export function riskOf(v: unknown): SshRiskView | null {
+  const r = v as Partial<SshRiskView> | null | undefined
+  if (!r || (r.class !== "read" && r.class !== "service" && r.class !== "destructive")) return null
+  return { class: r.class, segment: String(r.segment ?? ""), reason: String(r.reason ?? "") }
+}
+
 export type InfraRun = {
   kind: "infra"
   key: string
@@ -41,6 +54,8 @@ export type InfraRun = {
   /** Playbook, carpeta o comando. */
   title: string
   server: string | null
+  /** ADR-0032: la clase del comando SSH y el segmento que la decidió. */
+  risk: SshRiskView | null
   commit: string | null
   tags: string[]
   state: "running" | "done" | "failed"
@@ -103,6 +118,7 @@ export function startInfra(kind: string, p: Loose, key: string, at: string): Inf
     environment: String(p.environment ?? ""),
     title: ssh ? String(p.command ?? "") : String(p.playbook ?? p.connection ?? ""),
     server: ssh ? String(p.server ?? "") : null,
+    risk: ssh ? riskOf(p.risk) : null,
     commit: typeof p.commit === "string" ? p.commit : null,
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
     state: "running",

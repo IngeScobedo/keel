@@ -11,7 +11,8 @@ import {
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { GitPlanCard } from "./GitPlanCard.js"
-import { InfraCard } from "./InfraCard.js"
+import { InfraCard, RiskBadge } from "./InfraCard.js"
+import { riskOf } from "./infra-model.js"
 import { Markdown } from "./Markdown.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -100,17 +101,30 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
   // proyecto (un grant); en prod, el proyecto se decide en la conexión (ADR-0026).
   const resource = a.tool.startsWith("resource.")
   const prod = resource && (a.input as { environment?: string } | null)?.environment === "prod"
-  const covers = resource || (parsed !== null && matchesPattern(parsed, a.tool, a.input))
+  // ADR-0032: la clase del comando SSH; lo destructivo se aprueba cada vez y, en prod,
+  // escribiendo el nombre de la conexión.
+  const risk = resource ? riskOf((a.input as { risk?: unknown } | null)?.risk) : null
+  const confirmName = resource
+    ? ((a.input as { confirm_name?: unknown } | null)?.confirm_name as string | undefined)
+    : undefined
+  const [typed, setTyped] = useState("")
+  const named = !confirmName || typed === confirmName
+  const destructive = risk?.class === "destructive"
+  const covers =
+    (resource && !destructive) || (parsed !== null && matchesPattern(parsed, a.tool, a.input))
   const pending = a.decision === null
   const expired = pending && a.expires_at !== null && Date.parse(a.expires_at) <= Date.now()
   const canAct = pending && !expired && !!call && !busy
-  const decide = (decision: string) =>
+  const decide = (decision: string) => {
+    if (decision === "approve_once" && !named) return
     void resolve({
       decision,
       ...(shell && (decision === "approve_session" || decision === "approve_always")
         ? { pattern }
         : {}),
+      ...(confirmName && decision !== "deny" ? { confirm: typed } : {}),
     })
+  }
   useKeys(active && canAct, (e) => {
     const k = e.key.toLowerCase()
     if (k === "y") decide("approve_once")
@@ -153,6 +167,32 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
       ) : (
         <pre className="chat-approval-input">{shellCommand(a.input) ?? inputLine(a.input)}</pre>
       )}
+      {risk && (
+        <p className="rc-risk" data-risk={risk.class}>
+          <RiskBadge risk={risk} />
+          {risk.class === "read" ? (
+            <span>Sólo lee: no cambia nada en el servidor.</span>
+          ) : (
+            <span>
+              Lo decide <code>{risk.segment}</code>: {risk.reason}.
+              {destructive && " Se aprueba cada vez; ningún permiso lo cubre."}
+            </span>
+          )}
+        </p>
+      )}
+      {pending && !expired && confirmName && (
+        <label className="rc-confirm">
+          Escribe <code>{confirmName}</code> para aprobar en producción
+          <input
+            aria-label="Nombre de la conexión"
+            className="mono"
+            value={typed}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(e) => setTyped(e.target.value)}
+          />
+        </label>
+      )}
       {pending && !expired && (
         <>
           <div className="rc-pattern">
@@ -182,8 +222,8 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
           <div className="rc-actions">
             <button
               type="button"
-              className="button primary"
-              disabled={!canAct}
+              className={`button ${destructive ? "danger" : "primary"}`}
+              disabled={!canAct || !named}
               onClick={() => decide("approve_once")}
             >
               Esta vez <kbd>Y</kbd>
@@ -207,11 +247,13 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
               className="button"
               disabled={!canAct || !covers || prod}
               title={
-                prod
-                  ? "En producción, quitar la pregunta se hace en la conexión, escribiendo su nombre"
-                  : resource
-                    ? "Un permiso de la conexión para todo el proyecto; se cambia en Conexiones"
-                    : "Crea una regla del proyecto; se revoca en Permisos"
+                destructive
+                  ? "Un comando destructivo se aprueba cada vez"
+                  : prod
+                    ? "En producción, quitar la pregunta se hace en la conexión, escribiendo su nombre"
+                    : resource
+                      ? "Un permiso de la conexión para todo el proyecto; se cambia en Conexiones"
+                      : "Crea una regla del proyecto; se revoca en Permisos"
               }
               onClick={() => decide("approve_always")}
             >

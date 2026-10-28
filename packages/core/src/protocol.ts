@@ -1029,6 +1029,11 @@ export const Methods = {
        * solas cuando tienen QA PASS, verificación sin rojo nuevo y diff en su frontera.
        */
       auto_integrate: z.boolean().optional(),
+      /**
+       * ADR-0032 §2: un comando destructivo en producción se aprueba escribiendo el
+       * nombre de la conexión, como ADR-0026.
+       */
+      confirm: z.string().max(200).optional(),
       /** ADR-0025 §6: lo que el humano dejó listo para una petición `setup.request`. */
       setup_result: z
         .object({ connection_id: z.string().optional(), note: z.string().max(500).optional() })
@@ -1247,6 +1252,11 @@ export const Methods = {
       identity_file: z.string().optional(),
       tags: z.array(z.string().max(40)).max(20).optional(),
       server_guarantee: z.string().optional(),
+      /**
+       * ADR-0032 §2: en producción, los comandos de lectura corren sin preguntar. Queda a
+       * nombre de quien lo enciende.
+       */
+      reads_auto: z.boolean().optional(),
     }),
     result: ConnectionViewSchema,
   },

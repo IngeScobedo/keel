@@ -796,8 +796,63 @@ function Detail({
             })}
           </tbody>
         </table>
+        {c.type === "ssh" && (
+          <SshClasses c={c} onToggle={(on) => void update({ reads_auto: on })} />
+        )}
       </article>
     </>
+  )
+}
+
+/**
+ * ADR-0032: qué hace Keel con cada clase de comando en esta conexión. En prod, las
+ * lecturas preguntan salvo que el humano lo encienda; queda a su nombre.
+ */
+function SshClasses({ c, onToggle }: { c: Connection; onToggle: (on: boolean) => void }) {
+  const readsAuto = (c.config as { reads_auto?: { by?: string; at?: string } }).reads_auto
+  const prod = c.environment === "prod"
+  return (
+    <div className="ssh-classes" data-testid="ssh-classes">
+      <p>
+        <span className="risk-badge" data-risk="read">
+          lectura
+        </span>{" "}
+        {prod
+          ? readsAuto
+            ? "corre sin preguntar"
+            : "pregunta (producción)"
+          : "corre sin preguntar"}
+      </p>
+      <p>
+        <span className="risk-badge" data-risk="service">
+          servicio
+        </span>{" "}
+        según el permiso de arriba; «esta tarea» cubre el mismo programa
+      </p>
+      <p>
+        <span className="risk-badge" data-risk="destructive">
+          destructivo
+        </span>{" "}
+        pregunta siempre{prod ? " y pide escribir el nombre" : ""}
+      </p>
+      {prod && (
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={Boolean(readsAuto)}
+            onChange={(e) => onToggle(e.target.checked)}
+          />
+          Lecturas sin preguntar en producción
+          {readsAuto?.by && (
+            <span className="muted">
+              {" "}
+              · encendido por {readsAuto.by}
+              {readsAuto.at ? ` el ${new Date(readsAuto.at).toLocaleString()}` : ""}
+            </span>
+          )}
+        </label>
+      )}
+    </div>
   )
 }
 

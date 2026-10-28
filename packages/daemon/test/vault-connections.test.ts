@@ -295,7 +295,8 @@ describe.skipIf(process.platform === "win32")("ADR-0025 §7: el alcance de una a
       }
       throw new Error("no llegó la aprobación")
     }
-    const first = run("staging-x", "uptime")
+    // Un comando de servicio pregunta; una lectura en staging ya no (ADR-0032).
+    const first = run("staging-x", "systemctl restart web")
     const a = await pendingFor("staging-x")
     await human.call("approvals.resolve", {
       ...meta(),
@@ -303,9 +304,11 @@ describe.skipIf(process.platform === "win32")("ADR-0025 §7: el alcance de una a
       operation_hash: a.operation_hash,
       decision: "approve_session",
     })
-    expect((await first).output).toContain("corrió: uptime")
-    // La segunda vez, en la misma tarea, ya no pregunta.
-    expect((await run("staging-x", "df -h")).output).toContain("corrió: df -h")
+    expect((await first).output).toContain("corrió: systemctl restart web")
+    // La segunda vez, en la misma tarea y con el mismo programa, ya no pregunta.
+    expect((await run("staging-x", "systemctl restart api")).output).toContain(
+      "corrió: systemctl restart api",
+    )
     const third = run("prod-x", "uptime").catch((e: Error) => e.message)
     const b = await pendingFor("prod-x")
     const always = await human
@@ -366,6 +369,123 @@ describe.skipIf(process.platform === "win32")(
     })
   },
 )
+
+describe.skipIf(process.platform === "win32")("ADR-0032: la clase de un comando SSH", () => {
+  /** La aprobación pendiente de un comando, cuando llega. */
+  async function pending(daemon: Daemon, command: string) {
+    const end = Date.now() + 10_000
+    while (Date.now() < end) {
+      const a = daemon.repo
+        .listApprovals(daemon.project.project_id)
+        .find(
+          (x) => x.state === "pending" && JSON.parse(x.operation_json).input?.command === command,
+        )
+      if (a) return a
+      await Bun.sleep(20)
+    }
+    throw new Error(`no llegó la aprobación de ${command}`)
+  }
+
+  test("lecturas: en staging no preguntan; en prod sí, salvo encendido a nombre del humano", async () => {
+    const { daemon, human, add, run, events } = await boot()
+    await add({ name: "staging-x", environment: "staging", auth_method: "agent" })
+    expect((await run("staging-x", "docker ps")).output).toContain("corrió: docker ps")
+    const started = events().find((e) => e.kind === "ssh.command.started")
+    expect(JSON.parse(started?.payload_json ?? "{}").risk).toMatchObject({ class: "read" })
+    // `cat log > /tmp/x` no es lectura: pregunta.
+    const redirect = run("staging-x", "cat log > /tmp/x").catch((e: Error) => e.message)
+    const r = await pending(daemon, "cat log > /tmp/x")
+    expect(JSON.parse(r.operation_json).input.risk).toMatchObject({ class: "service" })
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: r.id,
+      operation_hash: r.operation_hash,
+      decision: "deny",
+    })
+    expect(String(await redirect)).toContain("servicio")
+
+    const prod = await add({ name: "prod-x", environment: "prod", auth_method: "agent" })
+    const asked = run("prod-x", "docker ps")
+    const a = await pending(daemon, "docker ps")
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: a.id,
+      operation_hash: a.operation_hash,
+      decision: "approve_once",
+    })
+    await asked
+    const on = (await human.call("connections.update", {
+      ...meta(),
+      connection_id: prod.id,
+      reads_auto: true,
+    })) as { config: { reads_auto?: { by: string } } }
+    expect(on.config.reads_auto?.by).toBeTruthy()
+    expect((await run("prod-x", "df -h")).output).toContain("corrió: df -h")
+  }, 30_000)
+
+  test("lo destructivo pregunta siempre; en prod, escribiendo el nombre aunque haya riesgo aceptado", async () => {
+    const { daemon, human, add, allow, run } = await boot()
+    const c = await add({ name: "prod-cm", environment: "prod", auth_method: "agent" })
+    await allow(c.id, { risk_confirm: "prod-cm" })
+    // Con el riesgo aceptado, un servicio corre sin preguntar…
+    expect((await run("prod-cm", "systemctl restart nginx")).output).toContain("corrió")
+    // …pero lo destructivo pregunta, lo decide su segmento y pide el nombre.
+    const cmd = "docker ps && rm -rf /srv/app"
+    const pendingRun = run("prod-cm", cmd)
+    const a = await pending(daemon, cmd)
+    const input = JSON.parse(a.operation_json).input
+    expect(input.risk).toMatchObject({ class: "destructive", segment: "rm -rf /srv/app" })
+    expect(input.confirm_name).toBe("prod-cm")
+    const resolve = (extra: Record<string, unknown>) =>
+      human
+        .call("approvals.resolve", {
+          ...meta(),
+          approval_id: a.id,
+          operation_hash: a.operation_hash,
+          ...extra,
+        })
+        .catch((e: Error) => e.message)
+    expect(String(await resolve({ decision: "approve_session" }))).toContain("cada vez")
+    expect(String(await resolve({ decision: "approve_once" }))).toContain("escribe el nombre")
+    expect(String(await resolve({ decision: "approve_once", confirm: "prod-c" }))).toContain(
+      "escribe el nombre",
+    )
+    await resolve({ decision: "approve_once", confirm: "prod-cm" })
+    expect((await pendingRun).output).toContain("corrió")
+  }, 30_000)
+
+  test("una aprobación de la tarea no cubre otro programa ni lo destructivo", async () => {
+    const { daemon, human, add, run } = await boot()
+    await add({ name: "staging-y", environment: "staging", auth_method: "agent" })
+    const first = run("staging-y", "systemctl restart nginx")
+    const a = await pending(daemon, "systemctl restart nginx")
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: a.id,
+      operation_hash: a.operation_hash,
+      decision: "approve_session",
+    })
+    await first
+    const rm = run("staging-y", "rm -rf /srv").catch((e: Error) => e.message)
+    const b = await pending(daemon, "rm -rf /srv")
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: b.id,
+      operation_hash: b.operation_hash,
+      decision: "deny",
+    })
+    expect(String(await rm)).toContain("destructivo")
+    const stop = run("staging-y", "systemctl stop nginx").catch((e: Error) => e.message)
+    const c = await pending(daemon, "systemctl stop nginx")
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: c.id,
+      operation_hash: c.operation_hash,
+      decision: "deny",
+    })
+    await stop
+  }, 30_000)
+})
 
 describe("ADR-0025: importar y llaves", () => {
   test("importa los Host de ~/.ssh/config con el entorno por prefijo, sin leer llaves", async () => {

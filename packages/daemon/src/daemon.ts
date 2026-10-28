@@ -38,6 +38,7 @@ import {
   RUN_START_RULES,
   redact,
   type SettingsView,
+  type SshRisk,
   type Stage,
   stageMove,
   storyFor,
@@ -2029,8 +2030,23 @@ export class Daemon {
             ...(vaultId !== undefined ? { vault_item_id: vaultId } : {}),
             ...(q.tags ? { tags: q.tags } : {}),
             ...(q.server_guarantee !== undefined ? { server_guarantee: q.server_guarantee } : {}),
-            ...(q.identity_file !== undefined
-              ? { config: { ...config, identity_file: q.identity_file || undefined } }
+            ...(q.identity_file !== undefined || q.reads_auto !== undefined
+              ? {
+                  config: {
+                    ...config,
+                    ...(q.identity_file !== undefined
+                      ? { identity_file: q.identity_file || undefined }
+                      : {}),
+                    // ADR-0032 §2: lecturas sin preguntar en prod, a nombre de quien lo enciende.
+                    ...(q.reads_auto !== undefined
+                      ? {
+                          reads_auto: q.reads_auto
+                            ? { by: uow.actorId, at: new Date().toISOString() }
+                            : undefined,
+                        }
+                      : {}),
+                  },
+                }
               : {}),
           })
           const view = this.broker.view(c)
@@ -2723,6 +2739,27 @@ export class Daemon {
             }
             return this.answerSetup(uow, a.id, p.setup_result ?? {})
           }
+          // ADR-0032 §2: un comando destructivo se aprueba cada vez, y en prod escribiendo
+          // el nombre de la conexión.
+          const risky = (op.input ?? {}) as {
+            risk?: SshRisk
+            confirm_name?: string
+          }
+          if (op.tool?.startsWith("resource.") && p.decision !== "deny") {
+            if (
+              risky.risk?.class === "destructive" &&
+              (p.decision === "approve_session" || p.decision === "approve_always")
+            )
+              throw rpcError(
+                ErrorCode.invalidParams,
+                "un comando destructivo se aprueba cada vez: ningún permiso lo cubre (ADR-0032)",
+              )
+            if (risky.confirm_name && p.confirm !== risky.confirm_name)
+              throw rpcError(
+                ErrorCode.invalidParams,
+                `para aprobar un comando destructivo en producción escribe el nombre de la conexión (${risky.confirm_name})`,
+              )
+          }
           // ADR-0025 §7: una operación de recurso se aprueba esta vez, para esta tarea
           // (una hora) o para el proyecto (un grant); en prod, el proyecto pide el riesgo
           // en la conexión (ADR-0026).
@@ -2750,7 +2787,12 @@ export class Daemon {
                 p.decision === "approve_session"
                   ? new Date(Date.now() + 60 * 60_000).toISOString()
                   : null,
-                p.decision === "approve_session" && run ? { workItemId: run.work_item_id } : {},
+                {
+                  ...(p.decision === "approve_session" && run
+                    ? { workItemId: run.work_item_id }
+                    : {}),
+                  ...(risky.risk ? { sshRisk: risky.risk } : {}),
+                },
               ),
             )
             uow.emit("grant.set", a.run_id, {

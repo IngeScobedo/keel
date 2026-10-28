@@ -17,7 +17,13 @@ import { useEffect, useState } from "react"
 import { clock, duration } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { ArtifactView } from "./Evidence.js"
-import { type HostRow, headCounts, type InfraRun, type TfRow } from "./infra-model.js"
+import {
+  type HostRow,
+  headCounts,
+  type InfraRun,
+  type SshRiskView,
+  type TfRow,
+} from "./infra-model.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -100,6 +106,7 @@ export function InfraCard({ r, call }: { r: InfraRun; call?: Call }) {
           <strong>{r.connection}</strong>
           {r.title && r.title !== r.connection && <span className="mono"> · {r.title}</span>}
         </span>
+        {r.risk && <RiskBadge risk={r.risk} />}
         {prod && <span className="infra-env prod">PROD</span>}
         {headCounts(r).map((c) => (
           <span key={c.label} className={`infra-count ${c.tone}`}>
@@ -339,5 +346,20 @@ function Command({ r, call }: { r: InfraRun; call?: Call | undefined }) {
         <ArtifactView call={call} artifactRef={r.output_ref} title="Salida" />
       )}
     </>
+  )
+}
+
+const RISK_TEXT = { read: "lectura", service: "servicio", destructive: "destructivo" } as const
+
+/** ADR-0032 §3: la clase del comando, con el segmento que la decidió en el título. */
+export function RiskBadge({ risk }: { risk: SshRiskView }) {
+  return (
+    <span
+      className="risk-badge"
+      data-risk={risk.class}
+      title={risk.class === "read" ? risk.reason : `«${risk.segment}»: ${risk.reason}`}
+    >
+      {RISK_TEXT[risk.class]}
+    </span>
   )
 }
