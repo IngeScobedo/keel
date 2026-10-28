@@ -1,6 +1,6 @@
 # ADR-0026: En producción Keel pregunta, y el humano puede quitar la pregunta asumiendo el riesgo
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-28)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Alta
 - **Relacionados:**

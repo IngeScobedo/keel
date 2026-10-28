@@ -35,21 +35,21 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0023](./0023-el-agente-pide-lo-que-le-falta.md)                | El agente pide lo que le falta: `setup_request` y la GUI que responde                                                | Rechazado (2026-10-26) | Alta       |
 | [0024](./0024-la-conversacion-del-proyecto.md)                  | La conversación del proyecto: consultas sin tarea, de donde nacen tareas                                             | Aceptado (2026-10-26)  | Media      |
 | [0025](./0025-vault-y-broker.md)                                | Vault y broker: Keel guarda las conexiones y el agente sólo pide operaciones                                         | Aceptado (2026-10-26)  | **Máxima** |
-| [0026](./0026-prod-pregunta-y-se-puede-quitar.md)               | En producción Keel pregunta, y el humano puede quitar la pregunta asumiendo el riesgo                                | Propuesto              | Alta       |
+| [0026](./0026-prod-pregunta-y-se-puede-quitar.md)               | En producción Keel pregunta, y el humano puede quitar la pregunta asumiendo el riesgo                                | Aceptado (2026-10-28)  | Alta       |
 | [0027](./0027-cerrar-a-mano-con-evidencia.md)                   | Cerrar a mano una tarea, con su motivo y su evidencia                                                                | Aceptado (2026-10-26)  | Media      |
 | [0028](./0028-base-al-dia-y-sin-tope-de-turnos.md)              | La rama base al día antes de trabajar, y sin tope de turnos ni de tiempo por defecto                                 | Aceptado (2026-10-26)  | Media      |
-| [0029](./0029-volver-a-implementar-desde-el-cierre.md)          | Volver a implementar desde el cierre, y el cierre sólo escribe el canon                                              | Propuesto              | Media      |
+| [0029](./0029-volver-a-implementar-desde-el-cierre.md)          | Volver a implementar desde el cierre, y el cierre sólo escribe el canon                                              | Aceptado (2026-10-28)  | Media      |
 | [0030](./0030-el-navegador-del-agente-en-vivo.md)               | El navegador del agente, de primer nivel y en vivo en la GUI                                                         | Propuesto              | Alta       |
 | [0031](./0031-ansible-sobre-las-conexiones-ssh.md)              | Ansible de primer nivel sobre las conexiones SSH del vault                                                           | Aceptado (2026-10-28)  | Alta       |
-| [0032](./0032-riesgo-de-un-comando-ssh.md)                      | El riesgo de un comando SSH lo clasifica Keel antes de correrlo                                                      | Propuesto              | Alta       |
+| [0032](./0032-riesgo-de-un-comando-ssh.md)                      | El riesgo de un comando SSH lo clasifica Keel antes de correrlo                                                      | Aceptado (2026-10-28)  | Alta       |
 | [0033](./0033-bases-de-datos-por-tunel-ssh.md)                  | Bases de datos detrás de un túnel SSH                                                                                | Aceptado (2026-10-28)  | Alta       |
 
 ## Estado
 
 Están **Aceptados**: 0008, 0009 y 0010 el 2026-10-22; 0001 a 0007 y 0011 a 0019
 el 2026-10-23; 0020, 0021, 0022, 0024, 0025, 0027 y 0028 el 2026-10-26, por el
-humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0026, 0029 y
-0030 y 0032 están **Propuestos**; 0031 y 0033 se aceptaron el 2026-10-28. Los
+humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0030 está
+**Propuesto**; 0026, 0029, 0031, 0032 y 0033 se aceptaron el 2026-10-28. Los
 escribió Claude a petición del humano a partir del SDD, los ADRs de Mirador, el
 canvas de pen.dev y los docs oficiales de Anthropic verificados en su fecha. Uno
 nuevo nace como **Propuesto** y sólo el humano lo acepta; uno aceptado no se

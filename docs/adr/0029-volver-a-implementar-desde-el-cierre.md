@@ -1,6 +1,6 @@
 # ADR-0029: Volver a implementar desde el cierre, y el cierre sólo escribe el canon
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-28)
 - **Fecha:** 2026-10-26
 - **Criticidad:** Media
 - **Relacionados:**

@@ -1,6 +1,6 @@
 # ADR-0032: El riesgo de un comando SSH lo clasifica Keel antes de correrlo
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-28)
 - **Fecha:** 2026-10-28
 - **Criticidad:** Alta
 - **Relacionados:**
