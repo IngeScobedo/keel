@@ -102,68 +102,72 @@ async function boot() {
   return { dir, repo, infra, daemon, target, exec }
 }
 
-describe("ADR-0031: Ansible sobre las conexiones SSH del vault", () => {
-  test("un destino que despliega a prod no puede declararse dev", async () => {
-    const { target } = await boot()
-    await expect(target("dev")).rejects.toThrow("prod")
-  })
-
-  test("check, despliegue atado al check, eventos en vivo y nada del vault en claro", async () => {
-    const { dir, daemon, infra, target, exec } = await boot()
-    await target("prod")
-    const check = await exec("iac.plan")
-    expect(check.details).toMatchObject({
-      mode: "check",
-      tags: ["deploy"],
-      unpreviewed_commands: 1,
+// ADR-0031 §7: Ansible no tiene nodo de control en Windows nativo (y los dobles son bash).
+describe.skipIf(process.platform === "win32")(
+  "ADR-0031: Ansible sobre las conexiones SSH del vault",
+  () => {
+    test("un destino que despliega a prod no puede declararse dev", async () => {
+      const { target } = await boot()
+      await expect(target("dev")).rejects.toThrow("prod")
     })
-    expect(check.details.hosts.web?.changed).toBe(1)
-    expect(check.summary).toContain("1 comando(s) sin previsualizar")
-    // Al agente no vuelve la salida entera, sólo el resumen.
-    expect(check.output).toBeUndefined()
 
-    const done = await exec("iac.apply", { plan_sha256: check.plan_sha256 })
-    expect(done.details).toMatchObject({ mode: "apply" })
-    expect(done.details.hosts.web?.changed).toBe(2)
-
-    const events = daemon.repo.eventsAfter(0, null, 10_000)
-    const kinds = events.map((e) => e.kind)
-    expect(kinds.filter((k) => k === "iac.run.started")).toHaveLength(2)
-    expect(kinds.filter((k) => k === "ansible.task.started")).toHaveLength(4)
-    expect(kinds.filter((k) => k === "ansible.host.result")).toHaveLength(4)
-    expect(kinds).toContain("iac.plan.created")
-    expect(kinds).toContain("iac.apply.completed")
-
-    // La salida guardada: Keel puso sus garantías y redactó lo del vault de Ansible.
-    const artifacts = join(dir, "artifacts")
-    const stored = readdirSync(artifacts, { recursive: true })
-      .map((f) => join(artifacts, String(f)))
-      .filter((f) => !f.endsWith("/"))
-      .map((f) => {
-        try {
-          return readFileSync(f, "utf8")
-        } catch {
-          return ""
-        }
+    test("check, despliegue atado al check, eventos en vivo y nada del vault en claro", async () => {
+      const { dir, daemon, infra, target, exec } = await boot()
+      await target("prod")
+      const check = await exec("iac.plan")
+      expect(check.details).toMatchObject({
+        mode: "check",
+        tags: ["deploy"],
+        unpreviewed_commands: 1,
       })
-      .join("\n")
-    expect(stored).toContain("hkc=True transfer=piped")
-    expect(stored).toContain("estricta=1")
-    const everything = `${stored}\n${JSON.stringify(events)}\n${JSON.stringify([check, done])}`
-    expect(everything).not.toContain(VAULT_PASS)
-    expect(everything).not.toContain(VAULT_VALUE)
+      expect(check.details.hosts.web?.changed).toBe(1)
+      expect(check.summary).toContain("1 comando(s) sin previsualizar")
+      // Al agente no vuelve la salida entera, sólo el resumen.
+      expect(check.output).toBeUndefined()
 
-    // Cambia lo que no está en git (el vault): el check ya no vale.
-    writeFileSync(join(infra, "vault.yml"), "$ANSIBLE_VAULT;1.1;AES256\n6163\n")
-    await expect(exec("iac.apply", { plan_sha256: check.plan_sha256 })).rejects.toThrow(
-      "cambiaron desde el check",
-    )
-  })
+      const done = await exec("iac.apply", { plan_sha256: check.plan_sha256 })
+      expect(done.details).toMatchObject({ mode: "apply" })
+      expect(done.details.hosts.web?.changed).toBe(2)
 
-  test("con cambios sin commit en el playbook no despliega", async () => {
-    const { infra, target, exec } = await boot()
-    await target("prod")
-    writeFileSync(join(infra, "site.yml"), "- hosts: all\n  roles: [app, otra]\n")
-    await expect(exec("iac.plan")).rejects.toThrow("sin commit")
-  })
-})
+      const events = daemon.repo.eventsAfter(0, null, 10_000)
+      const kinds = events.map((e) => e.kind)
+      expect(kinds.filter((k) => k === "iac.run.started")).toHaveLength(2)
+      expect(kinds.filter((k) => k === "ansible.task.started")).toHaveLength(4)
+      expect(kinds.filter((k) => k === "ansible.host.result")).toHaveLength(4)
+      expect(kinds).toContain("iac.plan.created")
+      expect(kinds).toContain("iac.apply.completed")
+
+      // La salida guardada: Keel puso sus garantías y redactó lo del vault de Ansible.
+      const artifacts = join(dir, "artifacts")
+      const stored = readdirSync(artifacts, { recursive: true })
+        .map((f) => join(artifacts, String(f)))
+        .filter((f) => !f.endsWith("/"))
+        .map((f) => {
+          try {
+            return readFileSync(f, "utf8")
+          } catch {
+            return ""
+          }
+        })
+        .join("\n")
+      expect(stored).toContain("hkc=True transfer=piped")
+      expect(stored).toContain("estricta=1")
+      const everything = `${stored}\n${JSON.stringify(events)}\n${JSON.stringify([check, done])}`
+      expect(everything).not.toContain(VAULT_PASS)
+      expect(everything).not.toContain(VAULT_VALUE)
+
+      // Cambia lo que no está en git (el vault): el check ya no vale.
+      writeFileSync(join(infra, "vault.yml"), "$ANSIBLE_VAULT;1.1;AES256\n6163\n")
+      await expect(exec("iac.apply", { plan_sha256: check.plan_sha256 })).rejects.toThrow(
+        "cambiaron desde el check",
+      )
+    })
+
+    test("con cambios sin commit en el playbook no despliega", async () => {
+      const { infra, target, exec } = await boot()
+      await target("prod")
+      writeFileSync(join(infra, "site.yml"), "- hosts: all\n  roles: [app, otra]\n")
+      await expect(exec("iac.plan")).rejects.toThrow("sin commit")
+    })
+  },
+)
