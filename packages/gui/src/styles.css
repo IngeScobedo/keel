@@ -4458,3 +4458,11 @@ button.rc-ledger-row:hover {
   color: var(--color-status-failed);
   white-space: pre-wrap;
 }
+
+.infra-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+}

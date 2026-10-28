@@ -212,6 +212,35 @@ describe.skipIf(process.platform === "win32")(
       ).rejects.toThrow("dentro del proyecto")
     })
 
+    test("un check colgado se cancela, queda interrumpido y no deja nada que desplegar", async () => {
+      const { dir, daemon, target, exec } = await boot()
+      await target("prod")
+      writeFileSync(join(dir, "bin", "hang"), "")
+      const pending = exec("iac.plan")
+      let runKey = ""
+      for (let i = 0; i < 100 && !runKey; i++) {
+        await Bun.sleep(100)
+        const started = daemon.repo
+          .eventsAfter(0, null, 10_000)
+          .find((e) => e.kind === "ansible.task.started")
+        if (started) runKey = JSON.parse(started.payload_json).run_key
+      }
+      expect(runKey).not.toBe("")
+      const human = clients[0] as IpcClient
+      const cancel = (await human.call("resources.cancel", { ...meta(), run_key: runKey })) as {
+        cancelled: boolean
+      }
+      expect(cancel.cancelled).toBe(true)
+      const r = await pending
+      expect(r.summary).toContain("interrumpido por el humano")
+      expect(r.plan_sha256).toBeUndefined()
+      const created = daemon.repo
+        .eventsAfter(0, null, 10_000)
+        .filter((e) => e.kind === "iac.plan.created")
+        .map((e) => JSON.parse(e.payload_json))
+      expect(created.at(-1)).toMatchObject({ plan_sha256: "", details: { interrupted: true } })
+    })
+
     test("con cambios sin commit en el playbook no despliega", async () => {
       const { infra, target, exec } = await boot()
       await target("prod")

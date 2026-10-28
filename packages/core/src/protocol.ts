@@ -1341,6 +1341,11 @@ export const Methods = {
    * ADR-0033 §3: «Probar conexión» de una base, por el mismo camino que una consulta
    * (túnel incluido), en sólo lectura y con la credencial con que lee el agente.
    */
+  /** Cancela un check o un despliegue de Ansible en curso, por su `run_key`. Sólo humano. */
+  "resources.cancel": {
+    params: MutationMeta.extend({ run_key: z.string() }),
+    result: z.object({ cancelled: z.boolean() }),
+  },
   "connections.test": {
     params: z.object({ connection_id: z.string() }),
     result: z.object({

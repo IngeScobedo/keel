@@ -45,6 +45,8 @@ export type InfraRun = {
   tags: string[]
   state: "running" | "done" | "failed"
   started_at: string
+  /** El último evento: si pasa mucho sin otro, el servidor quizá no responde. */
+  last_at: string
   finished_at: string | null
   summary: string | null
   plan_sha256: string | null
@@ -105,6 +107,7 @@ export function startInfra(kind: string, p: Loose, key: string, at: string): Inf
     tags: Array.isArray(p.tags) ? p.tags.map(String) : [],
     state: "running",
     started_at: at,
+    last_at: at,
     finished_at: null,
     summary: null,
     plan_sha256: null,
@@ -128,6 +131,7 @@ export function startInfra(kind: string, p: Loose, key: string, at: string): Inf
 
 /** Aplica un evento a la tarjeta de su `run_key`. Devuelve si lo reconoció. */
 export function stepInfra(r: InfraRun, kind: string, p: Loose, at: string): boolean {
+  r.last_at = at
   switch (kind) {
     case "ansible.task.started":
       r.task = String(p.task)
@@ -241,6 +245,7 @@ function finish(r: InfraRun, p: Loose, at: string): void {
     r.task = null
   }
   const failed =
+    d.interrupted === true ||
     (r.exit_code !== null && r.exit_code !== 0) ||
     r.errors.length > 0 ||
     r.hosts.some((h) => h.failed > 0 || h.unreachable > 0) ||

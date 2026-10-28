@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 import { useEffect, useState } from "react"
 import { clock, duration } from "./chat-model.js"
+import { mutationMeta } from "./client.js"
 import { ArtifactView } from "./Evidence.js"
 import { type HostRow, headCounts, type InfraRun, type TfRow } from "./infra-model.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -80,8 +81,12 @@ export function InfraCard({ r, call }: { r: InfraRun; call?: Call }) {
     if (r.state === "failed") setOpen(true)
   }, [r.state])
   const [raw, setRaw] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const prod = r.environment === "prod"
   const time = running ? clock(r.started_at, now) : duration(r.duration_ms)
+  // Sin eventos en 2 min: el servidor quizá no responde (pasó con SSH colgado en el VPS).
+  const stalledMin = running ? Math.floor((now - Date.parse(r.last_at)) / 60_000) : 0
+  const cancellable = running && r.tool === "ansible" && call !== undefined
   return (
     <div className="infra-card" data-state={r.state} data-tool={r.tool} data-testid="infra-card">
       <button
@@ -105,6 +110,38 @@ export function InfraCard({ r, call }: { r: InfraRun; call?: Call }) {
         <StateIcon state={r.state} />
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
+      {stalledMin >= 2 && (
+        <p className="infra-banner warn" role="status">
+          <AlertTriangle size={13} /> Sin avance desde hace {stalledMin} min
+          {r.task ? ` en «${r.task}»` : ""}: puede que el servidor no responda.
+        </p>
+      )}
+      {cancellable && (
+        <div className="infra-actions">
+          <button
+            type="button"
+            className="button ghost"
+            disabled={cancelling}
+            onClick={() => {
+              setCancelling(true)
+              void call?.("resources.cancel", { ...mutationMeta(), run_key: r.run_key }).finally(
+                () => setCancelling(false),
+              )
+            }}
+          >
+            {cancelling
+              ? "Cancelando…"
+              : r.mode === "check"
+                ? "Cancelar el check"
+                : "Cancelar el despliegue"}
+          </button>
+          {r.mode !== "check" && (
+            <span className="muted">
+              Cancelar un despliegue lo corta donde va: lo ya aplicado se queda.
+            </span>
+          )}
+        </div>
+      )}
       {r.destructive.length > 0 && (
         <p className="infra-banner danger" role="alert">
           <AlertTriangle size={13} /> Destruye o reemplaza {r.destructive.length} recurso

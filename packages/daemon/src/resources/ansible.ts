@@ -390,11 +390,22 @@ export async function runPlaybook(
     }
   }
   const { code, out } = await new Promise<{ code: number | null; out: string }>((done, fail) => {
+    // Su propio grupo de procesos: al cancelar se mata también el `ssh` que lanzó, que si
+    // no se queda colgado con la salida abierta (VPS que no abría sesiones, 2026-10-28).
     const child = spawn(o.bin, o.args, {
       cwd: o.cwd,
       env: o.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
     })
+    const killAll = () => {
+      try {
+        if (child.pid && process.platform !== "win32") process.kill(-child.pid, "SIGTERM")
+        else child.kill("SIGTERM")
+      } catch {
+        // El grupo ya no existe: no queda nada que matar.
+      }
+    }
     let buf = ""
     const take = (d: Buffer) => {
       if (buf.length < 8_000_000) buf += d.toString("utf8")
@@ -402,18 +413,20 @@ export async function runPlaybook(
     child.stdout.on("data", take)
     child.stderr.on("data", take)
     const poll = setInterval(drain, 250)
-    const timer = setTimeout(() => child.kill("SIGTERM"), o.timeoutMs)
-    const abort = () => child.kill("SIGTERM")
+    const timer = setTimeout(killAll, o.timeoutMs)
+    const abort = killAll
     signal?.addEventListener("abort", abort)
     child.on("error", (e) => {
       clearInterval(poll)
       clearTimeout(timer)
       fail(new AnsibleError(`ansible-playbook no disponible: ${e.message}`))
     })
-    child.on("close", (c) => {
+    // `exit`, no `close`: un nieto vivo puede tener la salida abierta mucho tiempo.
+    child.on("exit", (c) => {
       clearInterval(poll)
       clearTimeout(timer)
       signal?.removeEventListener("abort", abort)
+      killAll()
       done({ code: c, out: buf })
     })
   })

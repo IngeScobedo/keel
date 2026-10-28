@@ -2173,6 +2173,11 @@ export class Daemon {
           },
         )(params, ctx)
       },
+      "resources.cancel": (params, ctx) => {
+        requireHuman(ctx, "cancelar un check o un despliegue")
+        const p = params as Params<"resources.cancel">
+        return { cancelled: this.broker.cancel(p.run_key) }
+      },
       "connections.test": async (params, ctx) => {
         requireHuman(ctx, "probar una conexión")
         const p = params as Params<"connections.test">

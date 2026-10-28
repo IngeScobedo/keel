@@ -189,6 +189,16 @@ export class ResourceBroker {
   private readonly deps: BrokerDeps
   /** ADR-0033: los túneles SSH hacia las bases, abiertos por uso. */
   readonly tunnels = new TunnelPool()
+  /** Checks y despliegues en curso, para poder cancelarlos (por `run_key`). */
+  private readonly running = new Map<string, AbortController>()
+
+  /** Cancela un check o un despliegue de Ansible en curso. */
+  cancel(runKey: string): boolean {
+    const c = this.running.get(runKey)
+    if (!c) return false
+    c.abort()
+    return true
+  }
   constructor(deps: BrokerDeps) {
     this.deps = deps
   }
@@ -966,6 +976,8 @@ export class ResourceBroker {
       this.deps.emit(ctx.projectId, ctx.runId, "iac.run.started", head)
       let index = 0
       let outcome: Awaited<ReturnType<typeof runPlaybook>>
+      const abort = new AbortController()
+      this.running.set(runKey, abort)
       try {
         outcome = await runPlaybook(
           {
@@ -978,14 +990,24 @@ export class ResourceBroker {
             timeoutMs: (mode === "check" ? 30 : 60) * 60_000,
           },
           (e) => this.emitAnsible(ctx, runKey, e, ++index, redact),
+          abort.signal,
         )
       } catch (e) {
         if (e instanceof AnsibleError) throw new BrokerError("failed", e.message)
         throw e
+      } finally {
+        this.running.delete(runKey)
       }
       setLive(prep.redact())
-      const { summary, details } = summarize(outcome, spec, base.commit, choice.tags)
-      if (mode === "check")
+      const summarized = summarize(outcome, spec, base.commit, choice.tags)
+      // Sin el recap, el playbook no terminó (cancelado, colgado, matado): no es un check
+      // que se pueda desplegar ni un despliegue completo, aunque nada haya fallado.
+      const interrupted = !outcome.events.some((e) => e.kind === "recap")
+      const summary = interrupted
+        ? `${mode === "check" ? "check" : "despliegue"} interrumpido${abort.signal.aborted ? " por el humano" : ""} en ${outcome.events.filter((e) => e.kind === "task").at(-1)?.name ?? "el arranque"}`
+        : summarized.summary
+      const details = { ...summarized.details, ...(interrupted ? { interrupted: true } : {}) }
+      if (mode === "check" && !interrupted)
         writeFileSync(
           join(plansDir, `${digest}.json`),
           JSON.stringify({ choice, commit: base.commit, created_at: new Date().toISOString() }),
@@ -998,8 +1020,8 @@ export class ResourceBroker {
         body,
         media_type: "text/plain",
         evidence_kind: "log",
-        exit_code: outcome.exit_code,
-        plan_sha256: digest,
+        exit_code: interrupted ? (outcome.exit_code ?? -1) || -1 : outcome.exit_code,
+        ...(interrupted ? {} : { plan_sha256: digest }),
         details: {
           ...cleanDetails,
           run_key: runKey,
@@ -1011,7 +1033,8 @@ export class ResourceBroker {
                 kind: "iac.plan.created",
                 payload: (ref) => ({
                   server: spec.dir,
-                  plan_sha256: digest,
+                  // Un check interrumpido no deja nada que desplegar.
+                  plan_sha256: interrupted ? "" : digest,
                   summary,
                   plan_ref: ref,
                   tool: "ansible",
@@ -1024,7 +1047,7 @@ export class ResourceBroker {
                 payload: (ref) => ({
                   server: spec.dir,
                   plan_sha256: digest,
-                  exit_code: outcome.exit_code,
+                  exit_code: interrupted ? (outcome.exit_code ?? -1) || -1 : outcome.exit_code,
                   output_ref: ref,
                   tool: "ansible",
                   run_key: runKey,

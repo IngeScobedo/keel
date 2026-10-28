@@ -17,6 +17,8 @@ pw=""; [ -n "$vp" ] && pw=$("$vp")
 wrapper=$(grep ansible_ssh_executable "$inv" | sed 's/.*: "\\(.*\\)"/\\1/')
 E="$KEEL_ANSIBLE_EVENTS"
 echo '{"kind":"play","name":"Desplegar"}' >> "$E"
+# Como un servidor que acepta la llave pero nunca abre la sesión (VPS, 2026-10-28).
+if [ -f "$(dirname "$0")/hang" ]; then echo '{"kind":"task","name":"Gathering Facts","action":"gather_facts"}' >> "$E"; sleep 30; exit 0; fi
 echo '{"kind":"task","name":"Instala paquetes","action":"ansible.builtin.apt"}' >> "$E"
 echo '{"kind":"result","status":"changed","host":"web","task":"Instala paquetes","changed":true,"msg":null}' >> "$E"
 echo '{"kind":"task","name":"Construye","action":"ansible.builtin.command"}' >> "$E"
