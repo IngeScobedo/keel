@@ -1268,9 +1268,9 @@ function RiskModal({
  * plan (Terraform); «Desplegar» sólo corre lo revisado, por su hash. Se ve en vivo.
  */
 function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventNotification[] }) {
-  const [busy, setBusy] = useState<"plan" | "apply" | null>(null)
+  const [asked, setAsked] = useState<"plan" | "apply" | null>(null)
   const [error, setError] = useState("")
-  const [plan, setPlan] = useState<{ sha: string; summary: string } | null>(null)
+  const [note, setNote] = useState("")
   const [confirm, setConfirm] = useState(false)
   const ansible = c.type === "ansible"
   const runs = useMemo(() => {
@@ -1289,22 +1289,35 @@ function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventN
     return buildChat(mine).filter((i): i is InfraRun => i.kind === "infra")
   }, [events, c.name])
   const last = runs[runs.length - 1]
+  // Lo revisado sale de los eventos, no de la respuesta: un check real tarda más que el
+  // tope de una llamada (30 s) y sigue en el daemon aunque la llamada se corte.
+  const plan =
+    last && last.mode !== "apply" && last.state === "done" && last.plan_sha256
+      ? { sha: last.plan_sha256, summary: last.summary ?? "" }
+      : null
+  const running = last?.state === "running"
+  const busy = asked ?? (running ? (last?.mode === "apply" ? "apply" : "plan") : null)
   async function run(op: "plan" | "apply") {
-    setBusy(op)
+    setAsked(op)
     setError("")
+    setNote("")
+    setConfirm(false)
     try {
-      const r = await call("resources.execute", {
+      await call("resources.execute", {
         ...mutationMeta(),
         connection: c.name,
         operation: op === "plan" ? "iac.plan" : "iac.apply",
         input: op === "apply" && plan ? { plan_sha256: plan.sha } : {},
       })
-      setPlan(op === "plan" && r.plan_sha256 ? { sha: r.plan_sha256, summary: r.summary } : null)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/timeout ipc/i.test(msg))
+        setNote(
+          `${op === "plan" ? "El check" : "El despliegue"} sigue en el daemon: la tarjeta lo muestra en vivo.`,
+        )
+      else setError(msg)
     } finally {
-      setBusy(null)
-      setConfirm(false)
+      setAsked(null)
     }
   }
   return (
@@ -1328,6 +1341,7 @@ function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventN
           ? `Revisado: ${plan.summary}. Desplegar corre exactamente esto; si algo cambia, hay que revisar otra vez.`
           : `Primero ${ansible ? "el check" : "el plan"}: muestra qué cambiaría sin tocar el servidor.`}
       </Hint>
+      {note && <p className="muted">{note}</p>}
       {error && (
         <p className="deleted" role="alert">
           {error}
