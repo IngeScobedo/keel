@@ -5,6 +5,7 @@
  * de eventos en crudo lo sigue mostrando.
  */
 import type { EventNotification } from "@keel/core"
+import { type InfraRun, ownerTool, startInfra, stepInfra } from "./infra-model.js"
 
 type Loose = Record<string, unknown>
 
@@ -30,6 +31,8 @@ export type ToolCall = {
   approval: Approval | null
   /** Diff ya resuelto si es una edición (Claude `structuredPatch` o Codex `changes`). */
   diff: FileDiff[] | null
+  /** La ejecución de infraestructura que abrió esta tool (Terraform, Ansible o SSH). */
+  infra: InfraRun | null
 }
 
 export type FileDiff = { path: string; hunks: Hunk[]; added: number; removed: number }
@@ -46,6 +49,8 @@ export type Approval = {
   decision: "approved" | "denied" | "expired" | null
   answers: Record<string, string> | null
   reason: string | null
+  /** Para `resource.iac.apply`: el check o plan que se está aprobando. */
+  plan: InfraRun | null
 }
 
 /** Lo que hizo el método (ADR-0021): etapas, documentos, verificación y avisos de Keel. */
@@ -95,6 +100,7 @@ export type ChatItem =
   | { kind: "status"; key: string; text: string; tone: "info" | "error" }
   | ToolCall
   | Approval
+  | InfraRun
   | {
       kind: "auto"
       key: string
@@ -129,6 +135,7 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
   const items: ChatItem[] = []
   const tools = new Map<string, ToolCall>()
   const approvals = new Map<string, Approval>()
+  const infra = new Map<string, InfraRun>()
   let lastAgent = ""
   // Lo que escribió el humano llega dos veces: como `run.user_message` y como el
   // prompt que ve el proveedor. Se muestra una.
@@ -327,6 +334,7 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           started_at: e.received_at,
           approval: null,
           diff: null,
+          infra: null,
         }
         if (item.id) tools.set(item.id, item)
         items.push(item)
@@ -355,6 +363,11 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           decision: null,
           answers: null,
           reason: null,
+          plan: null,
+        }
+        if (a.tool === "resource.iac.apply") {
+          const sha = String((p.input as Loose | undefined)?.plan_sha256 ?? "")
+          a.plan = [...infra.values()].find((r) => r.plan_sha256 === sha) ?? null
         }
         approvals.set(a.approval_id, a)
         // Claude anuncia la herramienta antes de pedir permiso: la tarjeta es la misma.
@@ -409,6 +422,29 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
       case "run.cancelled":
         items.push({ kind: "status", key, tone: "info", text: "Run cancelado." })
         break
+      // ADR-0031 §5: Terraform, Ansible y SSH como tarjetas en vivo, no como texto.
+      case "iac.run.started":
+      case "ssh.command.started": {
+        const r = startInfra(e.kind, p, key, e.received_at)
+        if (!r) break
+        infra.set(r.run_key, r)
+        const owner = [...tools.values()]
+          .reverse()
+          .find((t) => t.state === "running" && !t.infra && ownerTool(r).includes(t.name))
+        if (owner) owner.infra = r
+        else items.push(r)
+        break
+      }
+      case "ansible.task.started":
+      case "ansible.host.result":
+      case "terraform.resource.progress":
+      case "iac.plan.created":
+      case "iac.apply.completed":
+      case "ssh.command.completed": {
+        const r = infra.get(String(p.run_key))
+        if (r) stepInfra(r, e.kind, p, e.received_at)
+        break
+      }
       case "run.updated":
         if (p.status === "completed")
           items.push({ kind: "status", key, tone: "info", text: "Run terminado." })
@@ -459,6 +495,7 @@ function codexItem(
       started_at: e.received_at,
       approval: null,
       diff: null,
+      infra: null,
     }
     if (id) tools.set(id, t)
     items.push(t)

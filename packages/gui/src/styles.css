@@ -3999,3 +3999,334 @@ button.rc-ledger-row:hover {
   font-size: 12px;
   color: var(--color-status-waiting-human);
 }
+
+/* Infraestructura en vivo (ADR-0031 §5): Terraform, Ansible y SSH como tarjetas. */
+.infra-card {
+  border: 1px solid var(--color-border-default);
+  border-left: 3px solid var(--color-status-running);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  overflow: hidden;
+}
+.infra-card[data-state="done"] {
+  border-left-color: var(--color-status-succeeded);
+}
+.infra-card[data-state="failed"] {
+  border-color: var(--color-status-failed-border);
+  border-left-color: var(--color-status-failed);
+}
+.infra-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.infra-head:hover {
+  background: var(--color-surface-hover);
+}
+.infra-tag {
+  font-family: var(--font-mono), monospace;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-status-planning);
+  background: var(--color-status-planning-bg);
+  flex-shrink: 0;
+}
+.infra-tag.ansible {
+  color: var(--color-status-interrupted);
+  background: var(--color-status-interrupted-bg);
+}
+.infra-tag.ssh {
+  color: var(--color-text-secondary);
+  background: var(--color-surface-sunken);
+}
+.infra-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1 1 auto;
+}
+.infra-title .mono {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+.infra-env.prod {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-status-failed);
+  background: var(--color-status-failed-bg);
+  border: 1px solid var(--color-status-failed-border);
+}
+.infra-count {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+}
+.infra-count.add {
+  color: var(--color-diff-added);
+  background: var(--color-diff-added-bg);
+}
+.infra-count.change {
+  color: var(--color-diff-changed);
+  background: var(--color-status-waiting-human-bg);
+}
+.infra-count.remove {
+  color: var(--color-diff-removed);
+  background: var(--color-diff-removed-bg);
+}
+.infra-time {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+.infra-spin {
+  animation: infra-spin 1s linear infinite;
+  color: var(--color-status-running);
+  vertical-align: -2px;
+}
+@keyframes infra-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .infra-spin {
+    animation: none;
+  }
+}
+.infra-ok {
+  color: var(--color-status-succeeded);
+  vertical-align: -2px;
+}
+.infra-bad {
+  color: var(--color-status-failed);
+  vertical-align: -2px;
+}
+.infra-banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.infra-banner.danger {
+  color: var(--color-status-failed);
+  background: var(--color-status-failed-bg);
+  font-weight: 600;
+}
+.infra-banner.warn {
+  color: var(--color-status-waiting-human);
+  background: var(--color-status-waiting-human-bg);
+}
+.infra-summary {
+  margin: 0;
+  padding: 0 12px 8px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+.infra-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.infra-resources {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  font-size: 12px;
+}
+.infra-resources > li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 3px 0;
+  align-items: baseline;
+}
+.infra-symbol {
+  font-weight: 700;
+}
+[data-action="create"] > .infra-symbol {
+  color: var(--color-diff-added);
+}
+[data-action="update"] > .infra-symbol {
+  color: var(--color-diff-changed);
+}
+[data-action="delete"] > .infra-symbol,
+[data-action="replace"] > .infra-symbol {
+  color: var(--color-diff-removed);
+}
+[data-action="delete"] > .infra-resource-state,
+[data-action="replace"] > .infra-resource-state {
+  color: var(--color-status-failed);
+  font-weight: 600;
+}
+.infra-address {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.infra-resource-state {
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.infra-attrs {
+  grid-column: 2 / -1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+.infra-attrs .before {
+  color: var(--color-diff-removed);
+}
+.infra-attrs .after {
+  color: var(--color-diff-added);
+}
+.infra-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  font-size: 12px;
+}
+.infra-fleet {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin: 6px 0;
+}
+.infra-fleet th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--color-text-tertiary);
+  border-bottom: 1px solid var(--color-border-subtle);
+  padding: 4px 6px;
+}
+.infra-fleet td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.infra-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--color-status-queued);
+}
+[data-host-state="ok"] .infra-dot {
+  background: var(--color-status-succeeded);
+}
+[data-host-state="running"] .infra-dot {
+  background: var(--color-status-waiting-human);
+}
+[data-host-state="failed"] .infra-dot {
+  background: var(--color-status-failed);
+}
+[data-host-state="failed"] td:last-child {
+  color: var(--color-status-failed);
+}
+.infra-host-error {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-status-failed-bg);
+  font-size: 12px;
+}
+.infra-host-error pre {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+}
+.infra-error {
+  color: var(--color-status-failed);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.infra-outputs {
+  margin: 6px 0;
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+}
+.infra-outputs div {
+  display: flex;
+  gap: 8px;
+}
+.infra-outputs dt {
+  color: var(--color-text-tertiary);
+}
+.infra-outputs dd {
+  margin: 0;
+}
+.infra-command {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 2px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.infra-server {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px;
+  font-size: 12px;
+}
+.infra-exit {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+}
+.infra-exit.ok {
+  color: var(--color-status-succeeded);
+  background: var(--color-status-succeeded-bg);
+}
+.infra-exit.bad {
+  color: var(--color-status-failed);
+  background: var(--color-status-failed-bg);
+}
+.infra-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.conn-deploy {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-sunken);
+}
+.conn-deploy-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.conn-deploy-bar strong {
+  flex: 1 1 auto;
+}

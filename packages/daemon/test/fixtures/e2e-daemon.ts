@@ -8,11 +8,13 @@
  * Escribe una línea JSON con `socket` y `project_id` y vive hasta que se cierra
  * su stdin. Borra su directorio al salir.
  */
-import { mkdtempSync, rmSync } from "node:fs"
+import { execFileSync } from "node:child_process"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { Daemon } from "../../src/index.ts"
+import { Daemon, IpcClient } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
+import { writeFakeAnsible } from "./fake-ansible.ts"
 import { CONVERSATION_KEY } from "../../src/store/repo.ts"
 import { memoryKeyStore } from "../../src/vault/keystore.ts"
 import {
@@ -70,6 +72,41 @@ const daemon: Daemon = new Daemon({
   },
 })
 daemon.start()
+// ADR-0031: con KEEL_E2E_ANSIBLE=1, un playbook en el repo, Ansible doble (lento a
+// propósito, para ver el avance en vivo) y un destino de despliegue sobre una conexión SSH.
+if (process.env.KEEL_E2E_ANSIBLE === "1") {
+  const repo = join(dir, "repo")
+  const infra = join(repo, "infra", "ansible")
+  mkdirSync(infra, { recursive: true })
+  writeFileSync(join(infra, "site.yml"), "- hosts: all\n  roles: [app]\n")
+  execFileSync("git", ["add", "."], { cwd: repo })
+  execFileSync("git", ["commit", "-q", "-m", "playbook"], { cwd: repo })
+  const playbook = writeFakeAnsible(join(dir, "bin"), 0.4)
+  const c = await IpcClient.connect(daemon.server.path)
+  const meta = () => ({ request_id: "e2e", idempotency_key: crypto.randomUUID() })
+  await c.call("connections.add", {
+    ...meta(),
+    name: "prod-web",
+    type: "ssh",
+    environment: "prod",
+    config: { host: "203.0.113.20", user: "root" },
+    auth_method: "agent",
+  })
+  await c.call("connections.add", {
+    ...meta(),
+    name: "despliegue",
+    type: "ansible",
+    environment: "prod",
+    config: {
+      dir: "infra/ansible",
+      playbook: "site.yml",
+      hosts: { web: "prod-web" },
+      tags: ["deploy"],
+      ansible_path: playbook,
+    },
+  })
+  c.close()
+}
 process.stdout.write(
   `${JSON.stringify({ socket: daemon.server.path, project_id: daemon.project.project_id, other_repo: otherRepo })}\n`,
 )

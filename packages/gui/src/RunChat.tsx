@@ -12,6 +12,7 @@ import {
   type ToolCall,
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
+import { InfraCard } from "./InfraCard.js"
 import { Markdown } from "./Markdown.js"
 import { GateCard, MethodRow } from "./MethodCards.js"
 import type { Run } from "./model.js"
@@ -245,6 +246,8 @@ function layout(items: ChatItem[], density: Density): LayoutRow[] {
     }
     const groupable =
       item.kind === "tool" &&
+      // Terraform, Ansible y SSH se ven siempre: son lo que cambia la infraestructura.
+      item.infra === null &&
       !needsYou(item) &&
       (density === "story" || (isExplore(item) && item.state !== "failed"))
     if (groupable) {
@@ -285,6 +288,8 @@ function Row({
   if (row.kind === "explore") return <ExploreGroup tools={row.tools} density={density} {...c} />
   const item = row.item
   switch (item.kind) {
+    case "infra":
+      return <InfraCard r={item} {...c} />
     case "prompt":
     case "human":
       return (
@@ -347,6 +352,7 @@ function Row({
                 item.state === "running" ? null : item.state === "done" ? "approved" : "denied",
               answers: r.answers ?? null,
               reason: item.error,
+              plan: null,
             }}
             firstPending={null}
             agent={agent}

@@ -28,6 +28,7 @@ import {
   text,
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
+import { InfraCard } from "./InfraCard.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -68,6 +69,8 @@ export function ToolCard({
   /** Llegó con el run en vivo: anima la entrada. */
   fresh?: boolean
 }) {
+  // ADR-0031 §5: lo que abrió una ejecución de infraestructura se ve como su tarjeta.
+  if (t.infra) return <InfraCard r={t.infra} {...(call ? { call } : {})} />
   if (isKeelAction(t))
     return (
       <KeelCard t={t} fresh={fresh ?? false} onOpenTask={onOpenTask} {...(call ? { call } : {})} />

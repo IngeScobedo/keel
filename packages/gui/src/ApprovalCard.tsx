@@ -11,6 +11,7 @@ import {
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { GitPlanCard } from "./GitPlanCard.js"
+import { InfraCard } from "./InfraCard.js"
 import { Markdown } from "./Markdown.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -146,7 +147,12 @@ export function ApprovalCard({ a, call, active }: { a: Approval; call?: Call; ac
         </strong>
         {pending && <Waiting a={a} />}
       </header>
-      <pre className="chat-approval-input">{shellCommand(a.input) ?? inputLine(a.input)}</pre>
+      {/* Aprobar un apply es aprobar el plan que se revisó: se ve el plan, no un JSON. */}
+      {a.plan ? (
+        <InfraCard r={a.plan} {...(call ? { call } : {})} />
+      ) : (
+        <pre className="chat-approval-input">{shellCommand(a.input) ?? inputLine(a.input)}</pre>
+      )}
       {pending && !expired && (
         <>
           <div className="rc-pattern">

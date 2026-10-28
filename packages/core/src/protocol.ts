@@ -1399,6 +1399,8 @@ export const Methods = {
       output: z.string().optional(),
       exit_code: z.number().int().nullable().optional(),
       plan_sha256: z.string().optional(),
+      /** ADR-0031 §5: el resumen estructurado y corto (Terraform y Ansible). */
+      details: z.unknown().optional(),
       evidence_id: z.string().nullable(),
       result_ref: z.string().nullable(),
     }),

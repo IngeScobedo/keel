@@ -7,19 +7,12 @@
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import {
-  chmodSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Daemon, IpcClient } from "../src/index.ts"
 import { memoryKeyStore } from "../src/vault/keystore.ts"
+import { VAULT_PASS, VAULT_VALUE, writeFakeAnsible } from "./fixtures/fake-ansible.ts"
 import { initRepo } from "./git-fixture.ts"
 import { replayQuery } from "./replay.ts"
 
@@ -35,40 +28,8 @@ afterEach(async () => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 const meta = () => ({ request_id: "r", idempotency_key: crypto.randomUUID() })
-const VAULT_PASS = "pass-ansible-vault-4e2b"
-const VAULT_VALUE = "centinela-ansible-api-91c0"
 const sh = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: "pipe" }).toString().trim()
-
-/** Como `ansible-playbook` con el callback de Keel: eventos NDJSON y salida de pantalla. */
-const FAKE_PLAYBOOK = `#!/bin/bash
-inv=""; vp=""; check=no
-while [ $# -gt 0 ]; do case "$1" in -i) inv="$2"; shift;; --vault-password-file) vp="$2"; shift;; --check) check=yes;; esac; shift; done
-pw=""; [ -n "$vp" ] && pw=$("$vp")
-wrapper=$(grep ansible_ssh_executable "$inv" | sed 's/.*: "\\(.*\\)"/\\1/')
-E="$KEEL_ANSIBLE_EVENTS"
-echo '{"kind":"play","name":"Desplegar"}' >> "$E"
-echo '{"kind":"task","name":"Instala paquetes","action":"ansible.builtin.apt"}' >> "$E"
-echo '{"kind":"result","status":"changed","host":"web","task":"Instala paquetes","changed":true,"msg":null}' >> "$E"
-echo '{"kind":"task","name":"Construye","action":"ansible.builtin.command"}' >> "$E"
-if [ "$check" = yes ]; then
-  echo '{"kind":"result","status":"skipped","host":"web","task":"Construye","changed":false,"msg":null}' >> "$E"
-  echo '{"kind":"recap","hosts":{"web":{"ok":1,"changed":1,"failures":0,"unreachable":0,"skipped":1}}}' >> "$E"
-else
-  echo '{"kind":"result","status":"changed","host":"web","task":"Construye","changed":true,"msg":null}' >> "$E"
-  echo '{"kind":"recap","hosts":{"web":{"ok":2,"changed":2,"failures":0,"unreachable":0,"skipped":0}}}' >> "$E"
-fi
-echo "TASK [Instala paquetes] vault=$pw api=${VAULT_VALUE}"
-echo "check=$check hkc=$ANSIBLE_HOST_KEY_CHECKING transfer=$ANSIBLE_SSH_TRANSFER_METHOD"
-echo "cp=$ANSIBLE_SSH_CONTROL_PATH_DIR"
-echo "estricta=$(grep -c 'StrictHostKeyChecking=yes' "$wrapper")"
-`
-/** Como `ansible-vault view`: descifra con la contraseña del script y muestra el YAML. */
-const FAKE_VAULT = `#!/bin/bash
-vp=""; while [ $# -gt 0 ]; do case "$1" in --vault-password-file) vp="$2"; shift;; esac; shift; done
-[ "$("$vp")" = "${VAULT_PASS}" ] || { echo "Decryption failed" >&2; exit 1; }
-printf 'api_key: "${VAULT_VALUE}"\\nport: 5432\\n'
-`
 
 async function boot() {
   const dir = mkdtempSync(join(tmpdir(), "keel-ansible-"))
@@ -82,12 +43,7 @@ async function boot() {
   sh(repo, "commit", "-q", "-m", "playbook")
   // Fuera de git, como el vault.yml de Casa Matte.
   writeFileSync(join(infra, "vault.yml"), "$ANSIBLE_VAULT;1.1;AES256\n6162\n")
-  const bin = join(dir, "bin")
-  mkdirSync(bin)
-  writeFileSync(join(bin, "ansible-playbook"), FAKE_PLAYBOOK)
-  writeFileSync(join(bin, "ansible-vault"), FAKE_VAULT)
-  chmodSync(join(bin, "ansible-playbook"), 0o755)
-  chmodSync(join(bin, "ansible-vault"), 0o755)
+  const playbook = writeFakeAnsible(join(dir, "bin"))
   const daemon = new Daemon({
     dbPath: join(dir, "keel.sqlite"),
     socketPath: join(dir, "keel.sock"),
@@ -121,7 +77,7 @@ async function boot() {
         playbook: "site.yml",
         hosts: { web: "prod-web" },
         tags: ["deploy"],
-        ansible_path: join(bin, "ansible-playbook"),
+        ansible_path: playbook,
       },
       auth_method: "password",
       secret_value: VAULT_PASS,

@@ -4,7 +4,12 @@
  * esta pantalla nunca los muestra ni los recibe de vuelta. En producción ejecutar
  * pregunta; quitar la pregunta pide escribir el nombre de la conexión.
  */
-import type { ConnectionViewSchema, ImportedHostSchema, VaultStatusSchema } from "@keel/core"
+import type {
+  ConnectionViewSchema,
+  EventNotification,
+  ImportedHostSchema,
+  VaultStatusSchema,
+} from "@keel/core"
 import {
   Copy,
   Download,
@@ -12,13 +17,17 @@ import {
   KeyRound,
   Lock,
   Plus,
+  Rocket,
   Search,
   ShieldAlert,
   Terminal,
   Trash2,
 } from "lucide-react"
-import { type FormEvent, useCallback, useEffect, useState } from "react"
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
+import { buildChat } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
+import { InfraCard } from "./InfraCard.js"
+import type { InfraRun } from "./infra-model.js"
 import { Button, Empty, Hint, Modal } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -82,6 +91,7 @@ function target(c: Connection): string {
   const cfg = c.config
   if (c.type === "sqlite") return String(cfg.path ?? "")
   if (c.type === "terraform") return String(cfg.dir ?? "")
+  if (c.type === "ansible") return `${String(cfg.dir ?? "")}/${String(cfg.playbook ?? "")}`
   const host = String(cfg.host ?? "")
   const user = cfg.user ? `${cfg.user}@` : ""
   const port = cfg.port ? `:${cfg.port}` : ""
@@ -95,11 +105,14 @@ export function LiveConnections({
   tick,
   setup,
   onSetupDone,
+  events = [],
 }: {
   call: Call
   tick: number
   setup?: SetupPrefill | null
   onSetupDone?: () => void
+  /** Los eventos del proyecto: el check y el despliegue se ven en vivo (ADR-0031 §5). */
+  events?: EventNotification[]
 }) {
   const [items, setItems] = useState<Connection[]>([])
   const [vault, setVault] = useState<VaultStatus | null>(null)
@@ -219,6 +232,7 @@ export function LiveConnections({
               key={current.id}
               c={current}
               call={call}
+              events={events}
               act={act}
               onRisk={(operation) => setModal({ kind: "risk", conn: current, operation })}
               onHostKeys={() => setModal({ kind: "hostkeys", conn: current })}
@@ -397,6 +411,7 @@ function VaultBanner({
 function Detail({
   c,
   call,
+  events,
   act,
   onRisk,
   onHostKeys,
@@ -404,6 +419,7 @@ function Detail({
 }: {
   c: Connection
   call: Call
+  events: EventNotification[]
   act: (work: () => Promise<unknown>) => Promise<void>
   onRisk: (operation: string) => void
   onHostKeys: () => void
@@ -445,6 +461,9 @@ function Detail({
           }
         />
       </header>
+      {(c.type === "ansible" || c.type === "terraform") && (
+        <Deploy c={c} call={call} events={events} />
+      )}
       {terminal && (
         <div className="conn-terminal" data-testid="terminal-command">
           <code>{cmd}</code>
@@ -463,6 +482,20 @@ function Detail({
         <dl>
           <dt>Destino</dt>
           <dd className="mono">{target(c)}</dd>
+          {c.type === "ansible" && (
+            <>
+              <dt>Hosts</dt>
+              <dd className="mono">
+                {Object.entries((c.config.hosts ?? {}) as Record<string, string>)
+                  .map(([h, conn]) => `${h} → ${conn}`)
+                  .join(" · ")}
+              </dd>
+              <dt>Tags</dt>
+              <dd className="mono">
+                {((c.config.tags ?? []) as string[]).join(", ") || "todas las tareas"}
+              </dd>
+            </>
+          )}
           {c.config.proxy_jump ? (
             <>
               <dt>Salto</dt>
@@ -493,7 +526,7 @@ function Detail({
       </article>
       {methods.length > 0 && (
         <article className="conn-card" data-testid="auth-card">
-          <h3>Cómo entra</h3>
+          <h3>{c.type === "ansible" ? "Contraseña de ansible-vault" : "Cómo entra"}</h3>
           <fieldset className="segmented methods" aria-label="Método de entrada">
             {methods.map((m) => (
               <button
@@ -1165,5 +1198,96 @@ function RiskModal({
         </div>
       </div>
     </Modal>
+  )
+}
+
+/**
+ * ADR-0031 §4: el humano revisa y despliega sin agente. Primero el check (Ansible) o el
+ * plan (Terraform); «Desplegar» sólo corre lo revisado, por su hash. Se ve en vivo.
+ */
+function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventNotification[] }) {
+  const [busy, setBusy] = useState<"plan" | "apply" | null>(null)
+  const [error, setError] = useState("")
+  const [plan, setPlan] = useState<{ sha: string; summary: string } | null>(null)
+  const [confirm, setConfirm] = useState(false)
+  const ansible = c.type === "ansible"
+  const runs = useMemo(() => {
+    const keys = new Set(
+      events
+        .filter(
+          (e) =>
+            e.kind === "iac.run.started" &&
+            (e.payload as { connection?: string } | null)?.connection === c.name,
+        )
+        .map((e) => String((e.payload as { run_key?: string }).run_key)),
+    )
+    const mine = events.filter((e) =>
+      keys.has(String((e.payload as { run_key?: string } | null)?.run_key)),
+    )
+    return buildChat(mine).filter((i): i is InfraRun => i.kind === "infra")
+  }, [events, c.name])
+  const last = runs[runs.length - 1]
+  async function run(op: "plan" | "apply") {
+    setBusy(op)
+    setError("")
+    try {
+      const r = await call("resources.execute", {
+        ...mutationMeta(),
+        connection: c.name,
+        operation: op === "plan" ? "iac.plan" : "iac.apply",
+        input: op === "apply" && plan ? { plan_sha256: plan.sha } : {},
+      })
+      setPlan(op === "plan" && r.plan_sha256 ? { sha: r.plan_sha256, summary: r.summary } : null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+      setConfirm(false)
+    }
+  }
+  return (
+    <section className="conn-deploy" data-testid="deploy">
+      <div className="conn-deploy-bar">
+        <strong>{ansible ? "Desplegar con Ansible" : "Terraform"}</strong>
+        <Button icon={Search} disabled={busy !== null} onClick={() => void run("plan")}>
+          {busy === "plan" ? "Revisando…" : ansible ? "Check" : "Plan"}
+        </Button>
+        <Button
+          variant="primary"
+          icon={Rocket}
+          disabled={busy !== null || !plan}
+          onClick={() => setConfirm(true)}
+        >
+          {busy === "apply" ? "Desplegando…" : ansible ? "Desplegar" : "Aplicar"}
+        </Button>
+      </div>
+      <Hint>
+        {plan
+          ? `Revisado: ${plan.summary}. Desplegar corre exactamente esto; si algo cambia, hay que revisar otra vez.`
+          : `Primero ${ansible ? "el check" : "el plan"}: muestra qué cambiaría sin tocar el servidor.`}
+      </Hint>
+      {error && (
+        <p className="deleted" role="alert">
+          {error}
+        </p>
+      )}
+      {last && <InfraCard key={last.run_key} r={last} call={call} />}
+      {confirm && plan && (
+        <Modal title={ansible ? "Desplegar" : "Aplicar el plan"} onClose={() => setConfirm(false)}>
+          <p>
+            {c.environment === "prod" ? <strong>Producción · </strong> : null}
+            {c.name}: {plan.summary}.
+          </p>
+          <div className="conn-form-actions">
+            <Button variant="ghost" onClick={() => setConfirm(false)}>
+              Cancelar
+            </Button>
+            <Button variant="primary" icon={Rocket} onClick={() => void run("apply")}>
+              {ansible ? "Desplegar" : "Aplicar"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </section>
   )
 }

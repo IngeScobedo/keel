@@ -532,6 +532,7 @@ export function App() {
             <LiveConnections
               call={workspace.call}
               tick={workspace.inboxTick}
+              events={workspace.events}
               setup={setup}
               onSetupDone={() => setSetup(null)}
             />
