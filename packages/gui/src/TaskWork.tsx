@@ -1,7 +1,8 @@
-import type { TaskFlowView } from "@keel/core"
+import type { Effort, TaskFlowView } from "@keel/core"
 import { Flag, MessageSquare, Play, Send } from "lucide-react"
 import { useEffect, useState } from "react"
 import { useBaseGuard } from "./BaseGuard.js"
+import { ModelPill } from "./Composer.js"
 import { STAGE_LABEL } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { LiveTaskActions } from "./LiveTaskActions.js"
@@ -37,6 +38,8 @@ export function TaskWork({
   const [flow, setFlow] = useState<TaskFlowView | null>(null)
   const [text, setText] = useState("")
   const [provider, setProvider] = useState<"claude" | "codex">("claude")
+  // ADR-0019 §4: el modelo se elige al arrancar; parte del default de Ajustes.
+  const [pick, setPick] = useState<{ model: string | null; effort: Effort | null } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   const live = runs.find((r) => !TERMINAL.has(r.status))
@@ -53,6 +56,20 @@ export function TaskWork({
     }
   }, [call, task.id, task.revision, task.stage, runState])
   const done = task.lifecycle === "done"
+  const first = !latest
+  useEffect(() => {
+    if (!first) return
+    let alive = true
+    call("settings.get", {})
+      .then((s) => {
+        const d = s.default_models?.[provider]
+        if (alive) setPick(d ? { model: d.model, effort: d.effort } : null)
+      })
+      .catch(() => alive && setPick(null))
+    return () => {
+      alive = false
+    }
+  }, [call, first, provider])
   // ADR-0028: el primer run abre el worktree; antes, la base al día.
   const base = useBaseGuard(call)
   async function work() {
@@ -69,6 +86,9 @@ export function TaskWork({
         work_item_id: task.id,
         ...(text.trim() ? { text: text.trim() } : {}),
         ...(latest ? {} : { profile: provider }),
+        ...(latest || !pick?.model
+          ? {}
+          : { options: { model: pick.model, ...(pick.effort ? { effort: pick.effort } : {}) } }),
       })
       setText("")
       setFlow(r.flow)
@@ -138,6 +158,16 @@ export function TaskWork({
                 <option value="claude">Claude</option>
                 <option value="codex">Codex</option>
               </select>
+            )}
+            {!latest && (
+              <ModelPill
+                call={call}
+                provider={provider}
+                model={pick?.model ?? null}
+                effort={pick?.effort ?? null}
+                onPick={(model, effort) => setPick({ model, effort })}
+                foot="Para esta tarea · después se cambia desde su chat"
+              />
             )}
             <button
               type="submit"

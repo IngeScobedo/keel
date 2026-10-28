@@ -1,6 +1,7 @@
-import type { SettingsView } from "@keel/core"
+import type { Effort, SettingsView } from "@keel/core"
 import { Bot } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
+import { ModelPill } from "./Composer.js"
 import { mutationMeta } from "./client.js"
 import { Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -35,6 +36,7 @@ export function LiveProviders({ call }: { call: Call }) {
   async function update(patch: {
     approvals_timeout_ms?: number | null
     prompt_suggestions?: boolean
+    default_model?: { provider: "claude" | "codex"; model: string | null; effort?: Effort | null }
     limits?: {
       run_budget_usd?: number | null
       daily_budget_usd?: number | null
@@ -112,6 +114,48 @@ export function LiveProviders({ call }: { call: Call }) {
           niega: el tiempo nunca aprueba. Las preguntas del agente nunca vencen.
         </p>
       </label>
+      {view?.default_models && (
+        <div className="connection" data-testid="default-models">
+          <strong>Modelo al empezar una tarea</strong>
+          <div className="limits-row">
+            {(["claude", "codex"] as const).map((p) => {
+              const d = view.default_models?.[p]
+              return (
+                <span key={p} className="default-model">
+                  {p === "claude" ? "Claude" : "Codex"}
+                  <ModelPill
+                    call={call}
+                    provider={p}
+                    model={d?.model ?? null}
+                    effort={d?.effort ?? null}
+                    onPick={(model, effort) =>
+                      void update({ default_model: { provider: p, model, effort } })
+                    }
+                    foot="Para las tareas nuevas · en una tarea se cambia desde su chat"
+                  />
+                  {d?.source === "setting" && (
+                    <button
+                      type="button"
+                      className="button ghost"
+                      onClick={() => void update({ default_model: { provider: p, model: null } })}
+                    >
+                      Restablecer
+                    </button>
+                  )}
+                </span>
+              )
+            })}
+          </div>
+          <p className="muted">
+            {view.default_models.claude.source === "setting" ||
+            view.default_models.codex.source === "setting"
+              ? `Los eligió ${view.default_models.updated_by} · ${view.default_models.updated_at}. `
+              : `Sin elegir, Claude empieza con el del perfil (${view.default_models.claude.model ?? "—"}), bajo a propósito (ADR-0002). `}
+            Al pulsar «Trabajar» puedes elegir otro para esa tarea; sus runs siguientes heredan el
+            modelo.
+          </p>
+        </div>
+      )}
       {view?.limits && <Limits limits={view.limits} onSave={(limits) => void update({ limits })} />}
     </section>
   )

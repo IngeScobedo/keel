@@ -594,6 +594,22 @@ export class Daemon {
       },
       // Encendidas por decisión del humano (ADR-0020 §6) hasta que las apague.
       prompt_suggestions: { enabled: suggestions ? suggestions.value === true : true },
+      default_models: (() => {
+        const set = this.repo.getSetting(DEFAULT_MODELS)
+        const v = (set?.value ?? {}) as DefaultModels
+        const one = (p: "claude" | "codex", model: string | null, effort: Effort | null) => {
+          const c = v[p]
+          return c
+            ? { model: c.model, effort: c.effort ?? null, source: "setting" as const }
+            : { model, effort, source: "default" as const }
+        }
+        return {
+          claude: one("claude", this.profile.model, this.profile.effort ?? null),
+          codex: one("codex", this.codexProfile.model ?? null, null),
+          updated_by: set?.updated_by ?? null,
+          updated_at: set?.updated_at ?? null,
+        }
+      })(),
       limits: (() => {
         const l = this.limits
         const set = this.repo.getSetting(LIMITS)
@@ -2462,6 +2478,23 @@ export class Daemon {
             repo.setSetting(APPROVALS_TIMEOUT, p.approvals_timeout_ms, uow.actorId)
           if (p.prompt_suggestions !== undefined)
             repo.setSetting(PROMPT_SUGGESTIONS, p.prompt_suggestions, uow.actorId)
+          if (p.default_model) {
+            const prev = (repo.getSetting(DEFAULT_MODELS)?.value ?? {}) as DefaultModels
+            const { [p.default_model.provider]: _, ...rest } = prev
+            repo.setSetting(
+              DEFAULT_MODELS,
+              p.default_model.model === null
+                ? rest
+                : {
+                    ...rest,
+                    [p.default_model.provider]: {
+                      model: p.default_model.model,
+                      effort: p.default_model.effort ?? null,
+                    },
+                  },
+              uow.actorId,
+            )
+          }
           // ADR-0002 regla 3: el humano sube, baja o quita (null) los límites; queda a su nombre.
           if (p.limits) {
             const prev = (repo.getSetting(LIMITS)?.value ?? {}) as Partial<Limits>
@@ -2948,16 +2981,21 @@ export class Daemon {
         ErrorCode.invalidParams,
         "bypass sólo existe dentro de un worktree de git; este proyecto no usa git",
       )
-    const effort = o?.effort ?? null
+    // El modelo elegido al arrancar gana; si no, el default que eligió el humano en Ajustes.
+    const chosen = (this.repo.getSetting(DEFAULT_MODELS)?.value as DefaultModels | undefined)?.[
+      provider
+    ]
+    const useDefault = o?.model === undefined && chosen !== undefined
+    const effort = o?.effort ?? (useDefault ? chosen.effort : null) ?? null
     return provider === "claude"
       ? {
-          model: o?.model ?? this.profile.model,
+          model: o?.model ?? chosen?.model ?? this.profile.model,
           max_turns: o?.max_turns ?? this.profile.max_turns,
           permission_mode: mode,
           effort: effort ?? this.profile.effort,
         }
       : {
-          model: o?.model ?? this.codexProfile.model,
+          model: o?.model ?? chosen?.model ?? this.codexProfile.model,
           max_turns: null,
           permission_mode: mode,
           effort,
@@ -4616,6 +4654,9 @@ function codexEffort(e: Effort): "low" | "medium" | "high" {
 const CODEX_SUBSCRIPTION = "codex.subscription_enabled"
 const APPROVALS_TIMEOUT = "approvals.timeout_ms"
 const PROMPT_SUGGESTIONS = "claude.prompt_suggestions"
+/** ADR-0019 §4: el modelo con que arranca una tarea nueva, por proveedor. */
+const DEFAULT_MODELS = "runs.default_models"
+type DefaultModels = Partial<Record<"claude" | "codex", { model: string; effort: Effort | null }>>
 const LIMITS = "daemon.limits"
 
 /** Estados de un run en los que su agente conserva la capacidad. */

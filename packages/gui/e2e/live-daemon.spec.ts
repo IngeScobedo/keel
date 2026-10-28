@@ -314,3 +314,20 @@ test("presupuesto: el humano pone 50 por run y quita el tope del día", async ({
   await expect(form).toContainText("Los cambió")
   await expect(form.getByLabel("Presupuesto por run", { exact: true })).toHaveValue("50")
 })
+
+test("modelo al empezar una tarea: el humano lo elige en Ajustes y lo restablece", async ({
+  page,
+}) => {
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Project setup", exact: true }).click()
+  const box = page.getByTestId("default-models")
+  await expect(box).toContainText("Sin elegir")
+  await box.getByRole("button", { name: "Modelo y esfuerzo" }).first().click()
+  // Con el proveedor doble, la lista es sólo el modelo del perfil.
+  await page.getByRole("dialog", { name: "Modelo" }).getByRole("button", { name: /haiku/ }).click()
+  await expect(box).toContainText("Los eligió")
+  await box.getByRole("button", { name: "Restablecer" }).click()
+  await expect(box).toContainText("Sin elegir")
+})

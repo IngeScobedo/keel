@@ -106,12 +106,15 @@ export function ModelPill({
   model,
   effort,
   onPick,
+  foot,
 }: {
   call?: Call
   provider: "claude" | "codex"
   model: string | null
   effort: string | null
   onPick: (model: string, effort: Effort | null) => void
+  /** El pie del menú; por omisión, cuándo cambia en un run vivo. */
+  foot?: string
 }) {
   const [open, setOpen] = useState(false)
   const models = useModels(call, provider, open || !!model)
@@ -184,8 +187,8 @@ export function ModelPill({
           </>
         )}
         <p className="muted rc-pop-foot">
-          {provider === "codex" ? "Cambia desde el turno siguiente" : "Cambia en el turno en curso"}{" "}
-          · queda en el registro del run
+          {foot ??
+            `${provider === "codex" ? "Cambia desde el turno siguiente" : "Cambia en el turno en curso"} · queda en el registro del run`}
         </p>
       </Popover>
     </span>

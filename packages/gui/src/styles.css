@@ -3974,6 +3974,12 @@ button.rc-ledger-row:hover {
 .limits-row input[type="number"] {
   width: 120px;
 }
+.default-model {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
 .limits-check {
   display: flex;
   align-items: center;

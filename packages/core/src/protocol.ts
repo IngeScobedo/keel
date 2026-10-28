@@ -590,6 +590,26 @@ export const SettingsViewSchema = z.object({
   /** ADR-0020 §6: sugerencias de mensaje de Claude (cuestan tokens). */
   prompt_suggestions: z.object({ enabled: z.boolean() }),
   /**
+   * ADR-0019 §4: con qué modelo arranca una tarea nueva si el humano no elige otro al
+   * pulsar «Trabajar». `source: default` es el del perfil; `setting`, el que eligió el humano.
+   */
+  default_models: z
+    .object({
+      claude: z.object({
+        model: z.string().nullable(),
+        effort: EffortSchema.nullable(),
+        source: z.enum(["default", "setting"]),
+      }),
+      codex: z.object({
+        model: z.string().nullable(),
+        effort: EffortSchema.nullable(),
+        source: z.enum(["default", "setting"]),
+      }),
+      updated_by: z.string().nullable(),
+      updated_at: z.string().nullable(),
+    })
+    .optional(),
+  /**
    * ADR-0002 regla 5: presupuesto estimado y concurrencia. Defaults bajos; subirlos
    * es acción del humano (aquí o con flags del daemon, que mandan).
    */
@@ -1468,6 +1488,14 @@ export const Methods = {
         .nullable()
         .optional(),
       prompt_suggestions: z.boolean().optional(),
+      /** model null vuelve al del perfil. */
+      default_model: z
+        .object({
+          provider: z.enum(["claude", "codex"]),
+          model: z.string().min(1).max(120).nullable(),
+          effort: EffortSchema.nullable().optional(),
+        })
+        .optional(),
       /** ADR-0002 regla 5: subir (o bajar) el presupuesto y la concurrencia. */
       limits: z
         .object({

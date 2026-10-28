@@ -150,3 +150,46 @@ describe("ADR-0021: seguir una tarea que espera al humano", () => {
     await daemon.idle()
   })
 })
+
+describe("ADR-0019 §4: el modelo con que empieza una tarea", () => {
+  test("el default de Ajustes se usa si al arrancar no se elige otro", async () => {
+    const { daemon, human } = await boot()
+    const before = (await human.call("settings.get", {})) as {
+      default_models: { claude: { model: string; source: string } }
+    }
+    expect(before.default_models.claude).toMatchObject({ model: "haiku", source: "default" })
+    await human.call("settings.update", {
+      ...meta(),
+      default_model: { provider: "claude", model: "opus", effort: "high" },
+    })
+    const start = async (options?: Record<string, unknown>) => {
+      const w = (await human.call("work_items.create", {
+        ...meta(),
+        title: "t",
+        kind: "chore",
+      })) as {
+        id: string
+      }
+      await human.call("work_items.transition", { ...meta(), work_item_id: w.id, to: "planned" })
+      const run = (await human.call("runs.start", {
+        ...meta(),
+        work_item_id: w.id,
+        purpose: "execute",
+        ...(options ? { options } : {}),
+      })) as { id: string }
+      await daemon.idle()
+      return JSON.parse(daemon.repo.getRun(run.id)?.context_manifest_json ?? "{}").options
+    }
+    expect(await start()).toMatchObject({ model: "opus", effort: "high" })
+    // Lo elegido al arrancar gana, y no hereda el esfuerzo del default.
+    expect(await start({ model: "sonnet" })).toMatchObject({ model: "sonnet" })
+    expect((await start({ model: "sonnet" })).effort).not.toBe("high")
+    // Restablecer vuelve al del perfil.
+    const reset = (await human.call("settings.update", {
+      ...meta(),
+      default_model: { provider: "claude", model: null },
+    })) as { default_models: { claude: { model: string; source: string } } }
+    expect(reset.default_models.claude).toMatchObject({ model: "haiku", source: "default" })
+    expect(await start()).toMatchObject({ model: "haiku" })
+  })
+})
