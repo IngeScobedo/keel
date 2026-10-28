@@ -1393,9 +1393,17 @@ export class Daemon {
           provider?: string
           options?: Params<"runs.start">["options"]
         }
+        const w = this.requireWorkItem(parent.work_item_id)
+        // ADR-0021 §3: una tarea del método es una sola conversación en su worktree.
+        // Escribirle desde el chat sigue por el mismo camino que «Trabajar»: el propósito
+        // de su etapa, el worktree de la tarea y la sesión del último run.
+        if (repo.getFlow(w.id))
+          return this.startFlowRun(uow, w, p.text, {
+            source: "human",
+            ...(p.options ? { options: p.options } : {}),
+          })
         // Una ejecución revisada o fallida vuelve a planned por decisión del humano
         // (las mismas aristas que work_items.transition) y sigue en su worktree.
-        const w = this.requireWorkItem(parent.work_item_id)
         // ADR-0021: una tarea del método que espera al humano también sigue al escribirle.
         if (
           parent.purpose === "execute" &&
@@ -4130,7 +4138,9 @@ export class Daemon {
     const parentCwd = m.cwd ?? m.provider_process?.cwd ?? null
     if (id && parentCwd && parentCwd !== cwd) {
       this.emitSystem("run.resume_skipped", run.id, {
-        reason: "el worktree del run anterior ya no existe; el agente empieza una sesión nueva",
+        reason: existsSync(parentCwd)
+          ? "el run nuevo no trabaja en la carpeta del anterior; el agente empieza una sesión nueva"
+          : "el worktree del run anterior ya no existe; el agente empieza una sesión nueva",
         parent_cwd: parentCwd,
         cwd,
       })

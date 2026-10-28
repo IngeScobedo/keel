@@ -397,6 +397,29 @@ describe("ADR-0021: ciclo formal", () => {
   }, 30_000)
 })
 
+describe("ADR-0021 §3: una tarea, una conversación", () => {
+  test("KEEL-6: escribirle desde el chat a un run terminado sigue en el worktree de la tarea y retoma la sesión", async () => {
+    const s = await boot()
+    const w = await s.task("Para qué sirve familyId")
+    s.scripts.push(async () => {})
+    s.scripts.push(async () => {})
+    await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })
+    await s.until(() => s.runsOf(w.id).length === 1)
+    const first = s.runsOf(w.id)[0] as { id: string }
+    await s.until(() => s.daemon.repo.getRun(first.id)?.status === "completed")
+    // Lo que hace el chat cuando el run ya terminó.
+    await s.human.call("runs.continue", { ...meta(), run_id: first.id, text: "Elijo B" })
+    await s.until(() => s.seen.length === 2)
+    const [a, b] = s.seen as [Turn, Turn]
+    expect(String(a.options.cwd)).toContain("worktrees")
+    expect(b.options.cwd).toBe(a.options.cwd)
+    expect(b.options.resume).toBe(`s-${first.id}`)
+    expect(s.events("run.resume_skipped")).toHaveLength(0)
+    expect(s.runsOf(w.id).map((r) => r.purpose)).toEqual(["plan", "plan"])
+    expect(s.runsOf(w.id)[1]?.parent_run_id).toBe(first.id)
+  })
+})
+
 describe("ADR-0021: reglas que el agente no se salta", () => {
   test("un humano no avanza etapas y un agente sólo opera su tarea; devolver es del humano", async () => {
     const s = await boot()
