@@ -49,3 +49,28 @@ test("Ansible: check con su matriz en vivo y despliegue de lo revisado", async (
   await expect(applied).toContainText("2 cambios")
   if (shots) await page.screenshot({ path: join(shots, "ansible-deploy.png") })
 })
+
+test("Ansible: el destino se crea desde el formulario, sobre una conexión SSH", async ({
+  page,
+}) => {
+  test.setTimeout(45_000)
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Connections", exact: true }).click()
+  await page.getByRole("button", { name: "Nueva conexión" }).click()
+  const form = page.getByTestId("new-connection")
+  await form.getByLabel("Nombre de la conexión").fill("casamatte")
+  await form.getByLabel("Tipo", { exact: true }).selectOption("ansible")
+  await form.getByLabel("Entorno", { exact: true }).selectOption("prod")
+  await form.getByLabel("Carpeta del playbook (en el proyecto)").fill("infra/ansible")
+  await form.getByLabel("Playbook", { exact: true }).fill("site.yml")
+  await form.getByLabel("Hosts (host=conexión, separados por coma)").fill("web=prod-web")
+  await form.getByLabel("Tags por defecto (separados por coma)").fill("deploy")
+  await form.getByRole("button", { name: "Añadir", exact: true }).click()
+  const conn = page.getByTestId("connection")
+  await expect(conn).toContainText("casamatte")
+  await expect(conn).toContainText("web → prod-web")
+  await expect(conn).toContainText("Contraseña de ansible-vault")
+  await expect(conn.getByTestId("deploy").getByRole("button", { name: "Check" })).toBeVisible()
+})

@@ -865,13 +865,15 @@ function NewConnection({
               onChange={(e) => {
                 const t = e.target.value as Kind
                 setType(t)
-                setMethod(t === "postgres" ? "password" : "key")
+                // Ansible: la contraseña de ansible-vault se pide hasta que la guardes.
+                setMethod(t === "postgres" ? "password" : t === "ansible" ? "ask" : "key")
               }}
             >
               <option value="ssh">SSH</option>
               <option value="postgres">PostgreSQL</option>
               <option value="sqlite">SQLite</option>
               <option value="terraform">Terraform</option>
+              <option value="ansible">Ansible</option>
             </select>
           </label>
           <label>
