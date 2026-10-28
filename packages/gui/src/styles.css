@@ -4466,3 +4466,98 @@ button.rc-ledger-row:hover {
   padding: 6px 12px;
   font-size: 12px;
 }
+
+/* ADR-0034 §5: el Markdown del agente en la actividad, cortado con degradado. */
+.md-preview {
+  position: relative;
+  min-width: 0;
+}
+.md-preview-body {
+  overflow: hidden;
+}
+.md-preview[data-cut] .md-preview-body {
+  -webkit-mask-image: linear-gradient(to bottom, var(--color-text-primary) 55%, transparent);
+  mask-image: linear-gradient(to bottom, var(--color-text-primary) 55%, transparent);
+}
+.md-more {
+  margin-top: 2px;
+  padding: 2px 0;
+  background: transparent;
+  color: var(--color-accent-default);
+  font-size: var(--text-meta-size);
+}
+.md-more:hover {
+  text-decoration: underline;
+}
+.md-detail {
+  max-height: 70vh;
+  overflow: auto;
+  padding-right: var(--space-4);
+}
+.md-quote {
+  border-left: 2px solid var(--color-border-strong);
+  padding-left: var(--space-5);
+  color: var(--color-text-secondary);
+}
+.md-hr {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: var(--space-2) 0;
+}
+.md-task {
+  list-style: none;
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  margin-left: -18px;
+}
+.md-box {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  transform: translateY(1px);
+}
+.md-task[data-done] .md-box {
+  background: var(--color-status-succeeded);
+  border-color: var(--color-status-succeeded);
+}
+.md-task[data-done] > span:last-child {
+  color: var(--color-text-tertiary);
+}
+.md-link {
+  color: var(--color-accent-default);
+  text-decoration: underline dotted;
+  cursor: help;
+}
+.md-ref {
+  display: inline;
+  padding: 0 3px;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-default);
+  font-size: 0.92em;
+}
+.md-ref:hover {
+  text-decoration: underline;
+}
+.breadcrumbs .crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.breadcrumbs .crumb button:hover {
+  color: var(--color-text-primary);
+}
+/* Crece con el texto hasta un tope; field-sizing donde exista, si no queda en sus filas. */
+.grow-input {
+  field-sizing: content;
+  min-height: var(--row-comfortable);
+  max-height: 240px;
+  resize: none;
+}
+.comment-form:has(.grow-input) {
+  align-items: flex-end;
+}

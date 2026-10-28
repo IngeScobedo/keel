@@ -1,6 +1,6 @@
 import type { EventNotification, VisualState } from "@keel/core"
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, GitBranch, Search } from "lucide-react"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { MODES } from "./Composer.js"
 import { clock } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
@@ -10,6 +10,7 @@ import { Operations } from "./Operations.js"
 import { RunChat } from "./RunChat.js"
 import type { Density } from "./ToolCards.js"
 import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
+import { usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 const TERMINAL = new Set(["completed", "failed", "cancelled", "interrupted"])
@@ -97,6 +98,11 @@ type RunViewProps = {
   /** Para mostrar la cadena de runs de una conversación (ADR-0019 §3). */
   runs?: Run[]
   onRun?: (run: Run) => void
+  /**
+   * ADR-0021: seguir al run hijo de una etapa nueva. Reemplaza el lugar en vez de
+   * apilarlo, o «atrás» volvería al padre, que reenviaría al hijo (ADR-0034 §4).
+   */
+  onFollow?: (run: Run) => void
   /** Abrir otra tarea (la que creó el agente) desde el chat. */
   onOpenTask?: (id: string) => void
 }
@@ -131,9 +137,10 @@ function LiveRunView({
   call,
   runs,
   onRun,
+  onFollow,
   onOpenTask,
 }: RunViewProps) {
-  const [tab, setTab] = useState<(typeof liveTabs)[number]>("Chat")
+  const [tab, setTab] = usePlaceState<(typeof liveTabs)[number]>("tab", "Chat")
   const [density, setDensity] = useState<Density>(initialDensity)
   const [stopError, setStopError] = useState("")
   const [query, setQuery] = useState("")
@@ -150,9 +157,13 @@ function LiveRunView({
   const running = !TERMINAL.has(run.status)
   // ADR-0021: Keel sigue la conversación en otro run al cambiar de etapa; la vista lo sigue.
   const child = runs?.find((r) => r.parent_run_id === run.id)
+  const follow = useRef(onFollow ?? onRun)
+  follow.current = onFollow ?? onRun
+  const childId = child?.id
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sólo al aparecer un hijo nuevo.
   useEffect(() => {
-    if (child && onRun) onRun(child)
-  }, [child, onRun])
+    if (child) follow.current?.(child)
+  }, [childId])
   const mode = run.options?.permission_mode ?? "ask"
   const started = runEvents.find((e) => e.kind === "run.created")?.received_at ?? null
   return (
@@ -333,7 +344,7 @@ function CostView({ run, demo }: { run: Run; demo: boolean }) {
 }
 
 function DemoRunView({ run, task, demo, events, onBack, onTask, call }: RunViewProps) {
-  const [tab, setTab] = useState<(typeof runTabs)[number]>(demo ? "Agents" : "Timeline")
+  const [tab, setTab] = usePlaceState<(typeof runTabs)[number]>("tab", demo ? "Agents" : "Timeline")
   const [stopError, setStopError] = useState("")
   const [query, setQuery] = useState("")
   const [expanded, setExpanded] = useState("tool-4")

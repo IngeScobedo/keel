@@ -24,7 +24,7 @@ import {
   Sun,
   Terminal,
 } from "lucide-react"
-import { type FormEvent, useEffect, useState } from "react"
+import { type FormEvent, useCallback, useEffect, useState } from "react"
 import { Board } from "./Board.js"
 import { CloseTask } from "./CloseTask.js"
 import { ControlPlane } from "./ControlPlane.js"
@@ -37,6 +37,7 @@ import { LiveInbox } from "./LiveInbox.js"
 import { LivePlugins } from "./LivePlugins.js"
 import { LiveProfile } from "./LiveProfile.js"
 import { LiveProviders } from "./LiveProviders.js"
+import { Markdown, MarkdownRefs } from "./Markdown.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
 import { useNeedsYou } from "./needs-you.js"
 import { Permissions } from "./Permissions.js"
@@ -46,6 +47,7 @@ import { SecretPrompts } from "./SecretPrompts.js"
 import { SETUP_EVENT } from "./SetupCard.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
 import { Button, Hint, Modal } from "./ui.js"
+import { PlaceProvider, useNavigation } from "./useNav.js"
 import { useWorkspace } from "./useWorkspace.js"
 
 const nav = [
@@ -72,10 +74,17 @@ function initialTheme() {
 export function App() {
   const workspace = useWorkspace()
   const waitingYou = useNeedsYou(workspace)
-  const [page, setPage] = useState<Page>("board")
+  // ADR-0034 §4: la vista, la entidad y lo abierto viven en la pila de lugares.
+  const mainRoot = useCallback(() => document.querySelector(".main-content"), [])
+  const navigation = useNavigation(mainRoot)
+  const { place, navigate } = navigation
+  const page = place.page as Page
+  const selectedTask = place.task ?? ""
+  const selectedRun = place.run ?? ""
+  const setPage = (to: Page) => navigation.navigate({ page: to })
+  /** «Atrás» de la vista: desapila; si no hay a dónde, va a la sección. */
+  const backOr = (to: Page) => () => (navigation.nav.index > 0 ? navigation.back() : setPage(to))
   const [theme, setTheme] = useState(initialTheme)
-  const [selectedTask, setSelectedTask] = useState("")
-  const [selectedRun, setSelectedRun] = useState("")
   const [palette, setPalette] = useState(false)
   const [paletteQuery, setPaletteQuery] = useState("")
   /** ADR-0024 §3: «preguntar al proyecto…» desde ⌘K. */
@@ -90,11 +99,11 @@ export function App() {
       setSetup(
         d.kind === "connection" ? { approval_id: d.approval_id, proposal: d.proposal } : null,
       )
-      setPage("connections")
+      navigate({ page: "connections" })
     }
     window.addEventListener(SETUP_EVENT, on)
     return () => window.removeEventListener(SETUP_EVENT, on)
-  }, [])
+  }, [navigate])
   const [newTask, setNewTask] = useState(false)
   const [connection, setConnection] = useState(false)
   const [title, setTitle] = useState("")
@@ -142,15 +151,31 @@ export function App() {
   const activeRuns = workspace.runs.filter((item) => item.status === "running")
 
   function openTask(item: WorkItem) {
-    setSelectedTask(item.id)
-    setPage("task")
+    navigation.navigate({ page: "task", task: item.id })
     setPalette(false)
   }
   function openRun(item: Run) {
-    setSelectedRun(item.id)
-    setPage("run")
+    navigation.navigate({ page: "run", run: item.id })
     setPalette(false)
   }
+  const byKey = (key: string) => workspace.work_items.find((w) => w.display_id === key)
+  const refs = {
+    has: (key: string) => byKey(key) !== undefined,
+    open: (key: string) => {
+      const item = byKey(key)
+      if (item) openTask(item)
+    },
+  }
+  const sectionLabel = (id: string) => nav.find((n) => n.id === id)?.label ?? id
+  const crumbs = navigation.trail.map(({ place: p, back }) => ({
+    back,
+    label:
+      p.page === "task"
+        ? (workspace.work_items.find((w) => w.id === p.task)?.display_id ?? "Tarea")
+        : p.page === "run"
+          ? `run ${(p.run ?? "").slice(-6)}`
+          : sectionLabel(p.page),
+  }))
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     try {
@@ -416,185 +441,205 @@ export function App() {
         </button>
       </nav>
       <main className="main-content">
-        {workspace.error && !connection && (
-          <div className="error-banner" role="alert">
-            {workspace.error}
-            <Button onClick={() => setConnection(true)}>Revisar conexión</Button>
-          </div>
-        )}
-        {page === "board" && (
-          <Board
-            waitingYou={waitingYou}
-            tasks={workspace.work_items}
-            runs={workspace.runs}
-            details={details}
-            demo={demo}
-            onSelect={openTask}
-            onRun={openRun}
-            onNew={() => setNewTask(true)}
-            {...(workspace.mode === "live"
-              ? {
-                  onTransition: async (item, to) => {
-                    await workspace.call("work_items.transition", {
-                      ...mutationMeta(item.revision),
-                      work_item_id: item.id,
-                      to,
-                      reason: "movida en el tablero",
-                    })
-                  },
-                  onClose: setClosing,
-                }
-              : {})}
-          />
-        )}
-        {page === "task" &&
-          (task ? (
-            <Inspector
-              waitingYou={waitingYou}
-              key={task.id}
-              task={task}
-              {...(details[task.id] ? { details: details[task.id] } : {})}
-              demo={demo}
-              runs={workspace.runs}
-              events={workspace.events}
-              onBack={() => setPage("board")}
-              onRun={openRun}
-              onUpdate={workspace.updateDemo}
-              notes={sessionNotes[task.id] ?? []}
-              {...(workspace.mode === "live" ? { call: workspace.call } : {})}
-              tasks={workspace.work_items}
-              onOpenTask={openTask}
-              {...(workspace.mode === "live" ? { onCloseTask: () => setClosing(task) } : {})}
-              onAddNote={(text) =>
-                setSessionNotes((old) => ({
-                  ...old,
-                  [task.id]: [{ id: crypto.randomUUID(), text }, ...(old[task.id] ?? [])],
-                }))
-              }
-            />
-          ) : (
-            <div className="padded">
-              <Button onClick={() => setPage("board")}>Volver al tablero</Button>
-              <Hint>La tarea no pertenece al workspace conectado.</Hint>
-            </div>
-          ))}
-        {page === "runs" && (
-          <RunsList runs={workspace.runs} tasks={workspace.work_items} onRun={openRun} />
-        )}
-        {page === "run" &&
-          (run ? (
-            <RunView
-              key={run.id}
-              run={run}
-              {...(runTask ? { task: runTask } : {})}
-              demo={demo}
-              events={workspace.events}
-              onBack={() => setPage("runs")}
-              onTask={() => {
-                if (runTask) openTask(runTask)
-              }}
-              {...(workspace.mode === "live" ? { call: workspace.call } : {})}
-              runs={workspace.runs}
-              onRun={openRun}
-              onOpenTask={(id) => {
-                const item = workspace.work_items.find((w) => w.id === id)
-                if (item) openTask(item)
-              }}
-            />
-          ) : (
-            <div className="padded">
-              <Button onClick={() => setPage("runs")}>Volver a runs</Button>
-            </div>
-          ))}
-        {page === "inbox" && workspace.mode === "live" && (
-          <LiveInbox
-            call={workspace.call}
-            tick={workspace.inboxTick}
-            tasks={workspace.work_items}
-            runs={workspace.runs}
-            onTask={openTask}
-            onRun={openRun}
-          />
-        )}
-        {page === "inbox" && workspace.mode !== "live" && (
-          <Inbox
-            key={workspace.mode}
-            demo={demo}
-            tasks={workspace.work_items}
-            runs={workspace.runs}
-            events={workspace.events}
-            onTask={openTask}
-          />
-        )}
-        {page === "permissions" &&
-          (workspace.mode === "live" ? (
-            <Permissions
-              call={workspace.call}
-              tick={workspace.inboxTick}
-              tasks={workspace.work_items}
-              runs={workspace.runs}
-            />
-          ) : (
-            <div className="padded">
-              <Hint>Conecta el daemon para ver y revocar lo que has permitido.</Hint>
-            </div>
-          ))}
-        {page === "agents" && <ControlPlane demo={demo} />}
-        {page === "connections" &&
-          (workspace.mode === "live" ? (
-            <LiveConnections
-              call={workspace.call}
-              projectRoot={workspace.health?.project?.root_path ?? ""}
-              tick={workspace.inboxTick}
-              events={workspace.events}
-              setup={setup}
-              onSetupDone={() => setSetup(null)}
-            />
-          ) : (
-            <Connections demo={demo} />
-          ))}
-        {page === "conversation" &&
-          (workspace.mode === "live" ? (
-            <ProjectConversation
-              call={workspace.call}
-              runs={workspace.runs}
-              events={workspace.events}
-              projectName={currentProject?.name || repoName(workspace.health?.project?.root_path)}
-              question={question}
-              onQuestionSent={() => setQuestion("")}
-              onOpenTask={(id) => {
-                const item = workspace.work_items.find((w) => w.id === id)
-                if (item) openTask(item)
-              }}
-              onBack={() => setPage("board")}
-            />
-          ) : (
-            <div className="padded">
-              <Hint>Conecta el daemon para preguntarle al proyecto.</Hint>
-            </div>
-          ))}
-        {page === "workbench" && <Workbench demo={demo} />}
-        {page === "design" && <DesignStudio />}
-        {page === "settings" && (
-          <>
-            <Settings
-              mode={workspace.mode}
-              onConnect={() => setConnection(true)}
-              onDemo={() => {
-                void workspace.showDemo()
-                setPage("board")
-              }}
-            />
-            {workspace.mode === "live" && (
-              <div className="padded">
-                <LiveProfile call={workspace.call} />
-                <LiveProviders call={workspace.call} />
-                <LivePlugins call={workspace.call} />
+        <PlaceProvider
+          value={{
+            place,
+            setPlaceState: navigation.setPlaceState,
+            navigate: navigation.navigate,
+            goBack: navigation.goBack,
+            crumbs,
+          }}
+        >
+          <MarkdownRefs value={refs}>
+            {workspace.error && !connection && (
+              <div className="error-banner" role="alert">
+                {workspace.error}
+                <Button onClick={() => setConnection(true)}>Revisar conexión</Button>
               </div>
             )}
-          </>
-        )}
+            {page === "board" && (
+              <Board
+                waitingYou={waitingYou}
+                tasks={workspace.work_items}
+                runs={workspace.runs}
+                details={details}
+                demo={demo}
+                onSelect={openTask}
+                onRun={openRun}
+                onNew={() => setNewTask(true)}
+                {...(workspace.mode === "live"
+                  ? {
+                      onTransition: async (item, to) => {
+                        await workspace.call("work_items.transition", {
+                          ...mutationMeta(item.revision),
+                          work_item_id: item.id,
+                          to,
+                          reason: "movida en el tablero",
+                        })
+                      },
+                      onClose: setClosing,
+                    }
+                  : {})}
+              />
+            )}
+            {page === "task" &&
+              (task ? (
+                <Inspector
+                  waitingYou={waitingYou}
+                  key={task.id}
+                  task={task}
+                  {...(details[task.id] ? { details: details[task.id] } : {})}
+                  demo={demo}
+                  runs={workspace.runs}
+                  events={workspace.events}
+                  onBack={backOr("board")}
+                  onRun={openRun}
+                  onUpdate={workspace.updateDemo}
+                  notes={sessionNotes[task.id] ?? []}
+                  {...(workspace.mode === "live" ? { call: workspace.call } : {})}
+                  tasks={workspace.work_items}
+                  onOpenTask={openTask}
+                  {...(workspace.mode === "live" ? { onCloseTask: () => setClosing(task) } : {})}
+                  onAddNote={(text) =>
+                    setSessionNotes((old) => ({
+                      ...old,
+                      [task.id]: [{ id: crypto.randomUUID(), text }, ...(old[task.id] ?? [])],
+                    }))
+                  }
+                />
+              ) : (
+                <div className="padded">
+                  <Button onClick={() => setPage("board")}>Volver al tablero</Button>
+                  <Hint>La tarea no pertenece al workspace conectado.</Hint>
+                </div>
+              ))}
+            {page === "runs" && (
+              <RunsList runs={workspace.runs} tasks={workspace.work_items} onRun={openRun} />
+            )}
+            {page === "run" &&
+              (run ? (
+                <RunView
+                  key={run.id}
+                  run={run}
+                  {...(runTask ? { task: runTask } : {})}
+                  demo={demo}
+                  events={workspace.events}
+                  onBack={backOr("runs")}
+                  onFollow={(r) => navigation.replace({ page: "run", run: r.id })}
+                  onTask={() => {
+                    if (runTask) openTask(runTask)
+                  }}
+                  {...(workspace.mode === "live" ? { call: workspace.call } : {})}
+                  runs={workspace.runs}
+                  onRun={openRun}
+                  onOpenTask={(id) => {
+                    const item = workspace.work_items.find((w) => w.id === id)
+                    if (item) openTask(item)
+                  }}
+                />
+              ) : (
+                <div className="padded">
+                  <Button onClick={() => setPage("runs")}>Volver a runs</Button>
+                </div>
+              ))}
+            {page === "inbox" && workspace.mode === "live" && (
+              <LiveInbox
+                call={workspace.call}
+                tick={workspace.inboxTick}
+                tasks={workspace.work_items}
+                runs={workspace.runs}
+                onTask={openTask}
+                onRun={openRun}
+              />
+            )}
+            {page === "inbox" && workspace.mode !== "live" && (
+              <Inbox
+                key={workspace.mode}
+                demo={demo}
+                tasks={workspace.work_items}
+                runs={workspace.runs}
+                events={workspace.events}
+                onTask={openTask}
+              />
+            )}
+            {page === "permissions" &&
+              (workspace.mode === "live" ? (
+                <Permissions
+                  call={workspace.call}
+                  tick={workspace.inboxTick}
+                  tasks={workspace.work_items}
+                  runs={workspace.runs}
+                />
+              ) : (
+                <div className="padded">
+                  <Hint>Conecta el daemon para ver y revocar lo que has permitido.</Hint>
+                </div>
+              ))}
+            {page === "agents" && <ControlPlane demo={demo} />}
+            {page === "connections" &&
+              (workspace.mode === "live" ? (
+                <LiveConnections
+                  call={workspace.call}
+                  projectRoot={workspace.health?.project?.root_path ?? ""}
+                  tick={workspace.inboxTick}
+                  events={workspace.events}
+                  setup={setup}
+                  onSetupDone={() => setSetup(null)}
+                />
+              ) : (
+                <Connections demo={demo} />
+              ))}
+            {page === "conversation" &&
+              (workspace.mode === "live" ? (
+                <ProjectConversation
+                  call={workspace.call}
+                  runs={workspace.runs}
+                  events={workspace.events}
+                  projectName={
+                    currentProject?.name || repoName(workspace.health?.project?.root_path)
+                  }
+                  question={question}
+                  onQuestionSent={() => setQuestion("")}
+                  onOpenTask={(id) => {
+                    const item = workspace.work_items.find((w) => w.id === id)
+                    if (item) openTask(item)
+                  }}
+                  onBack={backOr("board")}
+                />
+              ) : (
+                <div className="padded">
+                  <Hint>Conecta el daemon para preguntarle al proyecto.</Hint>
+                </div>
+              ))}
+            {page === "workbench" && <Workbench demo={demo} />}
+            {page === "design" && <DesignStudio />}
+            {page === "settings" && (
+              <>
+                <Settings
+                  mode={workspace.mode}
+                  onConnect={() => setConnection(true)}
+                  onDemo={() => {
+                    void workspace.showDemo()
+                    setPage("board")
+                  }}
+                />
+                {workspace.mode === "live" && (
+                  <div className="padded">
+                    <LiveProfile call={workspace.call} />
+                    <LiveProviders call={workspace.call} />
+                    <LivePlugins call={workspace.call} />
+                  </div>
+                )}
+              </>
+            )}
+          </MarkdownRefs>
+        </PlaceProvider>
       </main>
+      {place.detail && (
+        <Modal title={place.detail.title} onClose={navigation.back} wide>
+          <Markdown className="md-detail" text={place.detail.text} />
+        </Modal>
+      )}
       <footer className="status-bar">
         <span>
           <GitIcon />

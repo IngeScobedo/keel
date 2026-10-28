@@ -124,7 +124,13 @@ const text = (v: unknown, max = 160) => {
 }
 
 /** Resumen legible de un evento del run; `null` si es ruido (proyecciones, deltas). */
-export function summarizeEvent(event: EventNotification): { title: string; detail: string } | null {
+/**
+ * Una línea de actividad por evento. `markdown` lleva el texto completo del agente o de
+ * la nota, sin cortar, para renderizarlo (ADR-0034 §5); `detail` es el resumen plano.
+ */
+export function summarizeEvent(
+  event: EventNotification,
+): { title: string; detail: string; markdown?: string } | null {
   const p = (event.payload ?? {}) as Loose
   switch (event.kind) {
     case "hook.PreToolUse":
@@ -147,14 +153,21 @@ export function summarizeEvent(event: EventNotification): { title: string; detai
     case "sdk.assistant": {
       const content = ((p.message as Loose | undefined)?.content ?? []) as Loose[]
       const said = content.filter((c) => c.type === "text").map((c) => String(c.text))
-      return said.length ? { title: "El agente dice", detail: text(said.join("\n"), 600) } : null
+      if (!said.length) return null
+      const all = said.join("\n")
+      return { title: "El agente dice", detail: text(all, 600), markdown: all }
     }
     case "sdk.result":
-      return { title: "Resultado", detail: text(p.result ?? p.subtype, 1200) }
+      return {
+        title: "Resultado",
+        detail: text(p.result ?? p.subtype, 1200),
+        ...(typeof p.result === "string" && p.result ? { markdown: p.result } : {}),
+      }
     case "note.added":
       return {
         title: `Nota · ${actorLabel(String(p.author)).label}`,
         detail: text(p.content_markdown, 300),
+        ...(typeof p.content_markdown === "string" ? { markdown: p.content_markdown } : {}),
       }
     default:
       if (event.kind === "codex.app.item/completed" || event.kind === "codex.item.completed") {

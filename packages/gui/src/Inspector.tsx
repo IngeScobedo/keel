@@ -2,7 +2,6 @@ import type { EventNotification, Methods } from "@keel/core"
 import {
   ArrowLeft,
   Check,
-  ChevronRight,
   FileCode2,
   FileText,
   GitBranch,
@@ -13,6 +12,7 @@ import { useEffect, useState } from "react"
 import { mutationMeta } from "./client.js"
 import { EvidencePanel } from "./Evidence.js"
 import { demoActivity, demoDiff } from "./fixtures.js"
+import { MarkdownPreview } from "./Markdown.js"
 import {
   actorLabel,
   formatCost,
@@ -24,6 +24,7 @@ import {
 import { ResearchPanel } from "./Research.js"
 import { FeaturePlan, TaskWork } from "./TaskWork.js"
 import { Button, Empty, Hint, Modal, Status, Tabs } from "./ui.js"
+import { Trail, usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -74,7 +75,7 @@ export function Inspector({
   /** ADR-0027: cerrar a mano con motivo y evidencia. */
   onCloseTask?: () => void
 }) {
-  const [tab, setTab] = useState<(typeof taskTabs)[number]>("Activity")
+  const [tab, setTab] = usePlaceState<(typeof taskTabs)[number]>("tab", "Activity")
   const [draft, setDraft] = useState("")
   const [checks, setChecks] = useState([true, true, false, false, false])
   const [confirmDone, setConfirmDone] = useState(false)
@@ -210,13 +211,7 @@ export function Inspector({
         </section>
       </aside>
       <section className="task-main">
-        <div className="breadcrumbs">
-          <button type="button" onClick={onBack}>
-            {demo ? "keel-api" : "Board"}
-          </button>
-          <ChevronRight size={12} />
-          <span className="mono">{task.display_id}</span>
-        </div>
+        <Trail />
         <h1>{task.title}</h1>
         <p className="task-spec">
           {demo
@@ -254,9 +249,14 @@ export function Inspector({
           <>
             <div className="comment-form">
               <span className="avatar">YO</span>
-              <input
+              {/* Markdown de varias líneas: crece con el texto; Ctrl/⌘+Enter publica. */}
+              <textarea
+                className="grow-input"
+                rows={1}
                 aria-label={demo ? "Comentario local" : "Nota para la tarea"}
-                placeholder={demo ? "Write a local note…" : "Escribe una nota (queda a tu nombre)…"}
+                placeholder={
+                  demo ? "Write a local note…" : "Escribe una nota en Markdown (queda a tu nombre)…"
+                }
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -278,7 +278,10 @@ export function Inspector({
                     </span>
                     <div>
                       <strong title={note.author}>{who.label}</strong>
-                      <p>{note.content_markdown}</p>
+                      <MarkdownPreview
+                        text={note.content_markdown}
+                        title={`Nota de ${who.label} · ${task.display_id}`}
+                      />
                     </div>
                     <time>{new Date(note.created_at).toLocaleTimeString()}</time>
                   </article>
@@ -316,7 +319,14 @@ export function Inspector({
                         <span className="mono muted">#{event.event_seq}</span>
                         <div>
                           <strong>{s.title}</strong>
-                          {s.detail && <p className="mono text-block">{s.detail}</p>}
+                          {s.markdown ? (
+                            <MarkdownPreview
+                              text={s.markdown}
+                              title={`${s.title} · ${task.display_id} · #${event.event_seq}`}
+                            />
+                          ) : (
+                            s.detail && <p className="mono text-block">{s.detail}</p>
+                          )}
                         </div>
                         <time>{new Date(event.received_at).toLocaleTimeString()}</time>
                       </article>,
@@ -434,10 +444,13 @@ export function Inspector({
             </div>
             {!demo &&
               daemonNotes.map((note) => (
-                <p className="note" key={note.id}>
-                  <strong title={note.author}>{actorLabel(note.author).label}: </strong>
-                  {note.content_markdown}
-                </p>
+                <div className="note" key={note.id}>
+                  <strong title={note.author}>{actorLabel(note.author).label}</strong>
+                  <MarkdownPreview
+                    text={note.content_markdown}
+                    title={`Nota de ${actorLabel(note.author).label} · ${task.display_id}`}
+                  />
+                </div>
               ))}
             {demo && notes.length
               ? notes.map((note) => (
