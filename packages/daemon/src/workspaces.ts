@@ -24,6 +24,7 @@ import { basename, dirname, join, relative } from "node:path"
 import {
   BRANCH_PREFIX,
   type Changes,
+  canonical,
   captureChanges,
   createWorktree,
   GitError,
@@ -243,7 +244,9 @@ export class GitWorktreeDriver implements WorkspaceDriver {
    * estén vacíos, sin salir nunca de `worktreesDir`.
    */
   private pruneEmptyParents(worktreePath: string): void {
-    const top = this.deps.worktreesDir
+    // Las dos rutas, reales: en Windows el temporal llega con nombre corto (RUNNER~1) y la
+    // del worktree, ya canónica, con el largo; sin esto parecería estar fuera.
+    const top = canonical(this.deps.worktreesDir)
     let dir = dirname(worktreePath)
     for (;;) {
       const rel = relative(top, dir)
