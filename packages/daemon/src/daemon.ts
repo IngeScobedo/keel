@@ -97,13 +97,7 @@ import {
   validationContext,
   workPrompt,
 } from "./flows.js"
-import {
-  buildPlan,
-  DIFF_INLINE_MAX,
-  executePlan,
-  type GitPlansDeps,
-  PLAN_TTL_MS,
-} from "./git-plans.js"
+import { buildPlan, DIFF_INLINE_MAX, executePlan, type GitPlansDeps } from "./git-plans.js"
 import { canonicalJson, nowIso, sha256Hex, ulid } from "./ids.js"
 import { agentDoorPath, isNamedPipe } from "./ipc/endpoint.js"
 import {
@@ -1805,7 +1799,19 @@ export class Daemon {
         const autoBlocker = item ? this.autoIntegrable(item, built.plan) : "sin tarea"
         const feat = item?.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null
         return this.mutation<Params<"git.propose">>("git.propose", (_p, uow) => {
-          const expires = new Date(Date.now() + PLAN_TTL_MS).toISOString()
+          // ADR-0020 §3: un plan no vence solo; sólo con el límite que fije el humano. Lo que
+          // protege es la revalidación al ejecutar (ADR-0015 §3), no el reloj.
+          const timeout = this.settingsView().approvals.timeout_ms
+          const expires = timeout ? new Date(Date.now() + timeout).toISOString() : null
+          // Un plan nuevo reemplaza al que esperaba: nunca hay dos planes vivos por tarea.
+          for (const old of repo.gitPlansFor(run.work_item_id))
+            if (old.state === "pending") {
+              repo.setApproval(old.id, "expired", null)
+              uow.emit("git.plan.expired", old.run_id, {
+                plan_id: old.id,
+                reason: "lo reemplazó un plan nuevo",
+              })
+            }
           const planId = repo.createApproval({
             project_id: run.project_id,
             run_id: run.id,
@@ -2728,7 +2734,7 @@ export class Daemon {
             prompt =
               item.dedupe_key === CONVERSATION_KEY
                 ? `${conversationHeader()}\n\n${prompt}`
-                : `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}` : ""}${featureHeader(this.featureOf(item.id), item.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null)}\n\n${prompt}`
+                : `${promptHeader(item)}${flow ? `\n${stageInstructions(flow, profile)}${flow.stage === "close" ? this.gitPlanNote(item.id) : ""}` : ""}${featureHeader(this.featureOf(item.id), item.parent_work_item_id ? this.featureOf(item.parent_work_item_id) : null)}\n\n${prompt}`
           // Planear y revisar son sólo lectura también para el SDK (ADR-0021 §3).
           const readOnly =
             run.purpose !== "execute" || (flow !== null && isReadOnlyStage(flow.stage))
@@ -3130,7 +3136,30 @@ export class Daemon {
             to: input.to,
           }
         : null,
+      this.lastGitPlan(workItemId),
     )
+  }
+
+  /** El último plan de git de la tarea, con lo que hizo y por qué paró. */
+  private lastGitPlan(workItemId: string): TaskFlowView["git_plan"] {
+    const a = this.repo.gitPlansFor(workItemId)[0]
+    if (!a) return null
+    const s = this.gitPlanState(a.id, a.state, a.expires_at)
+    return {
+      plan_id: a.id,
+      run_id: a.run_id,
+      state: s.state,
+      reason: s.reason,
+      done: s.steps.filter((x) => x.state === "done").map((x) => x.op),
+    }
+  }
+
+  /** Lo que el agente debe saber del plan anterior al retomar el cierre. */
+  private gitPlanNote(workItemId: string): string {
+    const p = this.lastGitPlan(workItemId)
+    if (!p || (p.state !== "failed" && p.state !== "expired")) return ""
+    const done = p.done.length ? ` Ya se hizo: ${p.done.join(", ")}.` : ""
+    return `\n[Keel · git] El último plan de git ${p.state === "failed" ? "falló" : "caducó"}${p.reason ? `: ${p.reason}` : ""}.${done} Si el cierre sigue pendiente, propón otro con git_propose con sólo lo que falta.`
   }
 
   /** La última versión de cada documento, con su contenido. */
@@ -4397,7 +4426,12 @@ export class Daemon {
           WHERE kind LIKE 'git.%' AND json_extract(payload_json, '$.plan_id') = ? ORDER BY event_seq`,
       )
       .all(planId)
-    const last = events.at(-1)?.kind
+    const lastEvent = events.at(-1)
+    const last = lastEvent?.kind
+    const reason =
+      last === "git.plan.failed" || last === "git.plan.expired"
+        ? ((JSON.parse(lastEvent?.payload_json ?? "{}") as { reason?: string }).reason ?? null)
+        : null
     const steps = events
       .filter((e) => /^git\.(commit|push|pull_request)\./.test(e.kind))
       .map((e) => ({
@@ -4421,6 +4455,7 @@ export class Daemon {
                   : "pending"
     return {
       state: state as "pending" | "denied" | "expired" | "executing" | "completed" | "failed",
+      reason,
       steps,
     }
   }

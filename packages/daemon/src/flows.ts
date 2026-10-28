@@ -25,6 +25,7 @@ import type { TaskDocRow, TaskFlowRow, WorkItemRow } from "./store/repo.js"
 export function flowView(
   f: TaskFlowRow,
   pendingGate: TaskFlowView["pending_gate"] = null,
+  gitPlan: TaskFlowView["git_plan"] = null,
 ): TaskFlowView {
   return {
     work_item_id: f.work_item_id,
@@ -36,6 +37,7 @@ export function flowView(
     started_by: f.started_by,
     updated_at: f.updated_at,
     pending_gate: pendingGate,
+    git_plan: gitPlan,
   }
 }
 

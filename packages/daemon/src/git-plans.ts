@@ -24,8 +24,6 @@ import {
 import type { ArtifactStore } from "./artifacts.js"
 import { canonicalJson, sha256Hex } from "./ids.js"
 
-/** Un plan vive más que una aprobación de herramienta: se revisa con calma. */
-export const PLAN_TTL_MS = 30 * 60_000
 /** Tope del diff que viaja en una respuesta; el entero va como artefacto. */
 export const DIFF_INLINE_MAX = 200_000
 
@@ -178,7 +176,7 @@ export async function executePlan(
       } else if (op.op === "push") {
         if ((await headSha(wt)) !== (commitSha ?? plan.expected_head_sha))
           return expire("HEAD cambió antes del push")
-        const r = await pushBranch(wt, { remote: op.remote, branch: op.branch })
+        const r = await pushBranch(wt, { remote: op.remote, branch: op.branch, from: plan.branch })
         deps.emit(plan.run_id, "git.push.completed", {
           remote: op.remote,
           ref: op.branch,

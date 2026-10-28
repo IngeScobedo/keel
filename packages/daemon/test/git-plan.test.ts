@@ -146,6 +146,65 @@ describe("ADR-0015: git con plan aprobado", () => {
     expect(ev.evidence.map((e) => e.kind)).toEqual(["diff"])
   })
 
+  test("KEEL-5: el plan sube a la rama que nombra, no vence solo y uno nuevo reemplaza al que esperaba", async () => {
+    const { daemon, human, remote, executed, approve, status } = await boot()
+    const { run, wt, w } = await executed()
+    writeFileSync(join(wt, "a.ts"), "1\n")
+    const first = (await human.call("git.propose", {
+      ...meta(),
+      run_id: run.id,
+      message: "a",
+    })) as Plan
+    // ADR-0020 §3: sin límite elegido por el humano, el plan espera sin vencer.
+    const listed = (await human.call("approvals.list", {})) as {
+      approvals: { id: string; expires_at: string | null }[]
+    }
+    expect(listed.approvals.find((a) => a.id === first.plan_id)?.expires_at).toBeNull()
+    const second = (await human.call("git.propose", {
+      ...meta(),
+      run_id: run.id,
+      message: "a",
+      push: { branch: "fix/a-con-nombre" },
+    })) as Plan
+    expect((await status(first)).state).toBe("expired")
+    await expect(approve(first)).rejects.toThrow("expired")
+    await approve(second)
+    await daemon.idle()
+    const s = await status(second)
+    expect(s.state).toBe("completed")
+    // El worktree sigue en keel/…; el remoto recibe la rama que nombró el plan.
+    expect(second.plan.branch).toStartWith("keel/")
+    expect(sh(remote, "rev-parse", "refs/heads/fix/a-con-nombre")).toBe(sh(wt, "rev-parse", "HEAD"))
+    const last = (
+      daemon as unknown as { lastGitPlan(id: string): { plan_id: string; state: string } }
+    ).lastGitPlan(w.id)
+    expect(last).toMatchObject({ plan_id: second.plan_id, state: "completed" })
+  })
+
+  test("si el push falla, la tarea dice por qué y qué sí se hizo", async () => {
+    const { daemon, human, remote, executed, approve } = await boot()
+    const { run, wt, w } = await executed()
+    writeFileSync(join(wt, "a.ts"), "1\n")
+    const plan = (await human.call("git.propose", {
+      ...meta(),
+      run_id: run.id,
+      message: "a",
+      push: {},
+    })) as Plan
+    rmSync(remote, { recursive: true, force: true })
+    await approve(plan)
+    await daemon.idle()
+    const d = daemon as unknown as {
+      lastGitPlan(id: string): { state: string; reason: string | null; done: string[] }
+      gitPlanNote(id: string): string
+    }
+    const last = d.lastGitPlan(w.id)
+    expect(last.state).toBe("failed")
+    expect(last.reason).toContain("does not appear to be a git repository")
+    expect(last.done).toEqual(["git.commit.created"])
+    expect(d.gitPlanNote(w.id)).toContain("git_propose")
+  })
+
   test("modificar un archivo después de proponer hace caducar el plan antes del commit", async () => {
     const { daemon, human, executed, approve, status } = await boot()
     const { run, wt } = await executed()

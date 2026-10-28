@@ -1554,6 +1554,23 @@ export class Repo {
     )
   }
 
+  /** Los planes de git de la tarea, del más nuevo al más viejo. */
+  gitPlansFor(workItemId: string): {
+    id: string
+    run_id: string
+    state: string
+    expires_at: string | null
+  }[] {
+    return this.db
+      .query<{ id: string; run_id: string; state: string; expires_at: string | null }, [string]>(
+        `SELECT a.id, a.run_id, a.state, a.expires_at FROM approval_requests a
+           JOIN runs r ON r.id = a.run_id
+          WHERE r.work_item_id = ? AND json_extract(a.operation_json, '$.tool') = 'git.plan'
+          ORDER BY a.id DESC`,
+      )
+      .all(workItemId)
+  }
+
   /** El run más reciente de la tarea, vivo o no: la conversación sigue desde él. */
   lastRunFor(workItemId: string): RunRow | null {
     return (

@@ -145,15 +145,22 @@ export async function commitPaths(
   return { sha, files: stdout.split("\n").filter(Boolean).sort() }
 }
 
-/** Empuja la rama a esa misma rama del remoto. Nunca con `--force`. */
+/**
+ * Empuja la rama local `from` (por omisión, la misma) a `branch` del remoto. Nunca con
+ * `--force`. El plan puede nombrar la rama de destino (`fix/…`) aunque el worktree esté
+ * en `keel/<tarea>/…`.
+ */
 export async function pushBranch(
   path: string,
-  opts: { remote: string; branch: string },
+  opts: { remote: string; branch: string; from?: string },
 ): Promise<{ old_sha: string | null; new_sha: string }> {
   const ls = await git(["ls-remote", opts.remote, `refs/heads/${opts.branch}`], { cwd: path })
   const old = ls.stdout.trim().split(/\s+/)[0] || null
-  await git(["push", opts.remote, `refs/heads/${opts.branch}:refs/heads/${opts.branch}`], {
-    cwd: path,
-  })
+  await git(
+    ["push", opts.remote, `refs/heads/${opts.from ?? opts.branch}:refs/heads/${opts.branch}`],
+    {
+      cwd: path,
+    },
+  )
   return { old_sha: old, new_sha: (await headSha(path)) as string }
 }

@@ -79,6 +79,9 @@ test("cambios, hash de contenido, numstat, commit con autor y push sin forzar", 
   const p = await pushBranch(work, { remote: "origin", branch: "keel/K-1/run" })
   expect(p).toEqual({ old_sha: null, new_sha: c.sha })
   expect(sh(remote, "rev-parse", "refs/heads/keel/K-1/run")).toBe(c.sha)
+  // El plan puede nombrar otra rama de destino: se sube la del worktree a ese nombre.
+  await pushBranch(work, { remote: "origin", branch: "fix/k-1", from: "keel/K-1/run" })
+  expect(sh(remote, "rev-parse", "refs/heads/fix/k-1")).toBe(c.sha)
 }, 30_000)
 
 test("commitPaths confirma un borrado que ya estaba en el índice (git rm)", async () => {

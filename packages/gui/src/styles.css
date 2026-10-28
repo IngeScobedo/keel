@@ -3974,6 +3974,14 @@ button.rc-ledger-row:hover {
 .limits-row input[type="number"] {
   width: 120px;
 }
+.task-plan-failed {
+  margin: 6px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--color-status-failed-border);
+  border-radius: 6px;
+  background: var(--color-status-failed-bg);
+  font-size: 12px;
+}
 .default-model {
   display: inline-flex;
   align-items: center;

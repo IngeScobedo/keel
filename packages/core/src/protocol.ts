@@ -241,6 +241,21 @@ export const TaskFlowViewSchema = z.object({
       to: StageSchema,
     })
     .nullable(),
+  /**
+   * El último plan de git de la tarea (ADR-0015): si espera, si falló y por qué. Sin él,
+   * una tarea en `close` con el plan caído parecía esperar algo que no estaba.
+   */
+  git_plan: z
+    .object({
+      plan_id: z.string(),
+      run_id: z.string(),
+      state: z.enum(["pending", "denied", "expired", "executing", "completed", "failed"]),
+      reason: z.string().nullable(),
+      /** Lo que sí se hizo antes de fallar: `git.commit.created`, `git.push.completed`… */
+      done: z.array(z.string()),
+    })
+    .nullable()
+    .optional(),
 })
 export type TaskFlowView = z.infer<typeof TaskFlowViewSchema>
 export const TaskDocViewSchema = z.object({

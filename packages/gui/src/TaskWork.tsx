@@ -100,6 +100,7 @@ export function TaskWork({
     }
   }
   const gate = flow?.pending_gate
+  const plan = flow?.git_plan
   return (
     <section className="task-work" data-testid="task-work">
       {base.modal}
@@ -121,6 +122,24 @@ export function TaskWork({
         >
           <Flag size={13} /> Espera tu decisión: {GATE_LABEL[gate.gate]} → ver en el chat
         </button>
+      )}
+      {!gate && plan?.state === "pending" && (
+        <button
+          type="button"
+          className="task-gate"
+          onClick={() => onRun(runs.find((r) => r.id === plan.run_id) ?? (latest as Run))}
+          data-testid="task-plan"
+        >
+          <Flag size={13} /> Espera tu decisión: aprobar el plan de git → ver en el chat
+        </button>
+      )}
+      {flow?.stage === "close" && (plan?.state === "failed" || plan?.state === "expired") && (
+        <p className="task-plan-failed" role="status" data-testid="task-plan-failed">
+          El plan de git {plan.state === "failed" ? "falló" : "caducó"}
+          {plan.reason ? `: ${plan.reason}` : ""}.
+          {plan.done.length > 0 && ` Ya se hizo: ${plan.done.map(planStep).join(", ")}.`} Escríbele
+          al agente que proponga otro plan con lo que falta.
+        </p>
       )}
       {!done && (
         <form
@@ -197,6 +216,15 @@ export function TaskWork({
       </details>
     </section>
   )
+}
+
+const PLAN_STEP: Record<string, string> = {
+  "git.commit.created": "el commit",
+  "git.push.completed": "el push",
+  "git.pull_request.created": "la PR",
+}
+function planStep(op: string): string {
+  return PLAN_STEP[op] ?? op
 }
 
 /** Devolver la tarea a una etapa anterior: es del humano y lleva motivo (ADR-0021 §2). */
