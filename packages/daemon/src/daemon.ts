@@ -119,6 +119,7 @@ import {
 } from "./processes.js"
 import { detectProfile } from "./project-profile.js"
 import { Research, ResearchError } from "./research.js"
+import { describePlaybook, discoverPlaybooks } from "./resources/ansible-discover.js"
 import { BrokerError, ResourceBroker } from "./resources/broker.js"
 import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
@@ -2128,6 +2129,50 @@ export class Daemon {
             return v
           },
         )(params, ctx)
+      },
+      "ansible.discover": (params, ctx) => {
+        requireHuman(ctx, "buscar playbooks")
+        const p = params as Params<"ansible.discover">
+        const pid = this.scopeOf(ctx, p.project_id)
+        const root = repo.projectRoot(pid) ?? this.rootPath
+        let found: ReturnType<typeof discoverPlaybooks>
+        if (p.path) {
+          const file = resolve(root, p.path)
+          if (relative(root, file).startsWith(".."))
+            throw rpcError(
+              ErrorCode.invalidParams,
+              "el playbook tiene que estar dentro del proyecto",
+            )
+          const one = describePlaybook(root, file)
+          if (!one)
+            throw rpcError(
+              ErrorCode.invalidParams,
+              "ese archivo no es un playbook de Ansible (una lista de plays con hosts)",
+            )
+          found = [one]
+        } else found = discoverPlaybooks(root)
+        const ssh = this.broker
+          .connections(pid)
+          .filter((c) => c.conn_type === "ssh")
+          .map((c) => ({ name: c.name, cfg: JSON.parse(c.config_json) as Record<string, unknown> }))
+        return {
+          root,
+          playbooks: found.map((pb) => ({
+            ...pb,
+            hosts: pb.hosts.map((h) => ({
+              ...h,
+              suggested_connection:
+                ssh.find(
+                  (c) =>
+                    h.address !== null &&
+                    c.cfg.host === h.address &&
+                    (!h.user || !c.cfg.user || c.cfg.user === h.user),
+                )?.name ??
+                ssh.find((c) => c.name === h.name || c.cfg.host === h.name)?.name ??
+                null,
+            })),
+          })),
+        }
       },
       "connections.ssh_session": async (params, ctx) => {
         requireHuman(ctx, "abrir una terminal")

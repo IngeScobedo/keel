@@ -50,7 +50,7 @@ test("Ansible: check con su matriz en vivo y despliegue de lo revisado", async (
   if (shots) await page.screenshot({ path: join(shots, "ansible-deploy.png") })
 })
 
-test("Ansible: el destino se crea desde el formulario, sobre una conexión SSH", async ({
+test("Ansible: el destino se elige, no se escribe: playbook detectado, conexión por IP y tags", async ({
   page,
 }) => {
   test.setTimeout(45_000)
@@ -62,15 +62,26 @@ test("Ansible: el destino se crea desde el formulario, sobre una conexión SSH",
   const form = page.getByTestId("new-connection")
   await form.getByLabel("Nombre de la conexión").fill("casamatte")
   await form.getByLabel("Tipo", { exact: true }).selectOption("ansible")
-  await form.getByLabel("Entorno", { exact: true }).selectOption("prod")
-  await form.getByLabel("Carpeta del playbook (en el proyecto)").fill("infra/ansible")
-  await form.getByLabel("Playbook", { exact: true }).fill("site.yml")
-  await form.getByLabel("Hosts (host=conexión, separados por coma)").fill("web=prod-web")
-  await form.getByLabel("Tags por defecto (separados por coma)").fill("deploy")
+  const picker = form.getByTestId("ansible-picker")
+  // Keel lo encontró solo: playbook, host del inventario con su conexión y los tags.
+  await expect(picker.getByRole("radio", { name: /infra\/ansible\/site\.yml/ })).toBeChecked()
+  await expect(picker.getByLabel("Conexión de web")).toHaveValue("prod-web")
+  await expect(picker).toContainText("coincide con el inventario")
+  for (const t of ["bootstrap", "deploy", "app", "logrotate"])
+    await expect(picker.getByRole("button", { name: t, exact: true })).toBeVisible()
+  await expect(picker.getByRole("button", { name: "deploy", exact: true })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  )
+  await picker.getByRole("button", { name: "app", exact: true }).click()
+  // El entorno lo deciden las conexiones: prod-web es prod.
+  await expect(form.getByLabel("Entorno", { exact: true })).toHaveValue("prod")
+  await expect(form.getByLabel("Entorno", { exact: true })).toBeDisabled()
+  if (shots) await page.screenshot({ path: join(shots, "ansible-new.png") })
   await form.getByRole("button", { name: "Añadir", exact: true }).click()
   const conn = page.getByTestId("connection")
   await expect(conn).toContainText("casamatte")
   await expect(conn).toContainText("web → prod-web")
-  await expect(conn).toContainText("Contraseña de ansible-vault")
+  await expect(conn).toContainText("deploy, app")
   await expect(conn.getByTestId("deploy").getByRole("button", { name: "Check" })).toBeVisible()
 })

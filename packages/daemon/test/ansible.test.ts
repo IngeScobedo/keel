@@ -163,6 +163,55 @@ describe.skipIf(process.platform === "win32")(
       )
     })
 
+    test("ansible.discover encuentra el playbook, sus tags, su vault y la conexión de cada host", async () => {
+      const { dir, infra } = await boot()
+      writeFileSync(
+        join(infra, "site.yml"),
+        "- hosts: all\n  roles:\n    - role: app\n      tags: [deploy, app]\n    - role: nginx\n      tags: [nginx]\n",
+      )
+      writeFileSync(join(infra, "ansible.cfg"), "[defaults]\ninventory = inventory/prod.yml\n")
+      mkdirSync(join(infra, "inventory"))
+      writeFileSync(
+        join(infra, "inventory", "prod.example.yml"),
+        "all:\n  hosts:\n    web:\n      ansible_host: 'REEMPLAZA_CON_LA_IP'\n",
+      )
+      writeFileSync(
+        join(infra, "inventory", "prod.yml"),
+        "all:\n  hosts:\n    web:\n      ansible_host: 203.0.113.20\n      ansible_user: root\n",
+      )
+      mkdirSync(join(infra, "roles", "app", "tasks"), { recursive: true })
+      writeFileSync(
+        join(infra, "roles", "app", "tasks", "main.yml"),
+        "- block:\n    - name: rota\n      ansible.builtin.command: logrotate\n      tags: [logrotate]\n",
+      )
+      const human = clients[0] as IpcClient
+      const r = (await human.call("ansible.discover", {})) as {
+        playbooks: {
+          dir: string
+          playbook: string
+          tags: string[]
+          vault_files: string[]
+          hosts: { name: string; address: string | null; suggested_connection: string | null }[]
+        }[]
+      }
+      expect(r.playbooks).toHaveLength(1)
+      expect(r.playbooks[0]).toMatchObject({
+        dir: "infra/ansible",
+        playbook: "site.yml",
+        tags: ["deploy", "app", "logrotate", "nginx"],
+        vault_files: ["vault.yml"],
+        // El inventario real gana a la plantilla, y la IP coincide con prod-web.
+        hosts: [{ name: "web", address: "203.0.113.20", suggested_connection: "prod-web" }],
+      })
+      // Un archivo que no es playbook, o fuera del proyecto, se rechaza.
+      await expect(
+        human.call("ansible.discover", { path: "infra/ansible/ansible.cfg" }),
+      ).rejects.toThrow("no es un playbook")
+      await expect(
+        human.call("ansible.discover", { path: join(dir, "bin", "x.yml") }),
+      ).rejects.toThrow("dentro del proyecto")
+    })
+
     test("con cambios sin commit en el playbook no despliega", async () => {
       const { infra, target, exec } = await boot()
       await target("prod")

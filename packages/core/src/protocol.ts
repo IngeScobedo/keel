@@ -1307,6 +1307,36 @@ export const Methods = {
    * ADR-0025 §5: lo que necesita `keel ssh <conexión>` para abrir la terminal del humano:
    * argumentos y entorno de `ssh` (el agente de Keel, askpass con su token), y el aviso.
    */
+  /**
+   * ADR-0031 §1: los playbooks de Ansible del proyecto, con sus hosts, tags y vault, y la
+   * conexión SSH que parece de cada host. Con `path`, sólo ese archivo.
+   */
+  "ansible.discover": {
+    params: z.object({ project_id: z.string().optional(), path: z.string().optional() }),
+    result: z.object({
+      root: z.string(),
+      playbooks: z.array(
+        z.object({
+          dir: z.string(),
+          playbook: z.string(),
+          targets: z.array(z.string()),
+          hosts: z.array(
+            z.object({
+              name: z.string(),
+              address: z.string().nullable(),
+              user: z.string().nullable(),
+              port: z.number().nullable(),
+              /** La conexión SSH con la misma dirección (o el mismo nombre). */
+              suggested_connection: z.string().nullable(),
+            }),
+          ),
+          tags: z.array(z.string()),
+          vault_files: z.array(z.string()),
+          inventories: z.array(z.string()),
+        }),
+      ),
+    }),
+  },
   "connections.ssh_session": {
     params: z.object({ connection: z.string() }),
     result: z.object({

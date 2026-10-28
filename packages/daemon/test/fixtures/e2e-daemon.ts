@@ -78,7 +78,22 @@ if (process.env.KEEL_E2E_ANSIBLE === "1") {
   const repo = join(dir, "repo")
   const infra = join(repo, "infra", "ansible")
   mkdirSync(infra, { recursive: true })
-  writeFileSync(join(infra, "site.yml"), "- hosts: all\n  roles: [app]\n")
+  // Como el de Casa Matte: ansible.cfg, inventario con la IP de la conexión y un rol con tags.
+  writeFileSync(
+    join(infra, "site.yml"),
+    "- hosts: all\n  roles:\n    - role: base\n      tags: [bootstrap]\n    - role: app\n      tags: [deploy, app]\n",
+  )
+  writeFileSync(join(infra, "ansible.cfg"), "[defaults]\ninventory = inventory/production.yml\n")
+  mkdirSync(join(infra, "inventory"))
+  writeFileSync(
+    join(infra, "inventory", "production.yml"),
+    "all:\n  hosts:\n    web:\n      ansible_host: 203.0.113.20\n      ansible_user: root\n",
+  )
+  mkdirSync(join(infra, "roles", "app", "tasks"), { recursive: true })
+  writeFileSync(
+    join(infra, "roles", "app", "tasks", "main.yml"),
+    "- name: rota logs\n  ansible.builtin.command: logrotate -f /etc/logrotate.conf\n  tags: [logrotate]\n",
+  )
   execFileSync("git", ["add", "."], { cwd: repo })
   execFileSync("git", ["commit", "-q", "-m", "playbook"], { cwd: repo })
   const playbook = writeFakeAnsible(join(dir, "bin"), 0.4)

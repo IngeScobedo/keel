@@ -4330,3 +4330,80 @@ button.rc-ledger-row:hover {
 .conn-deploy-bar strong {
   flex: 1 1 auto;
 }
+
+/* ADR-0031 §1: el destino de Ansible se elige, no se escribe. */
+.ansible-picker {
+  display: grid;
+  gap: 8px;
+}
+.ansible-playbooks,
+.ansible-tags {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.ansible-playbooks {
+  display: grid;
+  gap: 6px;
+}
+.ansible-playbook {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.ansible-playbook:has(input:checked) {
+  border-color: var(--color-accent-default);
+  background: var(--color-accent-subtle);
+}
+.ansible-playbook small {
+  color: var(--color-text-tertiary);
+}
+.ansible-file {
+  display: flex;
+  gap: 6px;
+}
+.ansible-file input {
+  flex: 1 1 auto;
+}
+.ansible-hosts {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ansible-hosts td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.ansible-match {
+  display: block;
+  color: var(--color-status-succeeded);
+}
+.ansible-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ansible-tags .chip {
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border-default);
+  background: var(--color-surface-raised);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.ansible-tags .chip[aria-pressed="true"] {
+  border-color: var(--color-accent-default);
+  background: var(--color-accent-subtle);
+  color: var(--color-text-primary);
+}

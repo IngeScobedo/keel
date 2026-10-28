@@ -13,7 +13,9 @@ import type {
 import {
   Copy,
   Download,
+  FileCode2,
   Fingerprint,
+  FolderOpen,
   KeyRound,
   Lock,
   Plus,
@@ -25,7 +27,7 @@ import {
 } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react"
 import { buildChat } from "./chat-model.js"
-import { mutationMeta } from "./client.js"
+import { hasNativeShell, mutationMeta } from "./client.js"
 import { InfraCard } from "./InfraCard.js"
 import type { InfraRun } from "./infra-model.js"
 import { Button, Empty, Hint, Modal } from "./ui.js"
@@ -83,6 +85,11 @@ const METHOD_HINT: Record<Method, string> = {
   key: "Una llave de Keel en el vault. Recomendada para el agente: limítala en el servidor con command= y from=.",
   password: "La contraseña vive cifrada en el vault y nunca la ve el agente.",
   ask: "No se guarda: se pide cada vez. Al contestar puedes recordarla.",
+}
+/** La contraseña de ansible-vault, en palabras del humano. */
+const VAULT_METHOD: Partial<Record<Method, string>> = {
+  password: "Guardarla en el vault",
+  ask: "Preguntarla cada vez",
 }
 const WRITE = new Set(["query.write", "command.run", "iac.apply"])
 const ENVS: Env[] = ["prod", "staging", "dev"]
@@ -246,6 +253,7 @@ export function LiveConnections({
       {modal?.kind === "new" && (
         <NewConnection
           call={call}
+          connections={items}
           {...(modal.prefill ? { prefill: modal.prefill } : {})}
           onClose={() => {
             setModal(null)
@@ -533,7 +541,7 @@ function Detail({
                 type="button"
                 key={m}
                 aria-pressed={method === m}
-                className="mono"
+                className={c.type === "ansible" ? "" : "mono"}
                 onClick={() => {
                   if (m === "key" && c.secret?.kind !== "ssh_key")
                     void act(async () => {
@@ -546,7 +554,7 @@ function Detail({
                   else if (m !== method) void update({ auth_method: m })
                 }}
               >
-                {m}
+                {c.type === "ansible" ? (VAULT_METHOD[m] ?? m) : m}
               </button>
             ))}
           </fieldset>
@@ -752,11 +760,14 @@ function Detail({
 function NewConnection({
   call,
   prefill,
+  connections = [],
   onClose,
   onCreated,
 }: {
   call: Call
   prefill?: SetupPrefill
+  /** Las conexiones que ya hay: un destino de Ansible elige entre las SSH. */
+  connections?: Connection[]
   onClose: () => void
   onCreated: (c: Connection, key: { line: string; pub: string } | null) => void
 }) {
@@ -785,8 +796,35 @@ function NewConnection({
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const methods = METHODS[type]
+  const [target, setTarget] = useState<AnsibleTarget | null>(null)
+  // ADR-0031 §1: el destino es tan sensible como la más sensible de sus conexiones.
+  const derivedEnv = useMemo(() => {
+    if (type !== "ansible" || !target) return null
+    const rank: Record<Env, number> = { dev: 0, staging: 1, prod: 2 }
+    let max: Env = "dev"
+    for (const conn of Object.values(target.hosts)) {
+      const c = connections.find((x) => x.name === conn)
+      if (c && rank[c.environment] > rank[max]) max = c.environment
+    }
+    return max
+  }, [type, target, connections])
+  useEffect(() => {
+    if (derivedEnv) setEnv(derivedEnv)
+  }, [derivedEnv])
+  // Un nombre propuesto: la conexión del primer host sin su prefijo de entorno.
+  useEffect(() => {
+    if (type !== "ansible" || !target || name) return
+    const first = Object.values(target.hosts)[0]
+    if (first) setName(first.replace(/^(prod|staging|dev)[-_]/, ""))
+  }, [type, target, name])
+  const ansibleReady =
+    type !== "ansible" ||
+    (target !== null &&
+      Object.keys(target.hosts).length > 0 &&
+      Object.values(target.hosts).every(Boolean))
   async function submit(e: FormEvent) {
     e.preventDefault()
+    if (!ansibleReady) return
     setBusy(true)
     setError("")
     const cfg: Record<string, unknown> = {}
@@ -794,19 +832,11 @@ function NewConnection({
       const v = config[f.key]?.trim()
       if (v) cfg[f.key] = f.key === "port" ? Number(v) : v
     }
-    if (type === "ansible") {
-      const list = (v: unknown) =>
-        String(v ?? "")
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean)
-      cfg.hosts = Object.fromEntries(
-        list(cfg.hosts).map((pair) => {
-          const [host, conn] = pair.split("=").map((x) => x.trim())
-          return [host, conn ?? host]
-        }),
-      )
-      cfg.tags = list(cfg.tags)
+    if (type === "ansible" && target) {
+      cfg.dir = target.dir
+      cfg.playbook = target.playbook
+      cfg.hosts = target.hosts
+      cfg.tags = target.tags
     }
     if (method === "file" && identity) cfg.identity_file = identity
     const managed = methods.length > 0
@@ -881,6 +911,8 @@ function NewConnection({
             <select
               aria-label="Entorno"
               value={env}
+              disabled={derivedEnv !== null}
+              title={derivedEnv ? "Lo deciden las conexiones de los hosts" : undefined}
               onChange={(e) => setEnv(e.target.value as Env)}
             >
               <option value="dev">dev</option>
@@ -895,32 +927,38 @@ function NewConnection({
             conexión, asumiendo el riesgo.
           </p>
         )}
-        <div className="conn-form-row">
-          {FIELDS[type].map((f) => (
-            <label key={f.key}>
-              {f.label}
-              <input
-                aria-label={f.label}
-                className="mono"
-                value={config[f.key] ?? ""}
-                onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
-              />
-            </label>
-          ))}
-        </div>
+        {type === "ansible" ? (
+          <AnsiblePicker call={call} connections={connections} onChange={setTarget} />
+        ) : (
+          <div className="conn-form-row">
+            {FIELDS[type].map((f) => (
+              <label key={f.key}>
+                {f.label}
+                <input
+                  aria-label={f.label}
+                  className="mono"
+                  value={config[f.key] ?? ""}
+                  onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
+                />
+              </label>
+            ))}
+          </div>
+        )}
         {methods.length > 0 ? (
           <>
-            <span className="label">Cómo entra</span>
+            <span className="label">
+              {type === "ansible" ? "Contraseña de ansible-vault" : "Cómo entra"}
+            </span>
             <fieldset className="segmented methods" aria-label="Método de entrada">
               {methods.map((m) => (
                 <button
                   type="button"
                   key={m}
                   aria-pressed={method === m}
-                  className="mono"
+                  className={type === "ansible" ? "" : "mono"}
                   onClick={() => setMethod(m)}
                 >
-                  {m}
+                  {type === "ansible" ? (VAULT_METHOD[m] ?? m) : m}
                 </button>
               ))}
             </fieldset>
@@ -1291,5 +1329,226 @@ function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventN
         </Modal>
       )}
     </section>
+  )
+}
+
+type AnsibleTarget = {
+  dir: string
+  playbook: string
+  hosts: Record<string, string>
+  tags: string[]
+}
+type Discovered = {
+  dir: string
+  playbook: string
+  targets: string[]
+  hosts: {
+    name: string
+    address: string | null
+    user: string | null
+    port: number | null
+    suggested_connection: string | null
+  }[]
+  tags: string[]
+  vault_files: string[]
+  inventories: string[]
+}
+
+/**
+ * ADR-0031 §1: Keel encuentra los playbooks; el humano elige uno, confirma la conexión
+ * SSH de cada host (la que coincide ya viene elegida) y marca los tags.
+ */
+function AnsiblePicker({
+  call,
+  connections,
+  onChange,
+}: {
+  call: Call
+  connections: Connection[]
+  onChange: (t: AnsibleTarget | null) => void
+}) {
+  const [found, setFound] = useState<Discovered[] | null>(null)
+  const [root, setRoot] = useState("")
+  const [pick, setPick] = useState(0)
+  const [hosts, setHosts] = useState<Record<string, string>>({})
+  const [tags, setTags] = useState<string[]>([])
+  const [path, setPath] = useState("")
+  const [error, setError] = useState("")
+  const ssh = connections.filter((c) => c.type === "ssh")
+  useEffect(() => {
+    let alive = true
+    call("ansible.discover", {})
+      .then((r) => {
+        if (!alive) return
+        setRoot(r.root)
+        setFound(r.playbooks)
+      })
+      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      alive = false
+    }
+  }, [call])
+  const current = found?.[pick] ?? null
+  // Al elegir un playbook: las conexiones sugeridas y, si existe, el tag «deploy».
+  useEffect(() => {
+    if (!current) return
+    setHosts(Object.fromEntries(current.hosts.map((h) => [h.name, h.suggested_connection ?? ""])))
+    setTags(current.tags.includes("deploy") ? ["deploy"] : [])
+  }, [current])
+  useEffect(() => {
+    onChange(current ? { dir: current.dir, playbook: current.playbook, hosts, tags } : null)
+  }, [current, hosts, tags, onChange])
+  async function inspect(file: string) {
+    setError("")
+    try {
+      const r = await call("ansible.discover", { path: file })
+      const pb = r.playbooks[0]
+      if (!pb) return
+      const others = (found ?? []).filter((x) => !(x.dir === pb.dir && x.playbook === pb.playbook))
+      setFound([pb, ...others])
+      setPick(0)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  async function chooseFile() {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog")
+      const chosen = await open({
+        multiple: false,
+        directory: false,
+        title: "Elegir el playbook",
+        ...(root ? { defaultPath: root } : {}),
+        filters: [{ name: "Playbook de Ansible", extensions: ["yml", "yaml"] }],
+      })
+      if (typeof chosen === "string") await inspect(chosen)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  return (
+    <div className="ansible-picker" data-testid="ansible-picker">
+      <span className="label">Playbook</span>
+      {found === null && !error && <p className="muted">Buscando playbooks en el proyecto…</p>}
+      {found?.length === 0 && <Hint>No encontré playbooks en el proyecto. Elige el archivo.</Hint>}
+      <fieldset className="ansible-playbooks" aria-label="Playbooks encontrados">
+        {(found ?? []).map((pb, i) => (
+          <label key={`${pb.dir}/${pb.playbook}`} className="ansible-playbook">
+            <input
+              type="radio"
+              name="ansible-playbook"
+              checked={i === pick}
+              onChange={() => setPick(i)}
+            />
+            <FileCode2 size={15} />
+            <span className="mono">
+              {pb.dir}/{pb.playbook}
+            </span>
+            <small>
+              {pb.hosts.length} host{pb.hosts.length === 1 ? "" : "s"} · {pb.tags.length} tags
+              {pb.vault_files.length > 0 ? " · vault cifrado" : ""}
+            </small>
+          </label>
+        ))}
+      </fieldset>
+      <div className="ansible-file">
+        {hasNativeShell() ? (
+          <Button icon={FolderOpen} onClick={() => void chooseFile()}>
+            Elegir otro archivo…
+          </Button>
+        ) : (
+          <>
+            <input
+              aria-label="Ruta del playbook"
+              className="mono"
+              placeholder="infra/ansible/site.yml"
+              value={path}
+              onChange={(e) => setPath(e.target.value)}
+            />
+            <Button disabled={!path.trim()} onClick={() => void inspect(path.trim())}>
+              Usar
+            </Button>
+          </>
+        )}
+      </div>
+      {current && (
+        <>
+          <span className="label">Hosts del inventario</span>
+          {current.hosts.length === 0 && (
+            <Hint>
+              El inventario no tiene hosts que Keel pueda leer (sus plays apuntan a{" "}
+              {current.targets.join(", ") || "nada"}).
+            </Hint>
+          )}
+          <table className="ansible-hosts">
+            <tbody>
+              {current.hosts.map((h) => (
+                <tr key={h.name}>
+                  <td className="mono">{h.name}</td>
+                  <td className="muted mono">
+                    {h.user ? `${h.user}@` : ""}
+                    {h.address ?? "sin dirección"}
+                  </td>
+                  <td>
+                    <select
+                      aria-label={`Conexión de ${h.name}`}
+                      value={hosts[h.name] ?? ""}
+                      onChange={(e) => setHosts((o) => ({ ...o, [h.name]: e.target.value }))}
+                    >
+                      <option value="">Elige la conexión SSH…</option>
+                      {ssh.map((c) => (
+                        <option key={c.id} value={c.name}>
+                          {c.name} · {c.environment}
+                        </option>
+                      ))}
+                    </select>
+                    {h.suggested_connection && hosts[h.name] === h.suggested_connection && (
+                      <small className="ansible-match">coincide con el inventario</small>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {current.tags.length > 0 && (
+            <>
+              <span className="label">Tags por defecto</span>
+              <fieldset className="ansible-tags" aria-label="Tags">
+                {current.tags.map((t) => (
+                  <button
+                    type="button"
+                    key={t}
+                    className="chip"
+                    aria-pressed={tags.includes(t)}
+                    onClick={() =>
+                      setTags((o) => (o.includes(t) ? o.filter((x) => x !== t) : [...o, t]))
+                    }
+                  >
+                    {t}
+                  </button>
+                ))}
+              </fieldset>
+              <p className="muted">
+                {tags.length
+                  ? `Corre sólo las tareas con ${tags.join(", ")}.`
+                  : "Sin tags se corre el playbook entero."}{" "}
+                Se pueden cambiar en cada check.
+              </p>
+            </>
+          )}
+          {current.vault_files.length > 0 && (
+            <p className="muted">
+              Usa ansible-vault ({current.vault_files.join(", ")}): Keel te pedirá la contraseña, o
+              guárdala aquí abajo.
+            </p>
+          )}
+        </>
+      )}
+      {error && (
+        <p className="deleted" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   )
 }
