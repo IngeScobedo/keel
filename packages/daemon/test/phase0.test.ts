@@ -145,9 +145,15 @@ describe("Fase 0: tarea → worktree real → cambio git → liberación", () =>
       branch_kept: boolean
     }[]
     if (!released) throw new Error("no hubo worktree.released")
-    expect(released.branch_kept).toBe(true)
+    // Sin commits propios, la rama no aporta nada: lo sin commit queda en el rescate.
+    expect(released.branch_kept).toBe(false)
     expect(sh(root, "show", `${released.rescue_ref}:AGENTE.md`)).toBe("cambio del agente")
     expect(existsSync(expectedPath)).toBe(false)
+    // Ni carpetas vacías de la tarea ni la rama keel/… quedan atrás.
+    expect(
+      existsSync(join(dir, "worktrees", daemon.project.project_id, "repo", w.display_id)),
+    ).toBe(false)
+    expect(sh(root, "branch", "--list", "keel/*")).toBe("")
     expect(sh(root, "for-each-ref", "refs/keel/runs/")).toBe("")
     expect(daemon.store.db.query("PRAGMA foreign_key_check").all()).toEqual([])
   })

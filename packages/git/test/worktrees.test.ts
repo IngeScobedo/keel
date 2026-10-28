@@ -96,6 +96,27 @@ describe("@keel/git: worktrees por run con el estado en el propio repo (ADR-0007
     expect(sh(root, "branch", "--list", "keel/*").trim()).toBe("")
   })
 
+  test("la rama con commits se conserva hasta que esos commits están en el remoto o en otra rama", async () => {
+    const { repo, root, wt } = await fixture()
+    const remote = join(root, "..", "remote.git")
+    sh(root, "init", "-q", "--bare", "-b", "main", remote)
+    sh(root, "remote", "add", "origin", remote)
+    for (const id of ["solo-local", "subida", "integrada"]) {
+      await createWorktree(repo, { runId: id, path: wt(id) })
+      writeFileSync(join(wt(id), `${id}.txt`), "x\n")
+      sh(wt(id), "add", ".")
+      sh(wt(id), "commit", "-q", "-m", id)
+    }
+    // Subida con otro nombre, como hace el plan de git (fix/…), con la PR aún abierta.
+    sh(wt("subida"), "push", "-q", "origin", "HEAD:refs/heads/fix/subida")
+    // Integrada a mano en main.
+    sh(root, "merge", "-q", "--no-edit", "keel/integrada")
+    expect((await removeWorktree(repo, "solo-local")).branchKept).toBe(true)
+    expect((await removeWorktree(repo, "subida")).branchKept).toBe(false)
+    expect((await removeWorktree(repo, "integrada")).branchKept).toBe(false)
+    expect(sh(root, "branch", "--list", "keel/*").trim()).toBe("keel/solo-local")
+  })
+
   test("captureChanges ve commits sobre la base y archivos sin commit", async () => {
     const { repo, wt } = await fixture()
     const w = await createWorktree(repo, { runId: "c", path: wt("c") })
@@ -113,18 +134,19 @@ describe("@keel/git: worktrees por run con el estado en el propio repo (ADR-0007
     ])
   })
 
-  test("quitar un worktree con cambios los rescata antes, conserva la rama y es idempotente", async () => {
+  test("quitar un worktree con cambios los rescata antes y es idempotente; la rama sin commits propios se va", async () => {
     const { repo, root, wt } = await fixture()
     await createWorktree(repo, { runId: "sucio", path: wt("sucio") })
     writeFileSync(join(wt("sucio"), "trabajo.txt"), "no perder\n")
     const r = await removeWorktree(repo, "sucio")
     expect(r.removed).toBe(true)
-    expect(r.branchKept).toBe(true)
+    // El rescate cuelga de su propia ref: la rama, sin commits sobre la base, no aporta.
+    expect(r.branchKept).toBe(false)
     expect(r.rescueRef?.startsWith(`${RESCUE_REF_PREFIX}sucio/`)).toBe(true)
     expect(sh(root, "show", `${r.rescueRef}:trabajo.txt`)).toBe("no perder\n")
     expect(existsSync(wt("sucio"))).toBe(false)
     expect(refs(root, RUN_REF_PREFIX)).toEqual([])
-    expect(sh(root, "branch", "--list", "keel/sucio").trim()).toBe("keel/sucio")
+    expect(sh(root, "branch", "--list", "keel/sucio").trim()).toBe("")
     expect(await reconcile(repo)).toEqual([])
     expect(await removeWorktree(repo, "sucio")).toEqual({
       removed: false,

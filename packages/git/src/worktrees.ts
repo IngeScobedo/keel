@@ -266,7 +266,11 @@ export type RemoveResult = {
   removed: boolean
   /** Ref con los cambios rescatados, si los había. */
   rescueRef: string | null
-  /** La rama se conserva si tiene commits sobre la base o hubo rescate. */
+  /**
+   * La rama se conserva sólo si guarda commits que no están en ninguna otra parte (ni en
+   * el remoto ni en una rama que no sea de Keel). Lo que no tenía commit queda en
+   * `rescueRef`, que no depende de la rama.
+   */
   branchKept: boolean
 }
 
@@ -289,7 +293,9 @@ export async function removeWorktree(repo: GitRepo, runId: string): Promise<Remo
       await git(["worktree", "remove", "--force", entry.path], { cwd: repo.root })
     else if (entry.state === "missing") await git(["worktree", "prune"], { cwd: repo.root })
   })
-  const branchKept = ahead > 0 || rescueRef !== null || entry.state === "unregistered"
+  const branchKept =
+    entry.state === "unregistered" ||
+    (ahead > 0 && !(await publishedElsewhere(repo, `refs/heads/${entry.branch}`)))
   await write(repo, async () => {
     if (!branchKept && (await refExists(repo, `refs/heads/${entry.branch}`)))
       await git(["branch", "-D", entry.branch], { cwd: repo.root })
@@ -344,6 +350,23 @@ async function runRefs(repo: GitRepo): Promise<Map<string, string>> {
     if (name && sha) refs.set(name.slice(RUN_REF_PREFIX.length), sha)
   }
   return refs
+}
+
+/**
+ * ¿Los commits de la rama ya están a salvo en otra parte? Lo están si su punta es
+ * alcanzable desde una rama remota (se subió, aunque la PR siga abierta) o desde una
+ * rama local que no es de Keel (se integró a mano).
+ */
+async function publishedElsewhere(repo: GitRepo, branchRef: string): Promise<boolean> {
+  if (!(await refExists(repo, branchRef))) return true
+  const { stdout } = await git(
+    ["for-each-ref", "--contains", branchRef, "--format=%(refname)", "refs/remotes", "refs/heads"],
+    { cwd: repo.root },
+  )
+  return stdout
+    .split("\n")
+    .filter(Boolean)
+    .some((r) => !r.startsWith(`refs/heads/${BRANCH_PREFIX}`) && !r.endsWith("/HEAD"))
 }
 
 async function refExists(repo: GitRepo, ref: string): Promise<boolean> {

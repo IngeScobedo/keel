@@ -19,8 +19,8 @@
  * daemon. Este módulo no publica eventos: devuelve lo que pasó y el daemon lo
  * emite.
  */
-import { existsSync } from "node:fs"
-import { basename, join } from "node:path"
+import { existsSync, readdirSync, rmdirSync } from "node:fs"
+import { basename, dirname, join, relative } from "node:path"
 import {
   BRANCH_PREFIX,
   type Changes,
@@ -219,6 +219,7 @@ export class GitWorktreeDriver implements WorkspaceDriver {
       seen.add(key)
       const result = await removeWorktree(await this.gitRepo(projectRepo.local_path), key)
       if (result.removed) out.push({ worktree: w, branch: w.branch_name, result })
+      this.pruneEmptyParents(w.worktree_path)
     }
     let root: GitRepo
     try {
@@ -235,6 +236,26 @@ export class GitWorktreeDriver implements WorkspaceDriver {
       if (result.removed) out.push({ worktree: null, branch: wt.branch, result })
     }
     return out
+  }
+
+  /**
+   * `<KEEL-n>/<run>/` quedan vacíos al quitar el worktree: se borran hacia arriba mientras
+   * estén vacíos, sin salir nunca de `worktreesDir`.
+   */
+  private pruneEmptyParents(worktreePath: string): void {
+    const top = this.deps.worktreesDir
+    let dir = dirname(worktreePath)
+    for (;;) {
+      const rel = relative(top, dir)
+      if (!rel || rel.startsWith("..") || !existsSync(dir)) return
+      try {
+        if (readdirSync(dir).length > 0) return
+        rmdirSync(dir)
+      } catch {
+        return
+      }
+      dir = dirname(dir)
+    }
   }
 
   private async gitRepo(path: string): Promise<GitRepo> {
