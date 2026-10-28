@@ -2207,12 +2207,18 @@ progress::-moz-progress-bar {
   background: var(--color-text-tertiary);
 }
 .rc-divider {
-  text-align: center;
-  margin: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0;
   color: var(--color-text-tertiary);
   font-size: 11px;
-  border-top: 1px dashed var(--color-border-subtle);
-  padding-top: 6px;
+}
+.rc-divider::before,
+.rc-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--color-border-subtle);
 }
 .rc-status,
 .rc-auto,
@@ -2228,6 +2234,12 @@ progress::-moz-progress-bar {
 .rc-status.error,
 .rc-auto.deny {
   color: var(--color-status-failed);
+}
+.rc-status.warn {
+  color: var(--color-status-waiting-human);
+  background: var(--color-status-waiting-human-bg);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
 }
 .rc-auto .mono {
   overflow: hidden;

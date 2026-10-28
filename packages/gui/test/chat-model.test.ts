@@ -254,3 +254,30 @@ describe("ADR-0021: el método en el chat", () => {
     expect(ledger.docs).toMatchObject([{ doc: "brief", version: 2, ok: true }])
   })
 })
+
+describe("una conversación por turnos", () => {
+  test("cada run nuevo es un turno, no un corte; sólo perder el contexto se avisa", () => {
+    const items = buildChat([
+      at("run.prompt", { text: "Trabaja la tarea", source: "human" }, "r1"),
+      at("run.updated", { status: "completed" }, "r1"),
+      at("run.prompt", { text: "Elijo B", source: "human" }, "r2"),
+      at("run.updated", { status: "completed" }, "r2"),
+      at(
+        "run.resume_skipped",
+        { reason: "el worktree del run anterior ya no existe; el agente empieza una sesión nueva" },
+        "r3",
+      ),
+    ])
+    const dividers = items
+      .filter((i) => i.kind === "divider")
+      .map((i) => (i as { text: string }).text)
+    expect(dividers).toHaveLength(2)
+    expect(dividers[0]).toMatch(/^Turno 2 · \d\d:\d\d$/)
+    expect(items.some((i) => i.kind === "status" && i.text === "Run terminado.")).toBe(false)
+    expect(items.at(-1)).toMatchObject({
+      kind: "status",
+      tone: "warn",
+      text: "El agente empezó sin el contexto anterior: el worktree del run anterior ya no existe.",
+    })
+  })
+})

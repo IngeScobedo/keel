@@ -97,7 +97,7 @@ export type MethodItem =
 export type ChatItem =
   | { kind: "prompt" | "human" | "agent" | "divider"; key: string; text: string }
   | MethodItem
-  | { kind: "status"; key: string; text: string; tone: "info" | "error" }
+  | { kind: "status"; key: string; text: string; tone: "info" | "warn" | "error" }
   | ToolCall
   | Approval
   | InfraRun
@@ -141,15 +141,18 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
   // prompt que ve el proveedor. Se muestra una.
   const said = new Set<string>()
   let currentRun: string | null = null
+  let turn = 1
   for (const e of [...events].sort((a, b) => a.event_seq - b.event_seq)) {
     const p = (e.payload ?? {}) as Loose
     const key = String(e.event_seq)
+    // Cada run es un turno de la misma conversación (la sesión se retoma, como
+    // `--resume` en Claude Code): un separador discreto, no un corte.
     if (e.run_id && e.run_id !== currentRun) {
       if (currentRun !== null)
         items.push({
           kind: "divider",
           key: `div:${key}`,
-          text: "La conversación continúa en un run nuevo",
+          text: `Turno ${++turn} · ${hourOf(e.received_at)}`,
         })
       currentRun = e.run_id
     }
@@ -176,8 +179,14 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         )
           items.push({ kind: "prompt", key, text: p.prompt })
         break
+      // Lo único que sí corta la conversación: se ve.
       case "run.resume_skipped":
-        items.push({ kind: "status", key, tone: "info", text: String(p.reason) })
+        items.push({
+          kind: "status",
+          key,
+          tone: "warn",
+          text: `El agente empezó sin el contexto anterior: ${String(p.reason).replace(/; el agente empieza una sesión nueva$/, "")}.`,
+        })
         break
       case "run.mode_changed":
         items.push({
@@ -446,8 +455,7 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         break
       }
       case "run.updated":
-        if (p.status === "completed")
-          items.push({ kind: "status", key, tone: "info", text: "Run terminado." })
+        // El final de un turno no es noticia: el turno siguiente se ve en el separador.
         break
       default:
         codexItem(e, key, items, tools, (t) => {
@@ -786,6 +794,14 @@ export function duration(ms: number | null): string {
   const s = ms / 1000
   if (s < 60) return `${s.toFixed(1).replace(".", ",")} s`
   return `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`
+}
+
+/** `14:32`, en la hora local de quien mira. */
+export function hourOf(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? ""
+    : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`
 }
 
 export function clock(fromIso: string, now: number): string {

@@ -3023,7 +3023,9 @@ export class Daemon {
         budget_micro_usd: lim.runBudgetMicroUsd,
         provider,
         options,
-        ...(p.task_worktree ? { task_worktree: true } : {}),
+        // ADR-0021 §3: todo run de una tarea del método trabaja en el worktree de la tarea,
+        // venga de donde venga; si no, la sesión no se puede retomar (KEEL-6).
+        ...(p.task_worktree || repo.getFlow(w.id) ? { task_worktree: true } : {}),
         ...(p.options?.max_turns !== undefined ? { turns_explicit: true } : {}),
         ...(p.worktree_base ? { worktree_base: p.worktree_base } : {}),
         ...(p.fresh_worktree ? { fresh_worktree: true } : {}),
