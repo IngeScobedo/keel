@@ -53,8 +53,24 @@ con la contraseña de prueba `clave-de-prueba`. `captures/` está en `.gitignore
     `inventory/production.yml`) están en `.gitignore`: viven sólo en el checkout
     del humano, no en un worktree de Keel.
 
-## Falta medir (necesita el servidor)
+## Contra `prod-casamatte` (2026-10-28, con permiso del humano, sólo lectura)
 
-- `ansible -m ping` y `--check` contra `prod-casamatte`, con el `ssh-agent` y el
-  `known_hosts` de Keel y la llave con frase pedida en la GUI.
-- El tiempo y el volumen de eventos de un `--tags deploy` real.
+- `ansible all -m ping` con un inventario generado desde la conexión
+  (`ansible_host`, `ansible_user`, `ansible_port`), su huella guardada en un
+  `known_hosts` aparte y `StrictHostKeyChecking=yes`: `pong` en 5.7 s, con el
+  descubrimiento del intérprete (`/usr/bin/python3.12`).
+- `ANSIBLE_CONFIG` no acepta `/dev/null` («Unsupported configuration file
+  extension»): para ignorar el `ansible.cfg` del proyecto hace falta un archivo
+  `.cfg` propio.
+- **Con una huella distinta, el ping pasó la primera vez**, porque Ansible reusó
+  la conexión maestra abierta un momento antes (`ControlPersist`, sockets en
+  `~/.ansible/cp`, compartidos con las corridas del humano). Sin esa conexión
+  (`ControlMaster=no`) se rechaza: «Host key verification failed». Keel tiene
+  que usar una carpeta de sockets de control propia por ejecución.
+
+## Falta medir
+
+- `--check --tags deploy` del `site.yml` de Casa Matte: necesita la contraseña
+  de `ansible-vault` del humano, así que se corre por Keel ya implementado.
+- La llave pedida en la GUI con el `ssh-agent` de Keel. En esta prueba la llave
+  ya estaba en el agente del humano.

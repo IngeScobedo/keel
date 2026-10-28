@@ -1,6 +1,6 @@
 # ADR-0031: Ansible de primer nivel sobre las conexiones SSH del vault
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-28)
 - **Fecha:** 2026-10-28
 - **Criticidad:** Alta
 - **Relacionados:**
@@ -146,7 +146,16 @@ destino con `setup_request`, ya lleno; el humano lo confirma.
 
 ## Spike antes de implementar
 
-Con permiso del humano, contra `prod-casamatte` y de sólo lectura:
+Con permiso del humano, contra `prod-casamatte` y de sólo lectura.
+
+Medido el 2026-10-28 (`spikes/ansible`): `ansible -m ping` con el inventario
+generado desde la conexión y su huella guardada, en modo estricto, respondió
+`pong` en 5.7 s. Con una huella distinta se rechazó, pero sólo sin la conexión
+compartida de Ansible: con `ControlPersist`, el segundo intento reusa el socket
+abierto y no vuelve a verificar la huella. Keel le da a cada ejecución su propia
+carpeta de sockets de control (`ANSIBLE_SSH_CONTROL_PATH_DIR`).
+
+Queda pendiente:
 
 - `ansible -m ping` por el `ssh-agent` y el `known_hosts` de Keel, con la llave
   con frase pedida en la GUI;
