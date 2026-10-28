@@ -938,7 +938,7 @@ function DaemonOutdated({
                 Este daemon es anterior al reinicio desde la ventana. Páralo una vez desde tu
                 terminal y vuelve a abrir Keel:
               </p>
-              <pre className="mono">pkill -TERM -f "daemon/src/main.ts"</pre>
+              <pre className="mono">pkill -TERM -f "[d]aemon/src/main.ts"</pre>
             </>
           )}
           {error && (
