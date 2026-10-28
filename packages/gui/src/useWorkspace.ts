@@ -1,5 +1,5 @@
-import type { EventNotification, MethodName, Methods } from "@keel/core"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { type EventNotification, METHOD_NAMES, type MethodName, type Methods } from "@keel/core"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   defaultSocketPath,
   ensureDaemon,
@@ -41,6 +41,8 @@ export function useWorkspace() {
     event_loop_lag_ms: number
     rss_bytes: number
     project?: { id: string; root_path: string } | undefined
+    methods?: string[] | undefined
+    restartable?: boolean | undefined
   } | null>(null)
   const project = useRef(DEMO_PROJECT)
   const client = useRef<KeelClient | null>(null)
@@ -203,6 +205,34 @@ export function useWorkspace() {
     [mode],
   )
 
+  /**
+   * ¿El daemon corre código anterior al de esta ventana? Le faltan métodos que la GUI ya
+   * usa (o es tan viejo que no los dice). Cerrar la ventana no lo reinicia (ADR-0019 §1).
+   */
+  const outdated = useMemo(() => {
+    if (mode !== "live" || !health) return null
+    if (!health.methods) return { missing: [] as string[], restartable: false }
+    const missing = METHOD_NAMES.filter((m) => !health.methods?.includes(m))
+    return missing.length ? { missing, restartable: health.restartable === true } : null
+  }, [mode, health])
+
+  /** Reinicia el daemon: se apaga ordenado y la ventana arranca uno con el código actual. */
+  const restartDaemon = useCallback(async () => {
+    if (!client.current || !socketPath) throw new Error("Conecta el daemon primero")
+    const path = socketPath
+    await client.current.call("daemon.restart", mutationMeta())
+    await disconnect()
+    setMode("connecting")
+    setPhase("Reiniciando el daemon…")
+    // Mientras el viejo siga escuchando, `ensure` dice «running»; al irse, arranca otro.
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 250))
+      if ((await ensureDaemon(path).catch(() => "")) === "started") break
+    }
+    setPhase("Conectando…")
+    await connect(path, project.current === DEMO_PROJECT ? "" : project.current)
+  }, [socketPath, disconnect, connect])
+
   /** Cambia de proyecto: la conexión nueva se suscribe a él y lo deja activo. */
   const switchProject = useCallback(
     async (projectId: string) => {
@@ -293,6 +323,8 @@ export function useWorkspace() {
     phase,
     projects,
     repo,
+    outdated,
+    restartDaemon,
     refreshRepo,
     switchProject,
     openProject,

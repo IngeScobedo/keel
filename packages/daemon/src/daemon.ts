@@ -22,7 +22,7 @@ import {
   type Lifecycle,
   lifecycleForStage,
   type MethodName,
-  type Methods,
+  Methods,
   type MutationMeta,
   matchesPattern,
   type PermissionMode,
@@ -196,6 +196,8 @@ export type DaemonOptions = {
   methodPlugin?: string | false
   /** Tabla de procesos para reconciliar; por defecto la de la plataforma (processes.ts). */
   processes?: ProcessTable
+  /** Lo que hace `daemon.restart`: el proceso (main.ts) se apaga ordenado. Sin él, no se ofrece. */
+  onRestart?: () => void
   /** Límites antes del spawn; por defecto `DEFAULT_LIMITS` (limits.ts). */
   limits?: Partial<Limits>
   /** ADR-0025 §2: dónde vive la llave maestra del vault; por defecto ninguno (main.ts pasa el del sistema). */
@@ -728,7 +730,24 @@ export class Daemon {
           limits: this.limits,
           spent_today_micro_usd: repo.spentSince(pid, startOfLocalDay()),
           project: { id: pid, root_path: repo.projectRoot(pid) ?? this.rootPath },
+          methods: Object.keys(Methods),
+          restartable: this.opts.onRestart !== undefined,
         }
+      },
+      "daemon.restart": (_params, ctx) => {
+        requireHuman(ctx, "reiniciar el daemon")
+        if (!this.opts.onRestart)
+          throw rpcError(ErrorCode.invalidParams, "este daemon no se reinicia desde un cliente")
+        const live = repo.liveRuns()
+        if (live.length)
+          throw rpcError(
+            ErrorCode.invalidTransition,
+            `hay ${live.length} run(s) vivo(s): detenlos o espera a que terminen antes de reiniciar`,
+          )
+        const restart = this.opts.onRestart
+        // Después de contestar: el cliente recibe la respuesta antes de que se cierre el socket.
+        setTimeout(restart, 100)
+        return { restarting: true as const }
       },
       "work_items.create": this.mutation<Params<"work_items.create">>(
         "work_items.create",

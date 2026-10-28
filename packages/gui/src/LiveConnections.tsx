@@ -113,6 +113,7 @@ export function LiveConnections({
   setup,
   onSetupDone,
   events = [],
+  projectRoot = "",
 }: {
   call: Call
   tick: number
@@ -120,6 +121,8 @@ export function LiveConnections({
   onSetupDone?: () => void
   /** Los eventos del proyecto: el check y el despliegue se ven en vivo (ADR-0031 §5). */
   events?: EventNotification[]
+  /** La carpeta del proyecto activo. */
+  projectRoot?: string
 }) {
   const [items, setItems] = useState<Connection[]>([])
   const [vault, setVault] = useState<VaultStatus | null>(null)
@@ -254,6 +257,7 @@ export function LiveConnections({
         <NewConnection
           call={call}
           connections={items}
+          projectRoot={projectRoot}
           {...(modal.prefill ? { prefill: modal.prefill } : {})}
           onClose={() => {
             setModal(null)
@@ -761,11 +765,14 @@ function NewConnection({
   call,
   prefill,
   connections = [],
+  projectRoot = "",
   onClose,
   onCreated,
 }: {
   call: Call
   prefill?: SetupPrefill
+  /** La carpeta del proyecto: el diálogo de archivos abre ahí. */
+  projectRoot?: string
   /** Las conexiones que ya hay: un destino de Ansible elige entre las SSH. */
   connections?: Connection[]
   onClose: () => void
@@ -928,7 +935,12 @@ function NewConnection({
           </p>
         )}
         {type === "ansible" ? (
-          <AnsiblePicker call={call} connections={connections} onChange={setTarget} />
+          <AnsiblePicker
+            call={call}
+            connections={connections}
+            projectRoot={projectRoot}
+            onChange={setTarget}
+          />
         ) : (
           <div className="conn-form-row">
             {FIELDS[type].map((f) => (
@@ -999,9 +1011,19 @@ function NewConnection({
             {error}
           </p>
         )}
+        {!ansibleReady && (
+          <p className="muted" data-testid="ansible-missing">
+            Para añadirlo falta{" "}
+            {target ? "elegir la conexión SSH de cada host" : "elegir el playbook"}.
+          </p>
+        )}
         <div className="modal-actions">
           <Button onClick={onClose}>Cancelar</Button>
-          <button type="submit" className="button primary" disabled={!name.trim() || busy}>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={!name.trim() || busy || !ansibleReady}
+          >
             {prefill ? "Guardar y avisar al agente" : "Añadir"}
           </button>
         </div>
@@ -1332,6 +1354,13 @@ function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventN
   )
 }
 
+/** Un daemon anterior no sabe buscar playbooks: se dice qué hacer, no «método desconocido». */
+function discoverError(e: unknown): string {
+  if ((e as { rpc?: { code?: number } }).rpc?.code === -32601)
+    return "El daemon corre una versión anterior de Keel y no sabe buscar playbooks: reinícialo con «Daemon desactualizado», arriba."
+  return e instanceof Error ? e.message : String(e)
+}
+
 type AnsibleTarget = {
   dir: string
   playbook: string
@@ -1361,10 +1390,12 @@ type Discovered = {
 function AnsiblePicker({
   call,
   connections,
+  projectRoot,
   onChange,
 }: {
   call: Call
   connections: Connection[]
+  projectRoot: string
   onChange: (t: AnsibleTarget | null) => void
 }) {
   const [found, setFound] = useState<Discovered[] | null>(null)
@@ -1383,7 +1414,11 @@ function AnsiblePicker({
         setRoot(r.root)
         setFound(r.playbooks)
       })
-      .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)))
+      .catch((e) => {
+        if (!alive) return
+        setError(discoverError(e))
+        setFound([])
+      })
     return () => {
       alive = false
     }
@@ -1408,7 +1443,7 @@ function AnsiblePicker({
       setFound([pb, ...others])
       setPick(0)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setError(discoverError(e))
     }
   }
   async function chooseFile() {
@@ -1418,7 +1453,8 @@ function AnsiblePicker({
         multiple: false,
         directory: false,
         title: "Elegir el playbook",
-        ...(root ? { defaultPath: root } : {}),
+        // La carpeta del proyecto aunque la búsqueda haya fallado; nunca la de Keel.
+        ...(root || projectRoot ? { defaultPath: root || projectRoot } : {}),
         filters: [{ name: "Playbook de Ansible", extensions: ["yml", "yaml"] }],
       })
       if (typeof chosen === "string") await inspect(chosen)

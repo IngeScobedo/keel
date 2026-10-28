@@ -4407,3 +4407,16 @@ button.rc-ledger-row:hover {
   background: var(--color-accent-subtle);
   color: var(--color-text-primary);
 }
+
+.daemon-outdated {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--color-status-waiting-human-border);
+  border-radius: 999px;
+  background: var(--color-status-waiting-human-bg);
+  color: var(--color-status-waiting-human);
+  font-size: 12px;
+  cursor: pointer;
+}

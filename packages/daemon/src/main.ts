@@ -68,6 +68,9 @@ function limitsFromArgs(): Partial<Limits> {
   return out
 }
 
+/** Lo asigna el arranque del daemon, cuando ya existe el apagado ordenado. */
+let restart: () => void = () => {}
+
 function maintenance(command: string): void {
   const d = defaultPaths()
   if (command === "backup") {
@@ -132,6 +135,8 @@ if (import.meta.main && process.argv[2] === "askpass") {
     // Sin --root: el último proyecto abierto (la GUI arranca el daemon así, ADR-0019 §1).
     ...(arg("--root") ? { rootPath: arg("--root") as string } : {}),
     limits: limitsFromArgs(),
+    // daemon.restart: se apaga ordenado; la GUI arranca uno nuevo con el código actual.
+    onRestart: () => restart(),
     // ADR-0025 §2: el daemon del usuario guarda la llave maestra en su llavero.
     keystore: systemKeyStore(),
     codex: {
@@ -154,6 +159,7 @@ if (import.meta.main && process.argv[2] === "askpass") {
     console.log(
       `reconciliación: ${rec.interrupted.length} runs marcados interrupted; ${rec.orphans.length} procesos registrados por comprobar`,
     )
+  restart = () => bye()
   const bye = () => {
     // Apagado ordenado: los runs y liberaciones en curso terminan antes de cerrar la base.
     void daemon.idle().finally(() => {

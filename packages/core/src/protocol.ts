@@ -1617,7 +1617,22 @@ export const Methods = {
       spent_today_micro_usd: z.number().int().optional(),
       /** A qué proyecto y carpeta sirve este daemon: el cliente lo muestra para no confundir daemons. */
       project: z.object({ id: z.string(), root_path: z.string() }).optional(),
+      /**
+       * Los métodos que entiende este daemon. La GUI los compara con los suyos: si le
+       * falta alguno, el daemon corre código anterior y hay que reiniciarlo.
+       */
+      methods: z.array(z.string()).optional(),
+      /** Si este daemon se puede reiniciar desde un cliente (`daemon.restart`). */
+      restartable: z.boolean().optional(),
     }),
+  },
+  /**
+   * Para el daemon de forma ordenada para que el shell arranque uno nuevo con el código
+   * actual. Sólo un humano, y nunca con runs vivos.
+   */
+  "daemon.restart": {
+    params: MutationMeta,
+    result: z.object({ restarting: z.literal(true) }),
   },
 } as const
 export type MethodName = keyof typeof Methods

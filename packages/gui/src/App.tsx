@@ -1,5 +1,6 @@
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   Bot,
   ChevronDown,
@@ -16,6 +17,7 @@ import {
   PenTool,
   Plug,
   Plus,
+  RotateCw,
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -346,6 +348,13 @@ export function App() {
           <span>Search tasks, files, commits, agents…</span>
           <kbd>⌘K</kbd>
         </button>
+        {workspace.outdated && (
+          <DaemonOutdated
+            missing={workspace.outdated.missing}
+            restartable={workspace.outdated.restartable}
+            onRestart={workspace.restartDaemon}
+          />
+        )}
         <div className="header-status">
           <span className={`health-dot ${workspace.mode}`} />
           <button type="button" onClick={() => setConnection(true)}>
@@ -531,6 +540,7 @@ export function App() {
           (workspace.mode === "live" ? (
             <LiveConnections
               call={workspace.call}
+              projectRoot={workspace.health?.project?.root_path ?? ""}
               tick={workspace.inboxTick}
               events={workspace.events}
               setup={setup}
@@ -879,4 +889,91 @@ function repoName(root: string | undefined) {
 }
 function GitIcon() {
   return <FileText size={11} aria-hidden="true" />
+}
+
+/**
+ * El daemon sigue vivo al cerrar la ventana (ADR-0019 §1): tras actualizar Keel puede
+ * correr código viejo. Si le faltan métodos que la GUI usa, se dice y se reinicia aquí.
+ */
+function DaemonOutdated({
+  missing,
+  restartable,
+  onRestart,
+}: {
+  missing: string[]
+  restartable: boolean
+  onRestart: () => Promise<void>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [open, setOpen] = useState(false)
+  const what = missing.length
+    ? `Le falta ${missing.slice(0, 3).join(", ")}${missing.length > 3 ? "…" : ""}.`
+    : "No dice qué versión es."
+  return (
+    <>
+      <button
+        type="button"
+        className="daemon-outdated"
+        data-testid="daemon-outdated"
+        title={what}
+        onClick={() => setOpen(true)}
+      >
+        <AlertTriangle size={13} /> Daemon desactualizado
+      </button>
+      {open && (
+        <Modal title="El daemon corre una versión anterior" onClose={() => setOpen(false)}>
+          <p>
+            Keel se actualizó, pero el daemon sigue con el código de cuando arrancó: cerrar la
+            ventana no lo reinicia. {what}
+          </p>
+          {restartable ? (
+            <p className="muted">
+              Reiniciarlo espera a que termine lo que esté en curso y arranca uno nuevo. Si hay runs
+              vivos, primero detenlos.
+            </p>
+          ) : (
+            <>
+              <p className="muted">
+                Este daemon es anterior al reinicio desde la ventana. Páralo una vez desde tu
+                terminal y vuelve a abrir Keel:
+              </p>
+              <pre className="mono">pkill -TERM -f "daemon/src/main.ts"</pre>
+            </>
+          )}
+          {error && (
+            <p className="deleted" role="alert">
+              {error}
+            </p>
+          )}
+          <div className="conn-form-actions">
+            <Button variant="ghost" onClick={() => setOpen(false)}>
+              Cerrar
+            </Button>
+            {restartable && (
+              <Button
+                variant="primary"
+                icon={RotateCw}
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true)
+                  setError("")
+                  try {
+                    await onRestart()
+                    setOpen(false)
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : String(e))
+                  } finally {
+                    setBusy(false)
+                  }
+                }}
+              >
+                {busy ? "Reiniciando…" : "Reiniciar daemon"}
+              </Button>
+            )}
+          </div>
+        </Modal>
+      )}
+    </>
+  )
 }
