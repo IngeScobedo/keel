@@ -35,6 +35,11 @@ export type GitPlansDeps = {
   emit: (runId: string, kind: string, payload: unknown) => void
   /** Ejecutable de `gh`; null o inexistente = la PR queda pendiente con la causa. */
   gh: string | null
+  /**
+   * Cómo se autentica el remoto en el push (ADR-0025 §4, como el fetch de ADR-0028): si la
+   * llave SSH pide frase, se le pide al humano en la GUI. `done` invalida el token.
+   */
+  remoteEnv?: (runId: string) => { env: Record<string, string>; done: () => void }
 }
 
 /** Ramas que el plan nunca toca: la por defecto del repo y las que declare el proyecto. */
@@ -176,7 +181,13 @@ export async function executePlan(
       } else if (op.op === "push") {
         if ((await headSha(wt)) !== (commitSha ?? plan.expected_head_sha))
           return expire("HEAD cambió antes del push")
-        const r = await pushBranch(wt, { remote: op.remote, branch: op.branch, from: plan.branch })
+        const cred = deps.remoteEnv?.(plan.run_id)
+        const r = await pushBranch(wt, {
+          remote: op.remote,
+          branch: op.branch,
+          from: plan.branch,
+          ...(cred ? { env: cred.env } : {}),
+        }).finally(() => cred?.done())
         deps.emit(plan.run_id, "git.push.completed", {
           remote: op.remote,
           ref: op.branch,

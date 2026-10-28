@@ -4293,6 +4293,11 @@ export class Daemon {
       artifacts: this.artifacts,
       emit: (runId, kind, payload) => this.emitSystem(kind, runId, payload),
       gh: this.opts.gh === undefined ? (Bun.which("gh") ?? null) : this.opts.gh,
+      remoteEnv: (runId) =>
+        this.credentials.gitEnv(
+          this.repo.getRun(runId)?.project_id ?? this.project.project_id,
+          this.noAskpassPath(),
+        ),
     }
   }
 

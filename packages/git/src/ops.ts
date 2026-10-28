@@ -152,15 +152,15 @@ export async function commitPaths(
  */
 export async function pushBranch(
   path: string,
-  opts: { remote: string; branch: string; from?: string },
+  opts: { remote: string; branch: string; from?: string; env?: Record<string, string> },
 ): Promise<{ old_sha: string | null; new_sha: string }> {
-  const ls = await git(["ls-remote", opts.remote, `refs/heads/${opts.branch}`], { cwd: path })
+  // Quien llama pone cómo se autentica el remoto (askpass); `@keel/git` no lo sabe.
+  const env = { ...process.env, ...opts.env }
+  const ls = await git(["ls-remote", opts.remote, `refs/heads/${opts.branch}`], { cwd: path, env })
   const old = ls.stdout.trim().split(/\s+/)[0] || null
   await git(
     ["push", opts.remote, `refs/heads/${opts.from ?? opts.branch}:refs/heads/${opts.branch}`],
-    {
-      cwd: path,
-    },
+    { cwd: path, env },
   )
   return { old_sha: old, new_sha: (await headSha(path)) as string }
 }
