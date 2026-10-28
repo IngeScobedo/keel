@@ -42,7 +42,7 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0030](./0030-el-navegador-del-agente-en-vivo.md)               | El navegador del agente, de primer nivel y en vivo en la GUI                                                         | Propuesto              | Alta       |
 | [0031](./0031-ansible-sobre-las-conexiones-ssh.md)              | Ansible de primer nivel sobre las conexiones SSH del vault                                                           | Aceptado (2026-10-28)  | Alta       |
 | [0032](./0032-riesgo-de-un-comando-ssh.md)                      | El riesgo de un comando SSH lo clasifica Keel antes de correrlo                                                      | Propuesto              | Alta       |
-| [0033](./0033-bases-de-datos-por-tunel-ssh.md)                  | Bases de datos detrás de un túnel SSH                                                                                | Aceptado (2026-10-28)              | Alta       |
+| [0033](./0033-bases-de-datos-por-tunel-ssh.md)                  | Bases de datos detrás de un túnel SSH                                                                                | Aceptado (2026-10-28)  | Alta       |
 
 ## Estado
 
