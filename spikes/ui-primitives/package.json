@@ -1,0 +1,21 @@
+{
+  "name": "@keel/spike-ui-primitives",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike: cuánto pesa cada librería de primitivas accesibles para los controles de la GUI (ADR-0034).",
+  "type": "module",
+  "scripts": {
+    "measure": "bun src/measure.ts"
+  },
+  "dependencies": {
+    "@base-ui/react": "1.9.0",
+    "radix-ui": "1.8.1",
+    "react": "^19.3.1",
+    "react-aria-components": "1.22.1",
+    "react-dom": "^19.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.1.2",
+    "vite": "^8.3.4"
+  }
+}

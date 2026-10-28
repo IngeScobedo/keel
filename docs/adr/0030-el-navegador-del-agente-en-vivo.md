@@ -1,7 +1,8 @@
 # ADR-0030: El navegador del agente, de primer nivel y en vivo en la GUI
 
 - **Estado:** Propuesto
-- **Fecha:** 2026-10-26
+- **Fecha:** 2026-10-26; revisado el 2026-10-28 para la superficie de foco
+  (ADR-0034)
 - **Criticidad:** Alta
 - **Relacionados:**
   - ADR-0014 (integraciones): es la primera integración de nivel 3, nativa.
@@ -12,6 +13,8 @@
     (sandbox).
   - ADR-0021 §5 (perfil del proyecto), ADR-0029 (probar en el navegador es de
     `review`).
+  - ADR-0034: la GUI como superficie de foco; el navegador va en el hilo y en el
+    cajón de contexto.
   - ADR-0002 regla 3: Keel no bundlea el navegador, igual que con Claude Code.
 
 ## Contexto
@@ -99,12 +102,18 @@ confirma, como el resto del perfil:
   SQLite (ADR-0004).
   - Si un cliente va lento, Keel descarta cuadros y manda el último.
   - Al conectarse, el cliente recibe el último cuadro.
-- **En el chat del run** (ADR-0020), mientras el navegador está abierto:
-  - un panel «Navegador» con la vista en vivo, la URL y si la app está
-    levantada;
-  - cada acción del agente (navegar, clic, escribir) es una línea de la
-    conversación con su miniatura;
-  - el panel se puede abrir grande.
+- **Superficie de foco** (ADR-0020, ADR-0034 §5): el hilo es lo principal y el
+  navegador no le quita lugar.
+  - Cada acción del agente (navegar, clic, escribir) es una línea del hilo con
+    su miniatura. Clic en la miniatura abre ese cuadro en grande como detalle
+    (ADR-0034 §4): «atrás» lo cierra.
+  - La vista en vivo, la URL y si la app está levantada van en la sección
+    «Navegador» del cajón de contexto. El cajón se abre solo cuando el navegador
+    arranca, sin quitarle el foco al compositor; si el humano lo cierra, sigue
+    cerrado y el riel muestra que hay navegador en vivo.
+  - La misma vista se puede abrir grande, como un lugar más de la pila.
+  - Fuera de la tarea, un aviso de ADR-0034 §6 no muestra cuadros: sólo dice que
+    el agente está probando en el navegador y lleva a la tarea.
 - El humano mira y puede detener el run como siempre. Tomar el control del
   navegador desde la GUI queda fuera de este ADR.
 
