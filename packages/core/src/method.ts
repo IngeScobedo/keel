@@ -55,13 +55,20 @@ export function lifecycleForStage(stage: Stage): Lifecycle {
 }
 
 export type StageMove =
-  | { ok: true; gate: Gate | null; requires: readonly TaskDocKind[] }
+  | {
+      ok: true
+      gate: Gate | null
+      requires: readonly TaskDocKind[]
+      /** El paso exige decir por qué: el hallazgo que lo motiva (ADR-0029 §1). */
+      needsReason?: true
+    }
   | { ok: false; reason: string }
 
 /**
  * ¿Puede el agente pasar de `from` a `to`? Devuelve el gate humano que exige
  * y los documentos que deben validar antes. Volver atrás también es legal:
- * diseño a brief y revisión a implementación (un FAIL).
+ * diseño a brief, revisión a implementación (un FAIL) y cierre a implementación
+ * con el hallazgo que lo motiva (ADR-0029).
  */
 export function stageMove(from: Stage, to: Stage, ceremony: Ceremony | null): StageMove {
   const no = (reason: string): StageMove => ({ ok: false, reason })
@@ -89,9 +96,28 @@ export function stageMove(from: Stage, to: Stage, ceremony: Ceremony | null): St
       return { ok: true, gate: null, requires: [] }
     case "review>close":
       return { ok: true, gate: null, requires: ["qa"] }
+    case "close>implement":
+      return { ok: true, gate: null, requires: [], needsReason: true }
     default:
       return no(`no hay paso legal de ${from} a ${to}`)
   }
+}
+
+/**
+ * ADR-0029 §3: en `close` el agente sólo escribe el canon del proyecto. `path` es
+ * relativo a la raíz del worktree; los directorios del canon, también.
+ */
+export function canonWritable(
+  path: string,
+  canon: { adr_dirs: readonly string[]; sdd_dirs: readonly string[]; roadmap: string | null },
+): boolean {
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "")
+  const file = norm(path)
+  if (file === "" || file.startsWith("../") || file.startsWith("/")) return false
+  if (canon.roadmap && file === norm(canon.roadmap)) return true
+  return [...canon.adr_dirs, ...canon.sdd_dirs]
+    .map(norm)
+    .some((dir) => dir !== "" && (file === dir || file.startsWith(`${dir}/`)))
 }
 
 /** Un humano puede devolver la tarea a cualquier etapa anterior. */

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  canonWritable,
   canReturn,
   contractSection,
   lifecycleForStage,
@@ -32,6 +33,24 @@ describe("ADR-0021: etapas y gates", () => {
     expect(stageMove("review", "implement", "direct").ok).toBe(true)
     expect(stageMove("brief", "close", "direct").ok).toBe(false)
     expect(stageMove("implement", "close", "direct").ok).toBe(false)
+  })
+  test("ADR-0029: de close se vuelve a implement con el hallazgo; close sólo escribe el canon", () => {
+    expect(stageMove("close", "implement", "direct")).toMatchObject({
+      ok: true,
+      gate: null,
+      needsReason: true,
+    })
+    expect(stageMove("close", "review", "direct").ok).toBe(false)
+    const canon = { adr_dirs: ["docs/adr/"], sdd_dirs: ["./docs/sdd"], roadmap: "ROADMAP.md" }
+    expect(canonWritable("docs/adr/0007-x.md", canon)).toBe(true)
+    expect(canonWritable("./docs/sdd/04.md", canon)).toBe(true)
+    expect(canonWritable("ROADMAP.md", canon)).toBe(true)
+    expect(canonWritable("src/x.ts", canon)).toBe(false)
+    expect(canonWritable("docs/adrx/1.md", canon)).toBe(false)
+    expect(canonWritable("../otro/docs/adr/1.md", canon)).toBe(false)
+    expect(canonWritable("docs/adr/x.md", { adr_dirs: [], sdd_dirs: [], roadmap: null })).toBe(
+      false,
+    )
   })
   test("el humano devuelve a una etapa anterior; lifecycle y propósito por etapa", () => {
     expect(canReturn("close", "implement")).toBe(true)

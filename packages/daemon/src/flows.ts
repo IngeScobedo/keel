@@ -72,9 +72,9 @@ const STAGE_GOAL: Record<Stage, string> = {
   implement:
     "implementa contra el contrato en tu worktree; corre verify_run para ver el delta contra el baseline sin leer salidas enteras",
   review:
-    "revisa de forma adversarial sólo correctness, el contrato y las convenciones; escribe el QA con su veredicto (PASS, CONCERNS, FAIL o WAIVED justificado). FAIL vuelve a implement",
+    "revisa de forma adversarial sólo correctness, el contrato y las convenciones; si hay que probar en el navegador, es aquí. Escribe el QA con su veredicto (PASS, CONCERNS, FAIL o WAIVED justificado). FAIL vuelve a implement",
   close:
-    "prepara el cierre: lleva lo durable al canon del proyecto (ADR, SDD, roadmap) en tu worktree y propón el commit con git_propose; el humano aprueba el plan",
+    "prepara el cierre: lleva lo durable al canon del proyecto (ADR, SDD, roadmap) en tu worktree y propón el commit con git_propose; el humano aprueba el plan. En close sólo escribes el canon: si aparece algo que exige cambiar código, vuelve a implement con stage_advance y el hallazgo en reason, y después revisa otra vez",
 }
 
 /** Las líneas de método que Keel añade al encabezado del prompt (ADR-0017 §1). */

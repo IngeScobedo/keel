@@ -1126,6 +1126,11 @@ export class Daemon {
         const ceremony = flow.stage === "brief" ? (p.ceremony ?? flow.ceremony) : flow.ceremony
         const move = stageMove(flow.stage, p.to, ceremony)
         if (!move.ok) throw rpcError(ErrorCode.invalidParams, move.reason)
+        if (move.needsReason && !p.reason?.trim())
+          throw rpcError(
+            ErrorCode.invalidParams,
+            `para volver de ${flow.stage} a ${p.to} di el hallazgo en reason, en una línea`,
+          )
         if (flow.stage === "brief" && p.ceremony)
           repo.updateFlow(w.id, { ceremony: p.ceremony, ceremony_reason: p.reason ?? null })
         // Lo mecánico lo valida Keel: el agente recibe sólo lo que falta.
@@ -1142,6 +1147,10 @@ export class Daemon {
             if (!c.ok && c.level === "block")
               missing.push(`${kind}: ${c.msg}${c.detail ? ` (${c.detail})` : ""}`)
         }
+        if (flow.stage === "review" && p.to === "close" && !this.qaAfterImplement(w.id))
+          missing.push(
+            "qa: el QA es de antes de volver a implement; revisa otra vez y guarda uno nuevo con task_doc_put",
+          )
         if (flow.stage === "review" && p.to === "close") {
           const profile = this.profileOf(w.project_id)
           if (profile?.verify.length) {
@@ -1174,6 +1183,16 @@ export class Daemon {
             gate,
           }
         }
+        // ADR-0029 §1: volver del cierre deja sin efecto el plan de git que esperaba.
+        if (flow.stage === "close" && p.to === "implement")
+          for (const old of repo.gitPlansFor(w.id))
+            if (old.state === "pending") {
+              repo.setApproval(old.id, "expired", null)
+              uow.emit("git.plan.expired", old.run_id, {
+                plan_id: old.id,
+                reason: `la tarea volvió a implement: ${p.reason}`,
+              })
+            }
         this.applyStage(uow, w, p.to, {
           authorizedBy: flow.started_by,
           delegated: true,
@@ -3133,7 +3152,31 @@ export class Daemon {
   // --- el método (ADR-0021) ----------------------------------------------------------
 
   /** Cómo trata el gate a un run según la etapa de su tarea. */
-  private stagePolicy(run: RunRow): { stage: string | null; readOnly: boolean; inMethod: boolean } {
+  /**
+   * ADR-0029 §2: el QA vale si se guardó después de la última entrada a `implement`.
+   * Sin entradas registradas (eventos purgados), no se exige.
+   */
+  private qaAfterImplement(workItemId: string): boolean {
+    const entered = this.repo
+      .eventsAbout("task.stage_changed", workItemId)
+      .filter((e) => (JSON.parse(e.payload_json) as { to?: string }).to === "implement")
+      .at(-1)
+    if (!entered) return true
+    return this.repo
+      .eventsAbout("task.doc_put", workItemId)
+      .some(
+        (e) =>
+          e.event_seq > entered.event_seq &&
+          (JSON.parse(e.payload_json) as { kind?: string }).kind === "qa",
+      )
+  }
+
+  private stagePolicy(run: RunRow): {
+    stage: string | null
+    readOnly: boolean
+    inMethod: boolean
+    canon?: ProjectProfile["canon"]
+  } {
     const flow = this.repo.getFlow(run.work_item_id)
     // Un run que no ejecuta es de sólo lectura, esté o no en el método (ADR-0021 §3).
     if (run.purpose !== "execute")
@@ -3142,7 +3185,22 @@ export class Daemon {
     // Un cambio de contrato esperando al humano congela la escritura.
     const gate = this.repo.pendingStageGate(run.work_item_id)
     const frozen = gate !== null && JSON.parse(gate.operation_json).input?.reason === "contract"
-    return { stage: flow.stage, readOnly: isReadOnlyStage(flow.stage) || frozen, inMethod: true }
+    const policy = {
+      stage: flow.stage,
+      readOnly: isReadOnlyStage(flow.stage) || frozen,
+      inMethod: true,
+    }
+    // ADR-0029 §3: el cierre sólo escribe el canon; sin perfil, nada fuera de los documentos.
+    if (flow.stage === "close")
+      return {
+        ...policy,
+        canon: this.profileOf(run.project_id)?.canon ?? {
+          adr_dirs: [],
+          sdd_dirs: [],
+          roadmap: null,
+        },
+      }
+    return policy
   }
 
   // --- vault y peticiones del agente (ADR-0025) ------------------------------------

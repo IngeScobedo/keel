@@ -315,6 +315,90 @@ describe("ADR-0021: trabajo directo", () => {
   })
 })
 
+describe("ADR-0029: volver a implementar desde el cierre", () => {
+  test("close sólo escribe el canon; volver pide el hallazgo, vence el plan y exige un QA nuevo", async () => {
+    const s = await boot()
+    const profile = (await s.human.call("projects.profile_get", {})) as {
+      profile: Record<string, unknown>
+    }
+    await s.human.call("projects.profile_set", {
+      ...meta(),
+      profile: {
+        ...profile.profile,
+        canon: { adr_dirs: ["docs/adr"], sdd_dirs: [], roadmap: null },
+      },
+    })
+    const w = await s.task("Arreglo tardío")
+    s.scripts.push(async (t) => {
+      await put(t, w.id, "brief", BRIEF)
+      await advance(t, w.id, "implement", { ceremony: "direct", reason: "fix chico" })
+    })
+    let done: () => void = () => {}
+    const finished = new Promise<void>((r) => {
+      done = r
+    })
+    s.scripts.push(async (t) => {
+      const cwd = String(t.options.cwd)
+      writeFileSync(join(cwd, "ok.txt"), "listo\n")
+      await t.agent.call("verify.run", { ...meta(), work_item_id: w.id })
+      await advance(t, w.id, "review")
+      await put(t, w.id, "qa", "## Veredicto: PASS\n")
+      await advance(t, w.id, "close")
+
+      // En close, el código se niega sin preguntar y el mensaje dice cómo volver.
+      const code = await t.use("Edit", { file_path: join(cwd, "src/x.ts") })
+      expect(code).toMatchObject({ behavior: "deny" })
+      expect((code as { message: string }).message).toContain("vuelve a implement")
+      // El canon pasa al gate normal: lo pregunta y el humano lo aprueba.
+      const adr = t.use("Write", { file_path: join(cwd, "docs/adr/0001-x.md") })
+      await s.until(() => s.events("approval.requested").some((a) => a.tool === "Write"))
+      const ask = s.events("approval.requested").find((a) => a.tool === "Write") as {
+        approval_id: string
+        operation_hash: string
+      }
+      await s.human.call("approvals.resolve", {
+        ...meta(),
+        approval_id: ask.approval_id,
+        operation_hash: ask.operation_hash,
+        decision: "approve_once",
+      })
+      expect(await adr).toMatchObject({ behavior: "allow" })
+
+      const plan = (await t.agent.call("git.propose", {
+        ...meta(),
+        message: "feat: arreglo tardío",
+      })) as { plan_id: string }
+      // Volver sin decir por qué se rechaza; con el hallazgo, pasa y el plan vence.
+      await expect(advance(t, w.id, "implement")).rejects.toThrow("hallazgo")
+      const back = await advance(t, w.id, "implement", {
+        reason: "en el navegador el botón no guarda",
+      })
+      expect(back).toMatchObject({ flow: { stage: "implement" }, gate: null })
+      expect(s.daemon.repo.getApproval(plan.plan_id)?.state).toBe("expired")
+      expect(s.daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("running")
+
+      // El QA de antes ya no sirve para cerrar; uno nuevo, sí.
+      await advance(t, w.id, "review")
+      await expect(advance(t, w.id, "close")).rejects.toThrow("QA es de antes")
+      await put(t, w.id, "qa", "## Veredicto: PASS\nRevisado otra vez.\n")
+      expect(await advance(t, w.id, "close")).toMatchObject({ flow: { stage: "close" } })
+      done()
+    })
+    await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })
+    await finished
+    expect(s.events("git.plan.expired")).toMatchObject([
+      { reason: "la tarea volvió a implement: en el navegador el botón no guarda" },
+    ])
+    expect(s.events("task.stage_changed").find((e) => e.from === "close")).toMatchObject({
+      to: "implement",
+      reason: "en el navegador el botón no guarda",
+    })
+    // El QA anterior queda en el historial.
+    const qa = s.daemon.repo.getTaskDoc(w.id, "qa", 1)
+    expect(qa?.version).toBe(1)
+  })
+})
+
 describe("ADR-0021: ciclo formal", () => {
   test("gates (a) y (b), negar con motivo, contrato congelado y su cambio reabre el gate", async () => {
     const s = await boot()

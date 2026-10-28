@@ -13,6 +13,7 @@
 
 import { isAbsolute, relative, resolve } from "node:path"
 import {
+  canonWritable,
   describePattern,
   filePathOf,
   matchesPattern,
@@ -46,6 +47,9 @@ export type ApprovalWaiter = (
 /** Herramientas que preguntan al humano: nunca se resuelven solas (ADR-0020 §7). */
 export const QUESTION_TOOLS = new Set(["AskUserQuestion", "ExitPlanMode"])
 
+/** Las tools que escriben un archivo; Codex manda sus cambios como `Edit`, sin ruta. */
+const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"])
+
 export type ApprovalGateDeps = {
   repo: Repo
   waitApproval: ApprovalWaiter
@@ -61,6 +65,8 @@ export type ApprovalGateDeps = {
     stage: string | null
     readOnly: boolean
     inMethod: boolean
+    /** ADR-0029 §3: en `close`, lo único que el agente puede editar. */
+    canon?: { adr_dirs: string[]; sdd_dirs: string[]; roadmap: string | null }
   }
 }
 
@@ -91,6 +97,18 @@ export class ApprovalGate implements ToolGate {
   }
 
   /** ¿La operación cae dentro del directorio del run? Sin ruta, no aplica. */
+  /** La ruta que edita, relativa al worktree del run, cae en el canon. Sin ruta, no. */
+  private inCanon(
+    runId: string,
+    input: unknown,
+    canon: Parameters<typeof canonWritable>[1],
+  ): boolean {
+    const path = filePathOf(input)
+    const cwd = this.deps.cwdOf?.(runId)
+    if (path === null || !cwd) return false
+    return canonWritable(relative(cwd, resolve(cwd, path)), canon)
+  }
+
   private insideRun(runId: string, input: unknown): boolean {
     const path = filePathOf(input)
     if (path === null) return true
@@ -172,6 +190,13 @@ export class ApprovalGate implements ToolGate {
         req,
         "stage",
         `Keel: la etapa ${stage.stage ?? "de planeación"} es de sólo lectura (ADR-0021). No edites ni corras comandos que cambien algo; guarda lo que produces con task_doc_put y avanza con stage_advance.`,
+      )
+    if (stage.canon && EDIT_TOOLS.has(req.tool) && !this.inCanon(run.id, req.input, stage.canon))
+      return this.refuse(
+        ctx,
+        req,
+        "stage",
+        "Keel: en close sólo se escribe el canon del proyecto (ADR, SDD, roadmap) y los documentos de la tarea con task_doc_put (ADR-0029). Para cambiar código, vuelve a implement con stage_advance y el motivo en reason; después hay que revisar otra vez.",
       )
     const question = QUESTION_TOOLS.has(req.tool)
     // Una pregunta espera siempre: el tiempo no contesta por el humano.
