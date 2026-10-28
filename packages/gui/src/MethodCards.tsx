@@ -61,9 +61,12 @@ export function StageTrack({
 export function MethodRow({
   item,
   onDoc,
+  onOpenTask,
 }: {
   item: MethodItem
   onDoc?: ((kind: string, version?: number) => void) | undefined
+  /** Abre la subtarea de una línea de la feature (ADR-0022 §5). */
+  onOpenTask?: ((id: string) => void) | undefined
 }) {
   switch (item.event) {
     case "started":
@@ -136,6 +139,15 @@ export function MethodRow({
           data-testid="chat-feature"
         >
           <GitMerge size={13} /> {item.text}
+          {item.subtask_id && onOpenTask && (
+            <button
+              type="button"
+              className="text-link"
+              onClick={() => onOpenTask(item.subtask_id as string)}
+            >
+              {item.tone === "warn" ? "abrir y decidir" : "abrir"}
+            </button>
+          )}
         </p>
       )
   }

@@ -38,6 +38,7 @@ import { LivePlugins } from "./LivePlugins.js"
 import { LiveProfile } from "./LiveProfile.js"
 import { LiveProviders } from "./LiveProviders.js"
 import { formatCost, type Run, type TaskDetails, type WorkItem } from "./model.js"
+import { useNeedsYou } from "./needs-you.js"
 import { Permissions } from "./Permissions.js"
 import { ProjectConversation } from "./ProjectConversation.js"
 import { RunsList, RunView } from "./RunView.js"
@@ -70,6 +71,7 @@ function initialTheme() {
 
 export function App() {
   const workspace = useWorkspace()
+  const waitingYou = useNeedsYou(workspace)
   const [page, setPage] = useState<Page>("board")
   const [theme, setTheme] = useState(initialTheme)
   const [selectedTask, setSelectedTask] = useState("")
@@ -422,6 +424,7 @@ export function App() {
         )}
         {page === "board" && (
           <Board
+            waitingYou={waitingYou}
             tasks={workspace.work_items}
             runs={workspace.runs}
             details={details}
@@ -447,6 +450,7 @@ export function App() {
         {page === "task" &&
           (task ? (
             <Inspector
+              waitingYou={waitingYou}
               key={task.id}
               task={task}
               {...(details[task.id] ? { details: details[task.id] } : {})}

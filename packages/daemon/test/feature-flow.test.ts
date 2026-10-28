@@ -385,5 +385,11 @@ describe("ADR-0022: feature y subtareas", () => {
     )
     expect(pushError).toContain("una subtarea no hace push ni PR")
     expect(daemon.repo.liveRunFor(b?.id as string)).toBeNull()
+    // KEEL-6: el chat de la feature dice que la primera espera que apruebes su commit.
+    const waiting = daemon.repo
+      .eventsAfter(0, null, 100_000)
+      .filter((e) => e.kind === "feature.subtask_waiting")
+      .map((e) => JSON.parse(e.payload_json))
+    expect(waiting).toMatchObject([{ work_item_id: parent.id, subtask_id: a?.id, what: "commit" }])
   }, 60_000)
 })

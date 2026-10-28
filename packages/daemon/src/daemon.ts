@@ -1885,12 +1885,26 @@ export class Daemon {
               auto: true,
             })
             uow.afterCommit(() => this.track(this.runGitPlan(planId, built.plan)))
-          } else if (feat?.auto_integrate)
-            uow.emit("feature.auto_integrate_skipped", run.id, {
-              work_item_id: item?.parent_work_item_id,
-              subtask_id: item?.id,
-              reason: autoBlocker,
-            })
+          } else {
+            if (feat?.auto_integrate)
+              uow.emit("feature.auto_integrate_skipped", run.id, {
+                work_item_id: item?.parent_work_item_id,
+                subtask_id: item?.id,
+                reason: autoBlocker,
+              })
+            // ADR-0022 §5: el chat de la feature dice qué subtarea espera al humano (KEEL-6:
+            // T1 esperaba su commit y desde el padre no se veía).
+            const parentId = item?.parent_work_item_id
+            if (parentId && item)
+              uow.emit("feature.subtask_waiting", repo.lastRunFor(parentId)?.id ?? null, {
+                work_item_id: parentId,
+                subtask_id: item.id,
+                key: this.subtaskOf(item.id)?.key ?? null,
+                display_id: item.display_id,
+                title: item.title,
+                what: "commit",
+              })
+          }
           return { plan_id: planId, plan_hash: built.plan_hash, plan: built.plan }
         })(params, ctx)
       },

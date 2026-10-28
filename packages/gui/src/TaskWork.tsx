@@ -284,10 +284,13 @@ export function FeaturePlan({
   task,
   subtasks,
   onOpen,
+  waitingYou,
 }: {
   task: WorkItem
   subtasks: WorkItem[]
   onOpen?: (item: WorkItem) => void
+  /** Subtareas con algo esperando tu decisión: se abren desde aquí. */
+  waitingYou?: Set<string> | undefined
 }) {
   const feature = task.feature
   if (!feature) return null
@@ -320,12 +323,16 @@ export function FeaturePlan({
                 <Status state={c.visual_state} dot />
                 <span className="mono muted">{c.subtask?.key ?? c.display_id}</span>
                 <span>{c.title}</span>
-                <span className="rc-pill">
-                  {c.lifecycle === "done"
-                    ? "integrada"
-                    : c.stage
-                      ? (STAGE_LABEL[c.stage] ?? c.stage)
-                      : c.lifecycle}
+                <span className={`rc-pill ${waitingYou?.has(c.id) ? "needs-you" : ""}`}>
+                  {waitingYou?.has(c.id)
+                    ? "espera tu decisión → abrir"
+                    : c.lifecycle === "done"
+                      ? "integrada"
+                      : c.lifecycle === "blocked"
+                        ? "en cola"
+                        : c.stage
+                          ? (STAGE_LABEL[c.stage] ?? c.stage)
+                          : c.lifecycle}
                 </span>
               </button>
             ))}

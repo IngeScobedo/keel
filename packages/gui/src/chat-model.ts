@@ -232,6 +232,16 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           text: `Empezó ${p.key ?? ""} · ${String(p.title)}`,
         })
         break
+      case "feature.subtask_waiting":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "warn",
+          subtask_id: typeof p.subtask_id === "string" ? p.subtask_id : null,
+          text: `${p.key ?? ""} (${String(p.display_id ?? "")}) espera que apruebes su commit · ${String(p.title)}`,
+        })
+        break
       case "feature.subtask_integrated":
         items.push({
           kind: "method",

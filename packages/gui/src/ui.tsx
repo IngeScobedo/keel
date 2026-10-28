@@ -44,16 +44,22 @@ const stateIcons: Record<VisualState, LucideIcon> = {
   orphan: Unplug,
   budget_stop: Square,
 }
-export function Status({ state, dot = false }: { state: VisualState; dot?: boolean }) {
+export function Status({
+  state,
+  dot = false,
+  label,
+}: {
+  state: VisualState
+  dot?: boolean
+  /** Otro texto para el mismo estado (p. ej. una feature que espera a sus subtareas). */
+  label?: string
+}) {
   const Icon = stateIcons[state]
+  const text = label ?? stateLabels[state]
   return (
-    <span
-      className={`status ${dot ? "status-dot" : ""}`}
-      data-state={state}
-      title={stateLabels[state]}
-    >
+    <span className={`status ${dot ? "status-dot" : ""}`} data-state={state} title={text}>
       <Icon size={dot ? 10 : 11} aria-hidden="true" />
-      {!dot && stateLabels[state]}
+      {!dot && text}
     </span>
   )
 }

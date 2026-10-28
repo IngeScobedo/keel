@@ -2,6 +2,7 @@ import {
   Bot,
   ChevronDown,
   Filter,
+  Flag,
   LayoutGrid,
   List,
   ListChecks,
@@ -29,11 +30,14 @@ export function TaskCard({
   runs,
   onSelect,
   onDragStart,
+  waiting,
 }: {
   item: WorkItem
   details?: TaskDetails
   runs: Run[]
   onSelect: () => void
+  /** Lo que espera una decisión tuya: en esta tarea o en sus subtareas. */
+  waiting?: { own: boolean; children: number } | undefined
   /** ADR-0006 §4: arrastrar pide la transición humana de la columna destino. */
   onDragStart?: (() => void) | undefined
 }) {
@@ -59,9 +63,22 @@ export function TaskCard({
           <SquarePlus size={11} />
           {item.display_id}
         </span>
-        <Status state={item.visual_state} />
+        {/* ADR-0022 §5: una feature que espera a sus hijas no está bloqueada por un problema. */}
+        {item.feature && item.lifecycle === "blocked" ? (
+          <Status state="queued" label="Esperando subtareas" />
+        ) : (
+          <Status state={item.visual_state} />
+        )}
       </span>
       <span className="card-title">{item.title}</span>
+      {(waiting?.own || (waiting?.children ?? 0) > 0) && (
+        <span className="card-needs-you" data-testid="card-needs-you">
+          <Flag size={11} />
+          {waiting?.own
+            ? "Espera tu decisión"
+            : `${waiting?.children} subtarea${waiting?.children === 1 ? "" : "s"} espera${waiting?.children === 1 ? "" : "n"} tu decisión`}
+        </span>
+      )}
       {item.feature && <FeatureProgress feature={item.feature} />}
       {item.subtask && (
         <span className="card-stage mono" data-testid="card-subtask">
@@ -128,7 +145,8 @@ function FeatureProgress({ feature }: { feature: NonNullable<WorkItem["feature"]
       </span>
       <span className="muted">
         {feature.working > 0 ? `${feature.working} en curso` : ""}
-        {feature.blocked > 0 ? ` · ${feature.blocked} esperando` : ""}
+        {/* Las que esperan su fase no esperan al humano: «en cola», no «esperando». */}
+        {feature.blocked > 0 ? ` · ${feature.blocked} en cola` : ""}
       </span>
     </span>
   )
@@ -138,24 +156,32 @@ function FeatureProgress({ feature }: { feature: NonNullable<WorkItem["feature"]
 function SubtaskFold({
   items,
   onSelect,
+  waitingYou,
 }: {
   items: WorkItem[]
   onSelect: (item: WorkItem) => void
+  waitingYou?: Set<string> | undefined
 }) {
+  // Abierto si alguna te espera: lo que te toca hacer no se esconde en un plegable.
+  const anyWaiting = items.some((c) => waitingYou?.has(c.id))
   return (
-    <details className="subtask-fold" data-testid="subtask-fold">
+    <details className="subtask-fold" data-testid="subtask-fold" open={anyWaiting}>
       <summary>{items.length} subtareas</summary>
       {items.map((c) => (
         <button type="button" key={c.id} className="subtask-row" onClick={() => onSelect(c)}>
           <Status state={c.visual_state} dot />
           <span className="mono muted">{c.subtask?.key ?? c.display_id}</span>
           <span>{c.title}</span>
-          <span className="rc-pill">
-            {c.lifecycle === "done"
-              ? "integrada"
-              : c.stage
-                ? (STAGE_LABEL[c.stage] ?? c.stage)
-                : c.lifecycle}
+          <span className={`rc-pill ${waitingYou?.has(c.id) ? "needs-you" : ""}`}>
+            {waitingYou?.has(c.id)
+              ? "espera tu decisión"
+              : c.lifecycle === "done"
+                ? "integrada"
+                : c.lifecycle === "blocked"
+                  ? "en cola"
+                  : c.stage
+                    ? (STAGE_LABEL[c.stage] ?? c.stage)
+                    : c.lifecycle}
           </span>
         </button>
       ))}
@@ -212,6 +238,7 @@ export function Board({
   demo,
   onTransition,
   onClose,
+  waitingYou,
 }: {
   tasks: WorkItem[]
   runs: Run[]
@@ -224,6 +251,8 @@ export function Board({
   onTransition?: (item: WorkItem, to: "planned") => Promise<void>
   /** ADR-0027: soltar en Done abre el cierre a mano. */
   onClose?: (item: WorkItem) => void
+  /** Tareas con algo esperando una decisión tuya (aprobaciones pendientes). */
+  waitingYou?: Set<string>
 }) {
   const [dragging, setDragging] = useState<WorkItem | null>(null)
   const [over, setOver] = useState<BoardColumn | null>(null)
@@ -393,9 +422,18 @@ export function Board({
                             runs={runs}
                             onSelect={() => onSelect(item)}
                             {...(onTransition ? { onDragStart: () => setDragging(item) } : {})}
+                            waiting={{
+                              own: waitingYou?.has(item.id) ?? false,
+                              children: childrenOf(item.id).filter((c) => waitingYou?.has(c.id))
+                                .length,
+                            }}
                           />
                           {item.feature && (
-                            <SubtaskFold items={childrenOf(item.id)} onSelect={onSelect} />
+                            <SubtaskFold
+                              items={childrenOf(item.id)}
+                              onSelect={onSelect}
+                              waitingYou={waitingYou}
+                            />
                           )}
                         </div>
                       ))}

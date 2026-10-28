@@ -4432,3 +4432,17 @@ button.rc-ledger-row:hover {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* ADR-0022 §5: lo que te toca decidir en una feature se ve sin abrir nada. */
+.card-needs-you {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-status-waiting-human);
+}
+.rc-pill.needs-you {
+  color: var(--color-status-waiting-human);
+  background: var(--color-status-waiting-human-bg);
+  border-color: var(--color-status-waiting-human-border);
+}

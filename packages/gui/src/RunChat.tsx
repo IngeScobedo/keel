@@ -304,7 +304,7 @@ function Row({
         </Said>
       )
     case "method":
-      return <MethodRow item={item} onDoc={onDoc} />
+      return <MethodRow item={item} onDoc={onDoc} onOpenTask={onOpenTask} />
     case "divider":
       return (
         <p className="rc-divider" data-testid="chat-divider">

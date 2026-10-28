@@ -52,6 +52,7 @@ export function Inspector({
   call,
   tasks,
   onOpenTask,
+  waitingYou,
   onCloseTask,
 }: {
   task: WorkItem
@@ -69,6 +70,7 @@ export function Inspector({
   /** ADR-0022: todas las tareas, para el plan de una feature. */
   tasks?: WorkItem[]
   onOpenTask?: (item: WorkItem) => void
+  waitingYou?: Set<string>
   /** ADR-0027: cerrar a mano con motivo y evidencia. */
   onCloseTask?: () => void
 }) {
@@ -180,6 +182,7 @@ export function Inspector({
           <FeaturePlan
             task={task}
             subtasks={tasks.filter((t) => t.parent_work_item_id === task.id)}
+            waitingYou={waitingYou}
             {...(onOpenTask ? { onOpen: onOpenTask } : {})}
           />
         )}
