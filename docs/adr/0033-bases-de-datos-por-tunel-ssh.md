@@ -54,10 +54,11 @@ Lo que hay:
 
 ### 2. Keel abre el túnel por cada uso y lo cierra
 
-- Keel lanza
-  `ssh -F none -o ControlMaster=no -o ControlPath=none -o ExitOnForwardFailure=yes -N -L 127.0.0.1:<puerto libre>:<host>:<port>`,
-  con las opciones de la conexión SSH: su huella en el `known_hosts` de Keel, su
-  llave o su agente y askpass.
+- Keel lanza `ssh -N -L 127.0.0.1:<puerto libre>:<host>:<port>` con:
+  - `-F none`, `ControlMaster=no`, `ControlPath=none` y
+    `ExitOnForwardFailure=yes`;
+  - las opciones de la conexión SSH: su huella en el `known_hosts` de Keel, su
+    llave o su agente, y askpass.
 - **Nunca la config del humano.** El spike mostró que con su `ControlMaster` el
   puerto queda abierto después de terminar.
 - **El puerto** es aleatorio, sólo en `127.0.0.1`, y nadie más lo recibe: la
