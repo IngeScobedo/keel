@@ -34,6 +34,32 @@ export const SEMANTIC_SCHEMAS = {
       command: z.string(),
       exit_code: z.number().int().nullable(),
       output_ref: z.string().nullable(),
+      /** Para la tarjeta: la conexión, su entorno y cuánto tardó. */
+      run_key: z.string().optional(),
+      connection: z.string().optional(),
+      environment: z.string().optional(),
+      duration_ms: z.number().int().optional(),
+    }),
+  },
+  "ssh.command.started": {
+    schema_version: 1,
+    schema: z.object({
+      run_key: z.string(),
+      connection: z.string(),
+      environment: z.string(),
+      server: z.string(),
+      command: z.string(),
+    }),
+  },
+  "terraform.resource.progress": {
+    schema_version: 1,
+    schema: z.object({
+      run_key: z.string(),
+      address: z.string(),
+      action: z.enum(["create", "update", "delete", "replace", "read", "no-op"]),
+      status: z.enum(["planned", "started", "progress", "complete", "errored"]),
+      elapsed: z.number().nullable(),
+      message: z.string().nullable(),
     }),
   },
   "iac.plan.created": {

@@ -39,6 +39,16 @@ import {
   vaultFiles,
 } from "./ansible.js"
 import { redactKnownPatterns, redactSecrets, resolveSecret } from "./secrets.js"
+import {
+  changesFromShow,
+  countsOf,
+  liveEvent,
+  outputsOf,
+  planSummary,
+  TerraformError,
+  type TfDetails,
+  terraform,
+} from "./terraform.js"
 
 export type ConnectionRow = {
   id: string
@@ -509,17 +519,51 @@ export class ResourceBroker {
             ? "rw"
             : "sin credencial"
       const started = performance.now()
+      // SSH: la tarjeta se abre al empezar y se cierra con el exit y la duración.
+      const sshKey = conn.conn_type === "ssh" ? ulid() : null
+      if (sshKey)
+        this.deps.emit(ctx.projectId, ctx.runId, "ssh.command.started", {
+          run_key: sshKey,
+          connection: conn.name,
+          environment: conn.environment,
+          server: String(config.user ? `${config.user}@${config.host}` : (config.host ?? "")),
+          command: redactKnownPatterns(redactSecrets(String(p.input.command ?? ""), secrets)),
+        })
       const raw =
         conn.conn_type === "ansible"
           ? await this.runAnsible(ctx, conn, config, p.operation, p.input, secrets, (l) => {
               live = l
             })
-          : conn.conn_type === "ssh" && ssh
-            ? await runManagedSsh(conn, config, p.input, ssh)
-            : await this.run(conn, config, p.operation, p.input, secret, tfVars)
+          : conn.conn_type === "terraform"
+            ? await this.runTerraform(ctx, conn, config, p.operation, p.input, secrets, tfVars)
+            : conn.conn_type === "ssh" && ssh
+              ? await runManagedSsh(conn, config, p.input, ssh)
+              : await this.run(conn, config, p.operation, p.input, secret)
       const duration_ms = Math.round(performance.now() - started)
       // Redacción exacta (ADR-0013 §3) y por patrones conocidos (ADR-0025 §8).
-      const clean = redactKnownPatterns(redactSecrets(raw, [...secrets, ...live]))
+      const all = [...secrets, ...live]
+      const clean = redactKnownPatterns(redactSecrets(raw, all))
+      // El payload del evento es una función: lo que devuelve también pasa por la redacción.
+      clean.semantic = {
+        kind: raw.semantic.kind,
+        payload: (ref) =>
+          redactKnownPatterns(
+            redactSecrets(
+              {
+                ...raw.semantic.payload(ref),
+                ...(sshKey
+                  ? {
+                      run_key: sshKey,
+                      connection: conn.name,
+                      environment: conn.environment,
+                      duration_ms,
+                    }
+                  : {}),
+              },
+              all,
+            ),
+          ),
+      }
       return this.record(ctx, conn, p.operation, p.input, clean, { role, duration_ms })
     } catch (e) {
       const all = [...secrets, ...live]
@@ -537,7 +581,6 @@ export class ResourceBroker {
     operation: string,
     input: Record<string, unknown>,
     secret: string | null,
-    tfVars: Record<string, string>,
   ): Promise<RawResult> {
     switch (conn.conn_type) {
       case "sqlite":
@@ -545,10 +588,6 @@ export class ResourceBroker {
         return runSql(conn, config, operation, input, secret)
       case "ssh":
         return runSsh(config, input)
-      case "terraform":
-        return operation === "iac.plan"
-          ? runPlan(config, tfVars, this.deps.plansDir)
-          : runApply(config, input, tfVars, this.deps.plansDir)
       default:
         throw new BrokerError("invalid", `tipo de conexión desconocido: ${conn.conn_type}`)
     }
@@ -821,6 +860,182 @@ export class ResourceBroker {
     }
   }
 
+  /**
+   * Terraform con salida para máquinas: cada recurso llega en vivo a la tarjeta y al
+   * agente vuelve el árbol de cambios corto. `apply` sólo ejecuta el archivo de plan
+   * aprobado, atado a su hash (ADR-0013 §5).
+   */
+  private async runTerraform(
+    ctx: ExecuteContext,
+    conn: ConnectionRow,
+    config: Record<string, unknown>,
+    operation: string,
+    input: Record<string, unknown>,
+    secrets: string[],
+    vars: Record<string, string>,
+  ): Promise<RawResult> {
+    const dir = String(config.dir ?? "")
+    if (!dir || !existsSync(dir))
+      throw new BrokerError("invalid", "la conexión terraform necesita config.dir")
+    const bin = String(config.terraform_path ?? "terraform")
+    const env = { ...(process.env as Record<string, string>), ...vars, TF_IN_AUTOMATION: "1" }
+    const redact = (v: string) => redactKnownPatterns(redactSecrets(v, secrets))
+    const mode = operation === "iac.plan" ? "plan" : "apply"
+    const runKey = ulid()
+    const started = performance.now()
+    this.deps.emit(ctx.projectId, ctx.runId, "iac.run.started", {
+      tool: "terraform",
+      run_key: runKey,
+      connection: conn.name,
+      environment: conn.environment,
+      mode,
+    })
+    const errors: string[] = []
+    const onJson = (m: Record<string, unknown>) => {
+      if (m.type === "diagnostic") {
+        const d = m.diagnostic as { severity?: string; summary?: string; detail?: string }
+        if (d?.severity === "error")
+          errors.push(redact(`${d.summary ?? ""}${d.detail ? `: ${d.detail}` : ""}`).slice(0, 500))
+      }
+      const e = liveEvent(m)
+      if (e)
+        this.deps.emit(ctx.projectId, ctx.runId, "terraform.resource.progress", {
+          run_key: runKey,
+          ...e,
+          message: e.message ? redact(e.message).slice(0, 500) : null,
+        })
+    }
+    const tf = async (args: string[], cb?: (m: Record<string, unknown>) => void) => {
+      try {
+        return await terraform(bin, dir, args, env, cb)
+      } catch (e) {
+        if (e instanceof TerraformError) throw new BrokerError("failed", e.message)
+        throw e
+      }
+    }
+    const fail = (what: string, out: string) =>
+      new BrokerError(
+        "failed",
+        `terraform ${what}: ${errors.length ? errors.join(" · ") : redact(out).slice(-2000)}`,
+      )
+    if (mode === "plan") {
+      if (!existsSync(join(dir, ".terraform"))) {
+        const init = await tf(["init", "-input=false", "-no-color"])
+        if (init.status !== 0) throw fail("init", init.out)
+      }
+      // El archivo de plan lleva las variables (secretos incluidos) en claro: no es un
+      // artefacto; vive en la carpeta privada de Keel y la aprobación se ata a su hash.
+      mkdirSync(this.deps.plansDir, { recursive: true, mode: 0o700 })
+      const tmp = join(this.deps.plansDir, `${ulid()}.tfplan`)
+      const plan = await tf(["plan", "-input=false", "-json", `-out=${tmp}`], onJson)
+      if (plan.status !== 0) {
+        rmSync(tmp, { force: true })
+        throw fail("plan", plan.out)
+      }
+      const sha = new Bun.CryptoHasher("sha256").update(readFileSync(tmp)).digest("hex")
+      const final = join(this.deps.plansDir, `${sha}.tfplan`)
+      renameSync(tmp, final)
+      chmodSync(final, 0o600)
+      const show = await tf(["show", "-json", final])
+      const text = await tf(["show", "-no-color", final])
+      let resources: ReturnType<typeof changesFromShow> = []
+      try {
+        resources = changesFromShow(JSON.parse(show.out))
+      } catch {
+        // Sin el JSON queda el texto; la tarjeta muestra sólo el resumen.
+      }
+      const counts = countsOf(resources)
+      const details: TfDetails = {
+        tool: "terraform",
+        mode,
+        counts,
+        resources: resources.slice(0, 60),
+        destructive: resources
+          .filter((r) => r.action === "delete" || r.action === "replace")
+          .map((r) => r.address),
+        outputs: {},
+        errors,
+        duration_ms: Math.round(performance.now() - started),
+      }
+      const summary = planSummary(counts)
+      return {
+        summary,
+        body: text.out,
+        media_type: "text/plain",
+        evidence_kind: "log",
+        plan_sha256: sha,
+        details: { ...details, run_key: runKey },
+        semantic: {
+          kind: "iac.plan.created",
+          payload: (ref) => ({
+            server: dir,
+            plan_sha256: sha,
+            summary,
+            plan_ref: ref,
+            tool: "terraform",
+            run_key: runKey,
+            details,
+          }),
+        },
+      }
+    }
+    const sha = String(input.plan_sha256 ?? "")
+    if (!/^[0-9a-f]{64}$/.test(sha)) throw new BrokerError("invalid", "falta input.plan_sha256")
+    const file = join(this.deps.plansDir, `${sha}.tfplan`)
+    if (!existsSync(file))
+      throw new BrokerError("not_found", "ese plan no existe; vuelve a planear")
+    // Sólo se aplica el plan aprobado: si el archivo ya no es el del hash, se rechaza.
+    const actual = new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex")
+    if (actual !== sha)
+      throw new BrokerError("denied", "el plan cambió desde que se aprobó; vuelve a planear")
+    let outputs: Record<string, string> = {}
+    let counts: TfDetails["counts"] = { add: 0, change: 0, remove: 0, replace: 0 }
+    const r = await tf(["apply", "-input=false", "-json", file], (m) => {
+      onJson(m)
+      if (m.type === "outputs") outputs = outputsOf(m)
+      if (m.type === "change_summary") {
+        const c = m.changes as { add?: number; change?: number; remove?: number }
+        counts = { add: c.add ?? 0, change: c.change ?? 0, remove: c.remove ?? 0, replace: 0 }
+      }
+    })
+    rmSync(file, { force: true })
+    const details: TfDetails = {
+      tool: "terraform",
+      mode,
+      counts,
+      resources: [],
+      destructive: [],
+      outputs,
+      errors,
+      duration_ms: Math.round(performance.now() - started),
+    }
+    const summary =
+      r.status === 0
+        ? `apply completado: ${planSummary(counts).replace(/^Plan: /, "")}`
+        : `apply falló (exit ${r.status})${errors[0] ? `: ${errors[0]}` : ""}`
+    return {
+      summary,
+      body: r.out,
+      media_type: "application/x-ndjson",
+      evidence_kind: "log",
+      exit_code: r.status,
+      plan_sha256: sha,
+      details: { ...details, run_key: runKey },
+      semantic: {
+        kind: "iac.apply.completed",
+        payload: (ref) => ({
+          server: dir,
+          plan_sha256: sha,
+          exit_code: r.status,
+          output_ref: ref,
+          tool: "terraform",
+          run_key: runKey,
+          details,
+        }),
+      },
+    }
+  }
+
   /** Cada tarea y cada resultado por host, en vivo y redactados (ADR-0011, ADR-0031 §5). */
   private emitAnsible(
     ctx: ExecuteContext,
@@ -1063,97 +1278,6 @@ async function runManagedSsh(
     semantic: {
       kind: "ssh.command.completed",
       payload: (ref) => ({ server: dest, command, exit_code: code, output_ref: ref }),
-    },
-  }
-}
-
-// --- Terraform (plan aprobado, atado a su hash) ---------------------------------------------
-function tf(
-  config: Record<string, unknown>,
-  args: string[],
-  vars: Record<string, string>,
-): { status: number | null; out: string } {
-  const dir = String(config.dir ?? "")
-  if (!dir || !existsSync(dir))
-    throw new BrokerError("invalid", "la conexión terraform necesita config.dir")
-  const r = spawnSync(String(config.terraform_path ?? "terraform"), [`-chdir=${dir}`, ...args], {
-    encoding: "utf8",
-    timeout: 10 * 60_000,
-    env: { ...process.env, ...vars, TF_IN_AUTOMATION: "1" },
-  })
-  if (r.error) throw new BrokerError("failed", `terraform no disponible: ${r.error.message}`)
-  return { status: r.status, out: `${r.stdout}${r.stderr ? `\n${r.stderr}` : ""}` }
-}
-
-function runPlan(
-  config: Record<string, unknown>,
-  vars: Record<string, string>,
-  plansDir: string,
-): RawResult {
-  const dir = String(config.dir ?? "")
-  if (!existsSync(join(dir, ".terraform"))) {
-    const init = tf(config, ["init", "-input=false", "-no-color"], vars)
-    if (init.status !== 0)
-      throw new BrokerError("failed", `terraform init: ${init.out.slice(-2000)}`)
-  }
-  // El archivo de plan lleva las variables (secretos incluidos) en claro: no es un
-  // artefacto; vive en la carpeta privada de Keel y la aprobación se ata a su hash.
-  mkdirSync(plansDir, { recursive: true, mode: 0o700 })
-  const tmp = join(plansDir, `${ulid()}.tfplan`)
-  const plan = tf(config, ["plan", "-input=false", "-no-color", `-out=${tmp}`], vars)
-  if (plan.status !== 0) {
-    rmSync(tmp, { force: true })
-    throw new BrokerError("failed", `terraform plan: ${plan.out.slice(-2000)}`)
-  }
-  const bytes = readFileSync(tmp)
-  const sha = new Bun.CryptoHasher("sha256").update(bytes).digest("hex")
-  const final = join(plansDir, `${sha}.tfplan`)
-  renameSync(tmp, final)
-  chmodSync(final, 0o600)
-  const show = tf(config, ["show", "-no-color", final], vars)
-  const summary = /Plan: .*|No changes\..*/.exec(plan.out)?.[0] ?? "plan creado"
-  return {
-    summary,
-    body: show.out,
-    media_type: "text/plain",
-    evidence_kind: "log",
-    output: show.out,
-    plan_sha256: sha,
-    semantic: {
-      kind: "iac.plan.created",
-      payload: (ref) => ({ server: dir, plan_sha256: sha, summary, plan_ref: ref }),
-    },
-  }
-}
-
-function runApply(
-  config: Record<string, unknown>,
-  input: Record<string, unknown>,
-  vars: Record<string, string>,
-  plansDir: string,
-): RawResult {
-  const sha = String(input.plan_sha256 ?? "")
-  if (!/^[0-9a-f]{64}$/.test(sha)) throw new BrokerError("invalid", "falta input.plan_sha256")
-  const file = join(plansDir, `${sha}.tfplan`)
-  if (!existsSync(file)) throw new BrokerError("not_found", "ese plan no existe; vuelve a planear")
-  // Sólo se aplica el plan aprobado: si el archivo ya no es el del hash, se rechaza.
-  const actual = new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex")
-  if (actual !== sha)
-    throw new BrokerError("denied", "el plan cambió desde que se aprobó; vuelve a planear")
-  const r = tf(config, ["apply", "-input=false", "-no-color", file], vars)
-  rmSync(file, { force: true })
-  const dir = String(config.dir ?? "")
-  return {
-    summary: r.status === 0 ? "apply completado" : `apply falló (exit ${r.status})`,
-    body: r.out,
-    media_type: "text/plain",
-    evidence_kind: "log",
-    output: r.out,
-    exit_code: r.status,
-    plan_sha256: sha,
-    semantic: {
-      kind: "iac.apply.completed",
-      payload: (ref) => ({ server: dir, plan_sha256: sha, exit_code: r.status, output_ref: ref }),
     },
   }
 }

@@ -318,9 +318,19 @@ describe("ADR-0013: intermediario de recursos", () => {
         operation: "iac.apply",
         policy: "auto",
       })
-      const plan = await exec(agent, "infra", "iac.plan", {})
+      const plan = (await exec(agent, "infra", "iac.plan", {})) as Awaited<
+        ReturnType<typeof exec>
+      > & {
+        summary: string
+        details: { counts: { add: number }; resources: { address: string; action: string }[] }
+      }
       expect(plan.plan_sha256).toMatch(/^[0-9a-f]{64}$/)
-      expect(plan.output).toContain("[secreto]")
+      // Al agente vuelve el árbol de cambios, no la salida de terraform.
+      expect(plan.summary).toBe("Plan: +1 crear")
+      expect(plan.details.resources).toMatchObject([
+        { address: "terraform_data.demo", action: "create" },
+      ])
+      expect(plan.output).toBeUndefined()
 
       // Un plan alterado después de planear no se aplica.
       const planFile = join(dir, "plans", `${plan.plan_sha256}.tfplan`)
@@ -330,9 +340,18 @@ describe("ADR-0013: intermediario de recursos", () => {
         exec(agent, "infra", "iac.apply", { plan_sha256: plan.plan_sha256 }),
       ).rejects.toThrow("el plan cambió")
       writeFileSync(planFile, original)
-      const applied = await exec(agent, "infra", "iac.apply", { plan_sha256: plan.plan_sha256 })
+      const applied = (await exec(agent, "infra", "iac.apply", {
+        plan_sha256: plan.plan_sha256,
+      })) as Awaited<ReturnType<typeof exec>> & { details: { outputs: Record<string, string> } }
       expect(applied.exit_code).toBe(0)
-      expect(applied.output).toContain('valor = "hola-[secreto]"')
+      expect(applied.details.outputs.valor).toBe("hola-[secreto]")
+      // Cada recurso llegó en vivo: planeado, empezado y terminado.
+      const live = daemon.repo
+        .eventsAfter(0, null, 10_000)
+        .filter((e) => e.kind === "terraform.resource.progress")
+        .map((e) => JSON.parse(e.payload_json).status)
+      // apply -json vuelve a anunciar lo planeado antes de aplicar: la tarjeta arma su lista.
+      expect(live).toEqual(["planned", "planned", "started", "complete"])
 
       // El centinela no está en la base de Keel ni en sus artefactos, ni en lo devuelto.
       const tables = daemon.store.db
