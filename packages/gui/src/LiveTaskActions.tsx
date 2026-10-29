@@ -9,6 +9,7 @@ import { ArrowRight, Play, Square } from "lucide-react"
 import { useState } from "react"
 import { mutationMeta } from "./client.js"
 import type { Run, WorkItem } from "./model.js"
+import { Select } from "./ui/index.js"
 import { Button, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -123,42 +124,33 @@ export function LiveTaskActions({
         >
           <label>
             Run
-            <select
+            <Select
               aria-label="Propósito del run"
               value={chosen}
-              onChange={(e) => setPurpose(e.target.value as RunPurpose)}
-            >
-              {purposes.map((p) => (
-                <option key={p} value={p}>
-                  {PURPOSE_LABEL[p]}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setPurpose(v as RunPurpose)}
+              options={purposes.map((p) => ({ value: String(p), label: PURPOSE_LABEL[p] }))}
+            />
           </label>
           <label>
             Agente
-            <select
+            <Select
               aria-label="Proveedor"
               value={profile}
-              onChange={(e) => setProfile(e.target.value)}
-            >
-              <option value="claude">Claude</option>
-              <option value="codex">Codex</option>
-            </select>
+              onChange={(v) => setProfile(v)}
+              options={[
+                { value: "claude", label: "Claude" },
+                { value: "codex", label: "Codex" },
+              ]}
+            />
           </label>
           <label>
             Permisos
-            <select
+            <Select
               aria-label="Modo de permisos"
               value={chosenMode}
-              onChange={(e) => setMode(e.target.value as PermissionMode)}
-            >
-              {modes.map((m) => (
-                <option key={m} value={m}>
-                  {MODE_LABEL[m]}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setMode(v as PermissionMode)}
+              options={modes.map((m) => ({ value: String(m), label: MODE_LABEL[m] }))}
+            />
           </label>
           {chosenMode === "bypass" && (
             <p className="deleted" role="alert">

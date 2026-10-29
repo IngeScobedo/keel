@@ -10,9 +10,9 @@ import {
   Square,
   TriangleAlert,
   Unplug,
-  X,
 } from "lucide-react"
-import { type ButtonHTMLAttributes, type ReactNode, useEffect, useId, useRef } from "react"
+import type { ReactNode } from "react"
+import { Dialog } from "./ui/index.js"
 
 export const stateLabels: Record<VisualState, string> = {
   queued: "Queued",
@@ -63,22 +63,8 @@ export function Status({
     </span>
   )
 }
-export function Button({
-  icon: Icon,
-  children,
-  variant = "default",
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  icon?: LucideIcon
-  variant?: "default" | "primary" | "danger" | "ghost"
-}) {
-  return (
-    <button type="button" className={`button ${variant} ${props.className ?? ""}`} {...props}>
-      {Icon && <Icon size={14} aria-hidden="true" />}
-      {children}
-    </button>
-  )
-}
+/** Los controles viven en `ui/` (ADR-0034 §2); estos nombres siguen para no tocar cada vista. */
+export { Button, Tabs } from "./ui/index.js"
 export function Empty({
   title,
   children,
@@ -96,6 +82,7 @@ export function Empty({
     </div>
   )
 }
+/** Un diálogo modal: el de `ui/` sobre Base UI, con el nombre de siempre. */
 export function Modal({
   title,
   children,
@@ -107,58 +94,10 @@ export function Modal({
   onClose: () => void
   wide?: boolean
 }) {
-  const ref = useRef<HTMLDialogElement>(null)
-  // Un id por modal: con dos abiertos (una conexión SSH creada desde la de una base), cada
-  // uno se anuncia con su propio título.
-  const titleId = useId()
-  useEffect(() => {
-    ref.current?.showModal()
-    // showModal enfoca el primer control (el botón de cerrar); el campo marcado gana.
-    ref.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus()
-    return () => ref.current?.close()
-  }, [])
   return (
-    <dialog
-      ref={ref}
-      className={`modal ${wide ? "wide" : ""}`}
-      aria-labelledby={titleId}
-      onCancel={(event) => {
-        event.preventDefault()
-        onClose()
-      }}
-    >
-      <header>
-        <h2 id={titleId}>{title}</h2>
-        <Button variant="ghost" icon={X} aria-label="Cerrar diálogo" onClick={onClose} />
-      </header>
+    <Dialog title={title} onClose={onClose} wide={wide}>
       {children}
-    </dialog>
-  )
-}
-export function Tabs<T extends string>({
-  values,
-  active,
-  onChange,
-}: {
-  values: readonly T[]
-  active: T
-  onChange: (tab: T) => void
-}) {
-  return (
-    <div className="tabs" role="tablist">
-      {values.map((tab) => (
-        <button
-          type="button"
-          key={tab}
-          role="tab"
-          aria-selected={active === tab}
-          className={active === tab ? "active" : ""}
-          onClick={() => onChange(tab)}
-        >
-          {tab}
-        </button>
-      ))}
-    </div>
+    </Dialog>
   )
 }
 export function Hint({ children }: { children: ReactNode }) {

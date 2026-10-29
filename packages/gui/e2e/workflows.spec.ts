@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test"
+import { pick } from "./ui.js"
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/")
@@ -102,11 +103,11 @@ test("profile edits produce a local draft, routing and contracts can be inspecte
   await expect(page.locator(".profile-detail")).toContainText("v5")
   await expect(page.locator(".profile-detail")).toContainText("packages/gui/src/**")
   await page.getByRole("tab", { name: "Model routing", exact: true }).click()
-  await page.getByLabel("Complejidad de routing").selectOption("4")
+  await pick(page, page.getByLabel("Complejidad de routing"), "4")
   await expect(page.locator(".routing-panel")).toContainText("planned_workflow")
   await page.getByRole("button", { name: "Connections", exact: true }).click()
   await page.getByRole("tab", { name: "Contract hub", exact: true }).click()
-  await page.getByLabel("Versión del contrato").selectOption("v2")
+  await pick(page, page.getByLabel("Versión del contrato"), "v2")
   await expect(page.getByText("Breaking change · reconciliation required")).toBeVisible()
 })
 test("human review closes only a reviewed demo task", async ({ page }) => {

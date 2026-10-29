@@ -10,6 +10,7 @@ import { ApprovalActions } from "./ApprovalActions.js"
 import { mutationMeta } from "./client.js"
 import { GitPlanCard } from "./GitPlanCard.js"
 import { actorLabel, formatCost, type Run, type WorkItem } from "./model.js"
+import { Select } from "./ui/index.js"
 import { Button, Empty, Hint, Modal, Status } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -379,17 +380,21 @@ export function LiveInbox({
           </p>
           <label>
             Tarea vinculada
-            <select
+            <Select
               value={pairForm.task}
-              onChange={(e) => setPairForm({ ...pairForm, task: e.target.value })}
-            >
-              <option value="">Sin tarea (sólo lectura del proyecto y crear tareas)</option>
-              {tasks.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.display_id} · {t.title}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setPairForm({ ...pairForm, task: v })}
+              options={[
+                { value: "", label: "Sin tarea (sólo lectura del proyecto y crear tareas)" },
+                ...tasks.map((t) => ({
+                  value: String(t.id),
+                  label: (
+                    <>
+                      {t.display_id} · {t.title}
+                    </>
+                  ),
+                })),
+              ]}
+            />
           </label>
           <fieldset className="scope-list">
             <legend>Permisos</legend>

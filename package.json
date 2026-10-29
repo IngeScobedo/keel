@@ -16,6 +16,8 @@
     "typecheck": "tsc -b && tsc -p tsconfig.test.json --noEmit && tsc -p packages/gui/tsconfig.tools.json --noEmit",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
+    "tokens": "bun scripts/design-tokens.ts",
+    "tokens:check": "bun scripts/design-tokens.ts --check",
     "format": "biome format --write .",
     "docs:format": "prettier --write \"**/*.md\" \"!**/node_modules/**\"",
     "docs:lint": "markdownlint-cli2 \"**/*.md\" \"!**/node_modules/**\"",

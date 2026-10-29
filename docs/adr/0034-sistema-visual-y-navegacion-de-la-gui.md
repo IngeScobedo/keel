@@ -1,6 +1,6 @@
 # ADR-0034: La GUI como superficie de foco: sistema visual, controles y navegación
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-29)
 - **Fecha:** 2026-10-28
 - **Criticidad:** Alta
 - **Relacionados:**

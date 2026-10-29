@@ -10,6 +10,7 @@ import {
 import { useState } from "react"
 import { hasNativeShell } from "./client.js"
 import { demoDiff } from "./fixtures.js"
+import { Select } from "./ui/index.js"
 import { Button, Empty, Hint, Tabs } from "./ui.js"
 
 export function Connections({ demo }: { demo: boolean }) {
@@ -79,14 +80,15 @@ export function Connections({ demo }: { demo: boolean }) {
                   <h2>checkout_api</h2>
                   <p className="muted">backend → frontend · OpenAPI · append-only</p>
                 </div>
-                <select
+                <Select
                   aria-label="Versión del contrato"
                   value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                >
-                  <option>v1</option>
-                  <option>v2</option>
-                </select>
+                  onChange={(v) => setVersion(v)}
+                  options={[
+                    { value: "v1", label: "v1" },
+                    { value: "v2", label: "v2" },
+                  ]}
+                />
               </div>
               <div className="callout" data-state={version === "v1" ? "succeeded" : "blocked"}>
                 <strong>

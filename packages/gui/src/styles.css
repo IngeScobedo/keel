@@ -1882,7 +1882,7 @@ progress::-moz-progress-bar {
   color: var(--color-text-secondary);
 }
 .mode-badge.bypass {
-  color: #fff;
+  color: var(--color-accent-on);
   background: var(--color-status-failed);
   border-color: var(--color-status-failed);
 }
@@ -1933,7 +1933,7 @@ progress::-moz-progress-bar {
   border-color: var(--color-status-waiting-human-border);
 }
 .mode-badge.isolation-sandbox {
-  color: var(--color-status-succeeded, #3fb950);
+  color: var(--color-status-succeeded);
 }
 .evidence-attach {
   display: flex;
@@ -1979,7 +1979,7 @@ progress::-moz-progress-bar {
   min-width: 0;
 }
 .tag.coverage-instrumented {
-  color: var(--color-status-succeeded, #3fb950);
+  color: var(--color-status-succeeded);
 }
 .tag.coverage-observed {
   color: var(--color-accent-default);
@@ -2053,7 +2053,7 @@ progress::-moz-progress-bar {
   margin: 8px 0;
 }
 .claim.status-verified {
-  border-left-color: var(--color-status-succeeded, #3fb950);
+  border-left-color: var(--color-status-succeeded);
 }
 .claim.status-refuted {
   border-left-color: var(--color-status-failed);
@@ -4626,4 +4626,14 @@ button.rc-ledger-row:hover {
   align-items: center;
   gap: var(--space-3);
   color: var(--color-text-primary);
+}
+.research-cites {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  max-height: 140px;
+  overflow-y: auto;
 }

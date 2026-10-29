@@ -1,16 +1,48 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
-  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
   "files": {
     "ignoreUnknown": true,
     "includes": ["**", "!**/dist", "!**/*.tsbuildinfo", "!**/__fixtures__", "!**/fixtures"]
   },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "javascript": {
-    "formatter": { "quoteStyle": "double", "semicolons": "asNeeded", "trailingCommas": "all" }
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
   },
-  "linter": { "enabled": true, "rules": { "preset": "recommended" } },
-  "assist": { "actions": { "source": { "organizeImports": "on" } } },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "asNeeded",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "a11y": {
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": {
+            "inputComponents": ["Select", "Combobox", "Checkbox", "Switch", "Input", "TextArea"]
+          }
+        }
+      }
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
   "overrides": [
     {
       "includes": ["packages/core/src/**"],
@@ -31,7 +63,11 @@
             },
             "noRestrictedGlobals": {
               "level": "error",
-              "options": { "deniedGlobals": { "Bun": "core es runtime-agnostico." } }
+              "options": {
+                "deniedGlobals": {
+                  "Bun": "core es runtime-agnostico."
+                }
+              }
             }
           }
         }
@@ -57,7 +93,29 @@
             "noRestrictedGlobals": {
               "level": "error",
               "options": {
-                "deniedGlobals": { "Bun": "Las librerías corren en Node (ADR-0007 §4)." }
+                "deniedGlobals": {
+                  "Bun": "Las librerías corren en Node (ADR-0007 §4)."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/gui/src/**", "!packages/gui/src/ui/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@base-ui/**"],
+                    "message": "Base UI sólo se importa en packages/gui/src/ui/: usa los componentes de Keel (ADR-0034 §2)."
+                  }
+                ]
               }
             }
           }

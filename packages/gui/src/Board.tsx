@@ -22,6 +22,7 @@ import {
   type TaskDetails,
   type WorkItem,
 } from "./model.js"
+import { Select } from "./ui/index.js"
 import { Button, Empty, Status } from "./ui.js"
 
 export function TaskCard({
@@ -309,17 +310,18 @@ export function Board({
         <span className="toolbar-separator" />
         <label className="select-label">
           <Filter size={13} />
-          <select
+          <Select
             aria-label="Filtrar repositorio"
             value={repo}
-            onChange={(e) => setRepo(e.target.value)}
+            onChange={(v) => setRepo(v)}
             disabled={!demo}
-          >
-            <option value="all">All repos</option>
-            <option value="backend">Backend</option>
-            <option value="frontend">Frontend</option>
-            <option value="docs">Docs</option>
-          </select>
+            options={[
+              { value: "all", label: "All repos" },
+              { value: "backend", label: "Backend" },
+              { value: "frontend", label: "Frontend" },
+              { value: "docs", label: "Docs" },
+            ]}
+          />
           <ChevronDown size={12} />
         </label>
         <Button aria-pressed={needsYou} onClick={() => setNeedsYou((v) => !v)}>

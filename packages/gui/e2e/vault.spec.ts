@@ -6,6 +6,7 @@
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 import { bootDaemon, type Daemon, nativeShell } from "./daemon-bridge.js"
+import { pick } from "./ui.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -69,8 +70,8 @@ test("una conexión con contraseña: el vault la guarda y la pantalla no la vuel
   await page.getByRole("button", { name: "Nueva conexión" }).click()
   const form = page.getByTestId("new-connection")
   await form.getByLabel("Nombre de la conexión").fill("pg-staging")
-  await form.getByLabel("Tipo", { exact: true }).selectOption("postgres")
-  await form.getByLabel("Entorno", { exact: true }).selectOption("staging")
+  await pick(page, form.getByLabel("Tipo", { exact: true }), "PostgreSQL")
+  await pick(page, form.getByLabel("Entorno", { exact: true }), "staging")
   await form.getByLabel("Host").fill("db.staging.internal")
   await form.getByLabel("Contraseña").fill("centinela-e2e-31")
   await form.getByRole("button", { name: "Añadir", exact: true }).click()

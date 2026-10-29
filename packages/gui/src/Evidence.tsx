@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import { type KeelTable, TableWithChart } from "./Chart.js"
 import { mutationMeta } from "./client.js"
 import { actorLabel } from "./model.js"
+import { Select } from "./ui/index.js"
 import { Empty, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -173,17 +174,12 @@ export function EvidencePanel({
   return (
     <div className="evidence">
       <form className="evidence-attach" onSubmit={(e) => e.preventDefault()}>
-        <select
+        <Select
           aria-label="Tipo de evidencia"
           value={kind}
-          onChange={(e) => setKind(e.target.value as Kind)}
-        >
-          {KINDS.map((k) => (
-            <option key={k} value={k}>
-              {k}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => setKind(v as Kind)}
+          options={KINDS.map((k) => ({ value: String(k), label: k }))}
+        />
         <input
           aria-label="Título de la evidencia"
           placeholder="Título (opcional)"

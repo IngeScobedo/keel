@@ -46,6 +46,7 @@ import { RunsList, RunView } from "./RunView.js"
 import { SecretPrompts } from "./SecretPrompts.js"
 import { SETUP_EVENT } from "./SetupCard.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
+import { Select } from "./ui/index.js"
 import { Button, Hint, Modal } from "./ui.js"
 import { PlaceProvider, useNavigation } from "./useNav.js"
 import { useWorkspace } from "./useWorkspace.js"
@@ -195,7 +196,7 @@ export function App() {
       if (
         target.matches("input, textarea, select") ||
         target.isContentEditable ||
-        document.querySelector("dialog[open]")
+        document.querySelector(".ui-dialog")
       )
         return
       if (event.key.toLowerCase() === "c" && !event.metaKey && !event.ctrlKey) {
@@ -751,18 +752,19 @@ export function App() {
             </label>
             <label>
               Tipo
-              <select
+              <Select
                 aria-label="Tipo de tarea"
                 value={kind}
-                onChange={(e) => setKind(e.target.value)}
-              >
-                <option value="feature">feature</option>
-                <option value="bug">bug</option>
-                <option value="refactor">refactor</option>
-                <option value="chore">chore</option>
-                <option value="docs">docs</option>
-                <option value="research">investigación</option>
-              </select>
+                onChange={(v) => setKind(v)}
+                options={[
+                  { value: "feature", label: "feature" },
+                  { value: "bug", label: "bug" },
+                  { value: "refactor", label: "refactor" },
+                  { value: "chore", label: "chore" },
+                  { value: "docs", label: "docs" },
+                  { value: "research", label: "investigación" },
+                ]}
+              />
             </label>
             <label>
               Spec / acceptance criteria

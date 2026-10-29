@@ -3,6 +3,7 @@ import { Plus, ShieldCheck, Trash2 } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useState } from "react"
 import { mutationMeta } from "./client.js"
 import { actorLabel, type Run, type WorkItem } from "./model.js"
+import { Select } from "./ui/index.js"
 import { Button, Empty, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -194,14 +195,15 @@ export function Permissions({
               value={prefix}
               onChange={(e) => setPrefix(e.target.value)}
             />
-            <select
+            <Select
               aria-label="Efecto"
               value={effect}
-              onChange={(e) => setEffect(e.target.value as "auto" | "deny")}
-            >
-              <option value="auto">permitir</option>
-              <option value="deny">negar</option>
-            </select>
+              onChange={(v) => setEffect(v as "auto" | "deny")}
+              options={[
+                { value: "auto", label: "permitir" },
+                { value: "deny", label: "negar" },
+              ]}
+            />
             <button type="submit" className="button" disabled={!tool.trim()}>
               <Plus size={13} /> Añadir regla
             </button>

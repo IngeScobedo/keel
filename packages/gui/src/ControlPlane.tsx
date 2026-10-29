@@ -1,6 +1,7 @@
 import { ArrowRight, Check, GitBranch, Plus, Search, ShieldCheck } from "lucide-react"
 import { useState } from "react"
 import { demoProfiles } from "./fixtures.js"
+import { Select } from "./ui/index.js"
 import { Button, Empty, Hint, Modal, Tabs } from "./ui.js"
 
 const tabs = ["Perfiles", "Equipo y flujo", "Model routing", "Quality gates", "Evals"] as const
@@ -163,15 +164,12 @@ export function ControlPlane({ demo }: { demo: boolean }) {
               <h2>Routing simulator</h2>
               <label>
                 Complexity score
-                <select
+                <Select
                   aria-label="Complejidad de routing"
                   value={complexity}
-                  onChange={(e) => setComplexity(e.target.value)}
-                >
-                  {[1, 2, 3, 4, 5].map((value) => (
-                    <option key={value}>{value}</option>
-                  ))}
-                </select>
+                  onChange={(v) => setComplexity(v)}
+                  options={[1, 2, 3, 4, 5].map((value) => ({ value: String(value), label: value }))}
+                />
               </label>
               <section className="callout">
                 <h3>Policy result · preview</h3>

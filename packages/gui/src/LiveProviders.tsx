@@ -3,6 +3,7 @@ import { Bot } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { ModelPill } from "./Composer.js"
 import { mutationMeta } from "./client.js"
+import { Select } from "./ui/index.js"
 import { Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -94,21 +95,19 @@ export function LiveProviders({ call }: { call: Call }) {
       </label>
       <label className="connection">
         <strong>Límite para contestar una aprobación</strong>{" "}
-        <select
+        <Select
           aria-label="Límite para contestar una aprobación"
           value={String(view?.approvals.timeout_ms ?? "")}
           disabled={!view}
-          onChange={(e) =>
-            void update({ approvals_timeout_ms: e.target.value ? Number(e.target.value) : null })
-          }
-        >
-          <option value="">Sin límite</option>
-          {[5, 30, 120].map((min) => (
-            <option key={min} value={min * 60_000}>
-              {min < 60 ? `${min} min` : `${min / 60} h`}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => void update({ approvals_timeout_ms: v ? Number(v) : null })}
+          options={[
+            { value: "", label: "Sin límite" },
+            ...[5, 30, 120].map((min) => ({
+              value: String(min * 60_000),
+              label: min < 60 ? `${min} min` : `${min / 60} h`,
+            })),
+          ]}
+        />
         <p className="muted">
           Sin límite, el run espera con su lugar de concurrencia tomado. Con límite, al vencer se
           niega: el tiempo nunca aprueba. Las preguntas del agente nunca vencen.

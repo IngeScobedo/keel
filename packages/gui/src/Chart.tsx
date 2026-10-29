@@ -1,6 +1,7 @@
 import { BarChart3, Save } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 import { mutationMeta } from "./client.js"
+import { Select } from "./ui/index.js"
 import { Button, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -170,25 +171,28 @@ export function TableWithChart({
         </Button>
         {chart && (
           <>
-            <select aria-label="Eje x" value={x} onChange={(e) => setX(e.target.value)}>
-              {names.map((n) => (
-                <option key={n}>{n}</option>
-              ))}
-            </select>
-            <select aria-label="Eje y" value={y} onChange={(e) => setY(e.target.value)}>
-              {names.map((n) => (
-                <option key={n}>{n}</option>
-              ))}
-            </select>
-            <select
+            <Select
+              aria-label="Eje x"
+              value={x}
+              onChange={(v) => setX(v)}
+              options={names.map((n) => ({ value: String(n), label: n }))}
+            />
+            <Select
+              aria-label="Eje y"
+              value={y}
+              onChange={(v) => setY(v)}
+              options={names.map((n) => ({ value: String(n), label: n }))}
+            />
+            <Select
               aria-label="Tipo de gráfica"
               value={mark}
-              onChange={(e) => setMark(e.target.value as typeof mark)}
-            >
-              <option value="bar">barras</option>
-              <option value="line">línea</option>
-              <option value="point">puntos</option>
-            </select>
+              onChange={(v) => setMark(v as typeof mark)}
+              options={[
+                { value: "bar", label: "barras" },
+                { value: "line", label: "línea" },
+                { value: "point", label: "puntos" },
+              ]}
+            />
             {call && workItemId && (
               <Button icon={Save} onClick={() => void save()}>
                 Guardar

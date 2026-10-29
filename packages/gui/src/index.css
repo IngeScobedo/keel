@@ -1,0 +1,8 @@
+/*
+ * ADR-0034 §3: el orden de las capas decide qué gana, sin subir la especificidad. Un
+ * tema sólo toca `tokens`. `styles.css` es lo de antes: va en `base` y se vacía al
+ * reescribir cada vista con `ui/` y su CSS al lado.
+ */
+@layer tokens, base, ui, components, views;
+@import url("./tokens.css");
+@import url("./styles.css") layer(base);

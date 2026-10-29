@@ -31,6 +31,7 @@ import { buildChat } from "./chat-model.js"
 import { hasNativeShell, mutationMeta } from "./client.js"
 import { InfraCard } from "./InfraCard.js"
 import type { InfraRun } from "./infra-model.js"
+import { Select } from "./ui/index.js"
 import { Button, Empty, Hint, Modal } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -755,11 +756,11 @@ function Detail({
                 <tr key={o.operation}>
                   <td className="mono">{o.operation}</td>
                   <td>
-                    <select
+                    <Select
                       aria-label={`Política de ${o.operation} en ${c.name}`}
                       value={o.policy}
-                      onChange={(e) => {
-                        const policy = e.target.value
+                      onChange={(v) => {
+                        const policy = v
                         // ADR-0026: quitar la pregunta en prod pide confirmar el riesgo.
                         if (policy === "auto" && prodWrite) onRisk(o.operation)
                         else
@@ -772,11 +773,12 @@ function Detail({
                             }),
                           )
                       }}
-                    >
-                      <option value="ask">preguntar</option>
-                      <option value="auto">sin preguntar</option>
-                      <option value="deny">denegar</option>
-                    </select>
+                      options={[
+                        { value: "ask", label: "preguntar" },
+                        { value: "auto", label: "sin preguntar" },
+                        { value: "deny", label: "denegar" },
+                      ]}
+                    />
                   </td>
                   <td className="muted">
                     {o.risk_accepted_at ? (
@@ -1010,37 +1012,39 @@ function NewConnection({
             </label>
             <label>
               Tipo
-              <select
+              <Select
                 aria-label="Tipo"
                 value={type}
                 disabled={fixedType !== undefined}
-                onChange={(e) => {
-                  const t = e.target.value as Kind
+                onChange={(v) => {
+                  const t = v as Kind
                   setType(t)
                   // Ansible: la contraseña de ansible-vault se pide hasta que la guardes.
                   setMethod(t === "postgres" ? "password" : t === "ansible" ? "ask" : "key")
                 }}
-              >
-                <option value="ssh">SSH</option>
-                <option value="postgres">PostgreSQL</option>
-                <option value="sqlite">SQLite</option>
-                <option value="terraform">Terraform</option>
-                <option value="ansible">Ansible</option>
-              </select>
+                options={[
+                  { value: "ssh", label: "SSH" },
+                  { value: "postgres", label: "PostgreSQL" },
+                  { value: "sqlite", label: "SQLite" },
+                  { value: "terraform", label: "Terraform" },
+                  { value: "ansible", label: "Ansible" },
+                ]}
+              />
             </label>
             <label>
               Entorno
-              <select
+              <Select
                 aria-label="Entorno"
                 value={env}
                 disabled={derivedEnv !== null}
                 title={derivedEnv ? "Lo deciden las conexiones de los hosts" : undefined}
-                onChange={(e) => setEnv(e.target.value as Env)}
-              >
-                <option value="dev">dev</option>
-                <option value="staging">staging</option>
-                <option value="prod">prod</option>
-              </select>
+                onChange={(v) => setEnv(v as Env)}
+                options={[
+                  { value: "dev", label: "dev" },
+                  { value: "staging", label: "staging" },
+                  { value: "prod", label: "prod" },
+                ]}
+              />
             </label>
           </div>
           {env === "prod" && (
@@ -1062,11 +1066,10 @@ function NewConnection({
                 <div className="conn-form-row" data-testid="db-via">
                   <label>
                     Cómo llega Keel a la base
-                    <select
+                    <Select
                       aria-label="Cómo llega Keel a la base"
                       value={via}
-                      onChange={(e) => {
-                        const v = e.target.value
+                      onChange={(v) => {
                         if (v === "__new__") {
                           setNestedSsh(true)
                           return
@@ -1080,15 +1083,18 @@ function NewConnection({
                             port: o.port || "5432",
                           }))
                       }}
-                    >
-                      <option value="">Directo: el daemon alcanza la base</option>
-                      {sshConnections.map((c) => (
-                        <option key={c.id} value={c.name}>
-                          Por túnel SSH · {c.name} ({c.environment})
-                        </option>
-                      ))}
-                      <option value="__new__">Por túnel SSH · crear una conexión SSH nueva…</option>
-                    </select>
+                      options={[
+                        { value: "", label: "Directo: el daemon alcanza la base" },
+                        ...sshConnections.map((c) => ({
+                          value: c.name,
+                          label: `Por túnel SSH · ${c.name} (${c.environment})`,
+                        })),
+                        {
+                          value: "__new__",
+                          label: "Por túnel SSH · crear una conexión SSH nueva…",
+                        },
+                      ]}
+                    />
                   </label>
                   {via && (
                     <p className="muted">
@@ -1300,16 +1306,17 @@ function ImportModal({
                   {h.host}:{h.port}
                 </td>
                 <td>
-                  <select
+                  <Select
                     aria-label={`Entorno de ${h.alias}`}
                     value={pick[h.alias] ?? h.environment ?? "dev"}
                     disabled={!pick[h.alias]}
-                    onChange={(e) => setPick((o) => ({ ...o, [h.alias]: e.target.value as Env }))}
-                  >
-                    <option value="dev">dev</option>
-                    <option value="staging">staging</option>
-                    <option value="prod">prod</option>
-                  </select>{" "}
+                    onChange={(v) => setPick((o) => ({ ...o, [h.alias]: v as Env }))}
+                    options={[
+                      { value: "dev", label: "dev" },
+                      { value: "staging", label: "staging" },
+                      { value: "prod", label: "prod" },
+                    ]}
+                  />{" "}
                   <span className="muted">{existing.has(h.alias) ? "ya existe" : h.why}</span>
                 </td>
                 <td className="mono">
@@ -1719,18 +1726,22 @@ function AnsiblePicker({
                     {h.address ?? "sin dirección"}
                   </td>
                   <td>
-                    <select
+                    <Select
                       aria-label={`Conexión de ${h.name}`}
                       value={hosts[h.name] ?? ""}
-                      onChange={(e) => setHosts((o) => ({ ...o, [h.name]: e.target.value }))}
-                    >
-                      <option value="">Elige la conexión SSH…</option>
-                      {ssh.map((c) => (
-                        <option key={c.id} value={c.name}>
-                          {c.name} · {c.environment}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(v) => setHosts((o) => ({ ...o, [h.name]: v }))}
+                      options={[
+                        { value: "", label: "Elige la conexión SSH…" },
+                        ...ssh.map((c) => ({
+                          value: String(c.name),
+                          label: (
+                            <>
+                              {c.name} · {c.environment}
+                            </>
+                          ),
+                        })),
+                      ]}
+                    />
                     {h.suggested_connection && hosts[h.name] === h.suggested_connection && (
                       <small className="ansible-match">coincide con el inventario</small>
                     )}

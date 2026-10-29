@@ -93,12 +93,13 @@ export function useNavigation(root: () => Element | null) {
       else history.forward()
     }
     window.addEventListener("popstate", onPop)
-    window.addEventListener("keydown", onKey)
-    window.addEventListener("mouseup", onMouse)
+    // En captura: un diálogo de Base UI puede frenar la tecla antes de que suba.
+    window.addEventListener("keydown", onKey, true)
+    window.addEventListener("mouseup", onMouse, true)
     return () => {
       window.removeEventListener("popstate", onPop)
-      window.removeEventListener("keydown", onKey)
-      window.removeEventListener("mouseup", onMouse)
+      window.removeEventListener("keydown", onKey, true)
+      window.removeEventListener("mouseup", onMouse, true)
     }
   }, [commit, marked])
   // Sólo al cambiar de lugar: cambiar la pestaña del lugar actual no mueve el scroll.

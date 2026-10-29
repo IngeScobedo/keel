@@ -15,6 +15,7 @@
     "tokens": "bun scripts/generate-tokens.ts"
   },
   "dependencies": {
+    "@base-ui/react": "1.9.0",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@keel/core": "workspace:*",

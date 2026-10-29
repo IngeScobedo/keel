@@ -8,6 +8,7 @@ import { mutationMeta } from "./client.js"
 import { LiveTaskActions } from "./LiveTaskActions.js"
 import { StageTrack } from "./MethodCards.js"
 import type { Run, WorkItem } from "./model.js"
+import { Select } from "./ui/index.js"
 import { Button, Status } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -169,14 +170,15 @@ export function TaskWork({
           />
           <div className="task-work-bar">
             {!latest && (
-              <select
+              <Select
                 aria-label="Agente"
                 value={provider}
-                onChange={(e) => setProvider(e.target.value as "claude" | "codex")}
-              >
-                <option value="claude">Claude</option>
-                <option value="codex">Codex</option>
-              </select>
+                onChange={(v) => setProvider(v as "claude" | "codex")}
+                options={[
+                  { value: "claude", label: "Claude" },
+                  { value: "codex", label: "Codex" },
+                ]}
+              />
             )}
             {!latest && (
               <ModelPill
@@ -253,17 +255,12 @@ function ReturnStage({ task, flow, call }: { task: WorkItem; flow: TaskFlowView;
     >
       <label>
         Devolver a
-        <select
+        <Select
           aria-label="Etapa a la que devolver"
           value={to}
-          onChange={(e) => setTo(e.target.value)}
-        >
-          {earlier.map((s) => (
-            <option key={s} value={s}>
-              {STAGE_LABEL[s]}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => setTo(v)}
+          options={earlier.map((s) => ({ value: String(s), label: STAGE_LABEL[s] }))}
+        />
       </label>
       <input
         aria-label="Motivo"

@@ -6,6 +6,7 @@ import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 import { advanced, bootDaemon, type Daemon, Line, meta, nativeShell } from "./daemon-bridge.js"
+import { pick } from "./ui.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -52,7 +53,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.locator(".rc-head .text-link").click()
   await advanced(page)
   await page.getByRole("button", { name: "Mover a planned" }).click()
-  await page.getByLabel("Proveedor").selectOption("codex")
+  await pick(page, page.getByLabel("Proveedor"), "Codex")
   if (process.env.KEEL_E2E_SHOTS)
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "start.png") })
   await page.getByLabel("Instrucción para el agente").fill("approval")
@@ -111,7 +112,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   const card = page.getByTestId("pairing")
   await expect(card).toContainText(`código ${pairing.code}`)
   await card.getByRole("button", { name: "Revisar y aprobar" }).click()
-  await page.getByLabel("Tarea vinculada").selectOption({ label: "KEEL-1 · Retry con backoff" })
+  await pick(page, page.getByLabel("Tarea vinculada"), "KEEL-1 · Retry con backoff")
   await page.getByRole("checkbox", { name: /Crear tareas/ }).uncheck()
   await page.getByRole("button", { name: "Aprobar sesión" }).click()
   await expect(card).toHaveCount(0)
@@ -203,7 +204,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.getByRole("button", { name: "Create task", exact: true }).click()
   await advanced(page)
   await page.getByRole("button", { name: "Mover a planned" }).click()
-  await page.getByLabel("Proveedor").selectOption("codex")
+  await pick(page, page.getByLabel("Proveedor"), "Codex")
   await page.getByLabel("Instrucción para el agente").fill("wait")
   await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()
   await expect(page.getByText("El agente está trabajando")).toBeVisible()
@@ -244,16 +245,16 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.getByRole("button", { name: "Connections", exact: true }).click()
   await page.getByRole("button", { name: "Nueva conexión" }).click()
   await page.getByLabel("Nombre de la conexión").fill("conta")
-  await page.getByLabel("Tipo", { exact: true }).selectOption("sqlite")
-  await page.getByLabel("Entorno", { exact: true }).selectOption("prod")
+  await pick(page, page.getByLabel("Tipo", { exact: true }), "SQLite")
+  await pick(page, page.getByLabel("Entorno", { exact: true }), "prod")
   await page.getByLabel("Ruta del archivo").fill("/tmp/conta.db")
   await page.getByRole("button", { name: "Añadir", exact: true }).click()
   const conn = page.getByTestId("connection")
   await expect(conn).toContainText("conta")
   await expect(conn).toContainText("mode=ro")
-  await page.getByLabel("Política de query.read en conta").selectOption("auto")
-  await expect(page.getByLabel("Política de query.read en conta")).toHaveValue("auto")
-  await page.getByLabel("Política de query.write en conta").selectOption("auto")
+  await pick(page, page.getByLabel("Política de query.read en conta"), "sin preguntar")
+  await expect(page.getByLabel("Política de query.read en conta")).toContainText("sin preguntar")
+  await pick(page, page.getByLabel("Política de query.write en conta"), "sin preguntar")
   const risk = page.getByTestId("risk-modal")
   await expect(risk.getByRole("button", { name: "Dejar de preguntar" })).toBeDisabled()
   await risk.getByLabel("Nombre de la conexión para confirmar").fill("conta")
@@ -264,7 +265,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await page.getByRole("button", { name: "Board", exact: true }).click()
   await page.getByRole("button", { name: "New task", exact: false }).click()
   await page.getByLabel("Title", { exact: true }).fill("Faltan 30 mil")
-  await page.getByLabel("Tipo de tarea").selectOption("research")
+  await pick(page, page.getByLabel("Tipo de tarea"), "investigación")
   await page.getByRole("button", { name: "Create task", exact: true }).click()
   await page.getByRole("tab", { name: "Investigación", exact: true }).click()
   await page.getByLabel("Afirmación", { exact: true }).fill("El depósito se duplicó")

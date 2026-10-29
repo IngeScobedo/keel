@@ -6,6 +6,7 @@
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 import { bootDaemon, type Daemon, nativeShell } from "./daemon-bridge.js"
+import { pick } from "./ui.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -61,11 +62,11 @@ test("Ansible: el destino se elige, no se escribe: playbook detectado, conexión
   await page.getByRole("button", { name: "Nueva conexión" }).click()
   const form = page.getByTestId("new-connection")
   await form.getByLabel("Nombre de la conexión").fill("casamatte")
-  await form.getByLabel("Tipo", { exact: true }).selectOption("ansible")
+  await pick(page, form.getByLabel("Tipo", { exact: true }), "Ansible")
   const picker = form.getByTestId("ansible-picker")
   // Keel lo encontró solo: playbook, host del inventario con su conexión y los tags.
   await expect(picker.getByRole("radio", { name: /infra\/ansible\/site\.yml/ })).toBeChecked()
-  await expect(picker.getByLabel("Conexión de web")).toHaveValue("prod-web")
+  await expect(picker.getByLabel("Conexión de web")).toContainText("prod-web")
   await expect(picker).toContainText("coincide con el inventario")
   for (const t of ["bootstrap", "deploy", "app", "logrotate"])
     await expect(picker.getByRole("button", { name: t, exact: true })).toBeVisible()
@@ -75,7 +76,7 @@ test("Ansible: el destino se elige, no se escribe: playbook detectado, conexión
   )
   await picker.getByRole("button", { name: "app", exact: true }).click()
   // El entorno lo deciden las conexiones: prod-web es prod.
-  await expect(form.getByLabel("Entorno", { exact: true })).toHaveValue("prod")
+  await expect(form.getByLabel("Entorno", { exact: true })).toContainText("prod")
   await expect(form.getByLabel("Entorno", { exact: true })).toBeDisabled()
   if (shots) await page.screenshot({ path: join(shots, "ansible-new.png") })
   await form.getByRole("button", { name: "Añadir", exact: true }).click()
@@ -97,10 +98,10 @@ test("una base por túnel SSH: con una conexión existente o creada ahí mismo",
   await page.getByRole("button", { name: "Nueva conexión" }).click()
   let form = page.getByTestId("new-connection")
   await form.getByLabel("Nombre de la conexión").fill("pg-prod")
-  await form.getByLabel("Tipo", { exact: true }).selectOption("postgres")
-  await form.getByLabel("Cómo llega Keel a la base").selectOption("prod-web")
+  await pick(page, form.getByLabel("Tipo", { exact: true }), "PostgreSQL")
+  await pick(page, form.getByLabel("Cómo llega Keel a la base"), /prod-web/)
   await expect(form.getByLabel("Host", { exact: true })).toHaveValue("127.0.0.1")
-  await expect(form.getByLabel("Entorno", { exact: true })).toHaveValue("prod")
+  await expect(form.getByLabel("Entorno", { exact: true })).toContainText("prod")
   await expect(form.getByLabel("Entorno", { exact: true })).toBeDisabled()
   await form.getByLabel("Base", { exact: true }).fill("casamatte")
   await form.getByLabel("Usuario", { exact: true }).fill("lector")
@@ -114,16 +115,16 @@ test("una base por túnel SSH: con una conexión existente o creada ahí mismo",
   await page.getByRole("button", { name: "Nueva conexión" }).click()
   form = page.getByTestId("new-connection").first()
   await form.getByLabel("Nombre de la conexión").fill("pg-staging")
-  await form.getByLabel("Tipo", { exact: true }).selectOption("postgres")
-  await form.getByLabel("Cómo llega Keel a la base").selectOption("__new__")
+  await pick(page, form.getByLabel("Tipo", { exact: true }), "PostgreSQL")
+  await pick(page, form.getByLabel("Cómo llega Keel a la base"), /crear una conexión SSH nueva/)
   const ssh = page.getByRole("dialog", { name: "Nueva conexión SSH" })
   await ssh.getByLabel("Nombre de la conexión").fill("staging-vps")
-  await ssh.getByLabel("Entorno", { exact: true }).selectOption("staging")
+  await pick(page, ssh.getByLabel("Entorno", { exact: true }), "staging")
   await ssh.getByLabel("Host", { exact: true }).fill("203.0.113.40")
   await ssh.getByRole("button", { name: "agent", exact: true }).click()
   await ssh.getByRole("button", { name: "Añadir", exact: true }).click()
   await expect(ssh).toBeHidden()
-  await expect(form.getByLabel("Cómo llega Keel a la base")).toHaveValue("staging-vps")
-  await expect(form.getByLabel("Entorno", { exact: true })).toHaveValue("staging")
+  await expect(form.getByLabel("Cómo llega Keel a la base")).toContainText("staging-vps")
+  await expect(form.getByLabel("Entorno", { exact: true })).toContainText("staging")
   if (shots) await page.screenshot({ path: join(shots, "db-tunnel-new.png") })
 })

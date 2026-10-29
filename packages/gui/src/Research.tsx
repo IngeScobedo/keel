@@ -8,6 +8,7 @@ import { Check, Download, FileText, X } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { mutationMeta } from "./client.js"
 import { actorLabel } from "./model.js"
+import { Checkbox, Select } from "./ui/index.js"
 import { Button, Empty, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -173,33 +174,35 @@ export function ResearchPanel({
           )
         }}
       >
-        <select
+        <Select
           aria-label="Tipo de afirmación"
           value={kind}
-          onChange={(e) => setKind(e.target.value as typeof kind)}
-        >
-          <option value="finding">hallazgo</option>
-          <option value="hypothesis">hipótesis</option>
-          <option value="conclusion">conclusión</option>
-        </select>
+          onChange={(v) => setKind(v as typeof kind)}
+          options={[
+            { value: "finding", label: "hallazgo" },
+            { value: "hypothesis", label: "hipótesis" },
+            { value: "conclusion", label: "conclusión" },
+          ]}
+        />
         <input
           aria-label="Afirmación"
           placeholder="Qué se encontró o se sospecha"
           value={statement}
           onChange={(e) => setStatement(e.target.value)}
         />
-        <select
-          aria-label="Evidencia citada"
-          multiple
-          value={cites}
-          onChange={(e) => setCites([...e.target.selectedOptions].map((o) => o.value))}
-        >
+        <fieldset className="research-cites" aria-label="Evidencia citada">
           {evidence.map((e) => (
-            <option key={e.id} value={e.id}>
+            <Checkbox
+              key={e.id}
+              checked={cites.includes(e.id)}
+              onChange={(on) =>
+                setCites((old) => (on ? [...old, e.id] : old.filter((x) => x !== e.id)))
+              }
+            >
               {e.kind} · {e.title ?? e.id.slice(0, 10)}
-            </option>
+            </Checkbox>
           ))}
-        </select>
+        </fieldset>
         <button className="button" type="submit" disabled={!statement.trim()}>
           Añadir
         </button>
