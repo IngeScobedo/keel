@@ -12,6 +12,8 @@ export type ScrollMark = { path: number[]; top: number; left: number }
 
 export type Place = {
   page: string
+  /** El proyecto del daemon donde está (ADR-0034 §6): «atrás» vuelve a él. */
+  project?: string
   task?: string
   run?: string
   /** Lo que la vista quiere recordar al volver: la pestaña, un filtro. */

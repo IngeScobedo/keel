@@ -36,6 +36,8 @@ export function useWorkspace() {
   const [error, setError] = useState("")
   /** Sube con cada evento que cambia aprobaciones, emparejamientos o peticiones de run. */
   const [inboxTick, setInboxTick] = useState(0)
+  /** ADR-0034 §6: sube cuando cambia lo que espera al humano en cualquier proyecto. */
+  const [attentionTick, setAttentionTick] = useState(0)
   const [socketPath, setSocketPath] = useState(rememberedSocket() ?? "")
   const [health, setHealth] = useState<{
     event_loop_lag_ms: number
@@ -74,7 +76,10 @@ export function useWorkspace() {
       let ready = false
       try {
         // Listener antes de subscribe: el servidor hace replay antes de responder.
-        cleanup.current = await rpc.subscribe((event) => {
+        const stopAttention = await rpc.listen("attention.changed", () => {
+          if (generation.current === currentGeneration) setAttentionTick((n) => n + 1)
+        })
+        const stopEvents = await rpc.subscribe((event) => {
           if (generation.current !== currentGeneration) return
           if (touchesInbox(event.kind)) setInboxTick((n) => n + 1)
           if (!ready) buffered.push(event)
@@ -87,6 +92,10 @@ export function useWorkspace() {
             )
           if (ready) setSnapshot((old) => applyEvent(old, event, project.current))
         })
+        cleanup.current = () => {
+          stopEvents()
+          stopAttention()
+        }
         await rpc.connect(path)
         // El proyecto pedido queda activo en esta conexión (ADR-0019 §2): lo que se cree
         // desde aquí va a él.
@@ -319,6 +328,7 @@ export function useWorkspace() {
     health,
     events,
     inboxTick,
+    attentionTick,
     socketPath,
     phase,
     projects,

@@ -112,13 +112,14 @@ export async function nativeShell(page: Page, daemon: Daemon) {
   )
   await page.addInitScript(() => {
     const callbacks = new Map<number, (event: unknown) => void>()
-    let handler = 0
+    // Como Tauri: varios listeners del mismo evento (eventos y `attention.changed`).
+    const handlers = new Set<number>()
     let next = 0
     const native = window as unknown as { __keelNative(c: string, a: unknown): Promise<unknown> }
     Object.assign(window, {
       isTauri: true,
       __keelPush(frame: unknown) {
-        callbacks.get(handler)?.({ payload: frame })
+        for (const h of handlers) callbacks.get(h)?.({ payload: frame })
       },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
       __TAURI_INTERNALS__: {
@@ -129,10 +130,13 @@ export async function nativeShell(page: Page, daemon: Daemon) {
         },
         async invoke(command: string, args: Record<string, unknown>) {
           if (command === "plugin:event|listen") {
-            handler = Number(args.handler)
-            return 1
+            handlers.add(Number(args.handler))
+            return Number(args.handler)
           }
-          if (command === "plugin:event|unlisten") return undefined
+          if (command === "plugin:event|unlisten") {
+            handlers.delete(Number(args.eventId))
+            return undefined
+          }
           return native.__keelNative(command, args)
         },
       },

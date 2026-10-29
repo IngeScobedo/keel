@@ -76,6 +76,13 @@ export class KeelClient {
       (typeof Methods)[M]["result"]["parse"]
     >
   }
+  /** Una notificación del daemon que no es un evento (`attention.changed`, ADR-0034 §6). */
+  listen(method: string, handler: (params: unknown) => void) {
+    return this.wire.onEvent((raw) => {
+      const frame = Notification.safeParse(raw)
+      if (frame.success && frame.data.method === method) handler(frame.data.params)
+    })
+  }
   subscribe(handler: (event: EventNotification) => void) {
     return this.wire.onEvent((raw) => {
       const frame = Notification.safeParse(raw)

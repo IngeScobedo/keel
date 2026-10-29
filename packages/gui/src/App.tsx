@@ -24,7 +24,8 @@ import {
   Sun,
   Terminal,
 } from "lucide-react"
-import { type FormEvent, useCallback, useEffect, useState } from "react"
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react"
+import { Attention, type Pending } from "./Attention.js"
 import { Board } from "./Board.js"
 import { CloseTask } from "./CloseTask.js"
 import { ControlPlane } from "./ControlPlane.js"
@@ -78,7 +79,11 @@ export function App() {
   const waitingYou = useNeedsYou(workspace)
   // ADR-0034 §4: la vista, la entidad y lo abierto viven en la pila de lugares.
   const mainRoot = useCallback(() => document.querySelector(".main-content"), [])
-  const navigation = useNavigation(mainRoot)
+  const currentProjectId = useRef<string | undefined>(undefined)
+  currentProjectId.current = workspace.health?.project?.id
+  const projectOf = useCallback(() => currentProjectId.current, [])
+  const switchProject = workspace.switchProject
+  const navigation = useNavigation(mainRoot, projectOf, (p) => void switchProject(p))
   const { place, navigate } = navigation
   const page = place.page as Page
   const selectedTask = place.task ?? ""
@@ -159,6 +164,12 @@ export function App() {
   function openRun(item: Run) {
     navigation.navigate({ page: "run", run: item.id })
     setPalette(false)
+  }
+  /** «Ver» desde un aviso: la tarea, en su proyecto; «atrás» vuelve al de antes. */
+  async function openPending(a: Pending) {
+    // Primero el lugar: el que se deja queda con su proyecto antes de cambiar.
+    navigation.navigate({ page: "task", task: a.work_item_id, project: a.project_id })
+    if (a.project_id !== currentProjectId.current) await switchProject(a.project_id)
   }
   const byKey = (key: string) => workspace.work_items.find((w) => w.display_id === key)
   const refs = {
@@ -525,8 +536,14 @@ export function App() {
                 )
               ) : (
                 <div className="padded">
-                  <Button onClick={() => setPage("board")}>Volver al tablero</Button>
-                  <Hint>La tarea no pertenece al workspace conectado.</Hint>
+                  {workspace.mode === "connecting" ? (
+                    <Hint>Abriendo el proyecto de la tarea…</Hint>
+                  ) : (
+                    <>
+                      <Button onClick={() => setPage("board")}>Volver al tablero</Button>
+                      <Hint>La tarea no pertenece al workspace conectado.</Hint>
+                    </>
+                  )}
                 </div>
               ))}
             {page === "runs" && (
@@ -561,7 +578,9 @@ export function App() {
             {page === "inbox" && workspace.mode === "live" && (
               <LiveInbox
                 call={workspace.call}
-                tick={workspace.inboxTick}
+                tick={workspace.inboxTick + workspace.attentionTick}
+                currentProject={workspace.health?.project?.id}
+                onPending={(a) => void openPending(a)}
                 tasks={workspace.work_items}
                 runs={workspace.runs}
                 onTask={openTask}
@@ -672,6 +691,7 @@ export function App() {
       {workspace.mode === "live" && (
         <SecretPrompts events={workspace.events} call={workspace.call} />
       )}
+      <Attention workspace={workspace} place={place} onOpen={(a) => void openPending(a)} />
       {closing && workspace.mode === "live" && (
         <CloseTask task={closing} call={workspace.call} onClose={() => setClosing(null)} />
       )}

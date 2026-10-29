@@ -53,6 +53,8 @@ export function LiveInbox({
   runs,
   onTask,
   onRun,
+  currentProject,
+  onPending,
 }: {
   call: Call
   tick: number
@@ -60,6 +62,9 @@ export function LiveInbox({
   runs: Run[]
   onTask: (task: WorkItem) => void
   onRun: (run: Run) => void
+  /** El proyecto que mira la ventana; lo de otro proyecto se abre con `onPending`. */
+  currentProject?: string | undefined
+  onPending?: (approval: Approval) => void
 }) {
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [pairings, setPairings] = useState<Pairing[]>([])
@@ -77,7 +82,8 @@ export function LiveInbox({
   const refresh = useCallback(async () => {
     try {
       const [a, p, r] = await Promise.all([
-        call("approvals.list", {}),
+        // ADR-0034 §6: la bandeja «Te necesita» junta todos los proyectos del daemon.
+        call("approvals.list", { all_projects: true }),
         call("session.pairings_list", { state: "pending" }),
         call("runs.requests_list", { state: "pending" }),
       ])
@@ -172,11 +178,16 @@ export function LiveInbox({
                   ? Math.max(0, Math.ceil((Date.parse(approval.expires_at) - now) / 1000))
                   : null
                 const t = task(approval.work_item_id)
+                const elsewhere =
+                  currentProject !== undefined && approval.project_id !== currentProject
                 return (
                   <article className="approval expanded" key={approval.id} data-testid="approval">
                     <div className="approval-heading">
                       <strong>{op.tool}</strong>
-                      <span className="mono muted">{t?.display_id ?? approval.work_item_id}</span>
+                      {elsewhere && <span className="tag">{approval.project_name}</span>}
+                      <span className="mono muted">
+                        {t?.display_id ?? approval.work_item_display_id}
+                      </span>
                       <span className="mono muted">
                         {left === null ? "sin límite" : `${left}s`}
                       </span>
@@ -206,6 +217,7 @@ export function LiveInbox({
                               onClick={() => {
                                 const r = runs.find((x) => x.id === approval.run_id)
                                 if (r) onRun(r)
+                                else onPending?.(approval)
                               }}
                             >
                               {op.tool === "AskUserQuestion"

@@ -154,3 +154,62 @@ describe("ADR-0019 §2: proyectos", () => {
     expect(basename(health.project.root_path)).toBe("beta")
   })
 })
+
+describe("ADR-0034 §6: avisos entre proyectos", () => {
+  test("una aprobación de otro proyecto avisa a toda ventana humana y se lista y resuelve desde ahí", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keel-proj-"))
+    dirs.push(dir)
+    const a = initRepo(join(dir, "alpha"))
+    const b = initRepo(join(dir, "beta"))
+    const daemon = start(dir, a)
+    const c = await connect(daemon)
+    const beta = (await c.call("projects.open", { path: b })) as { id: string }
+    // La ventana mira alpha.
+    await c.call("projects.use", { project_id: daemon.project.project_id })
+    const heard: { project_id: string; kind: string }[] = []
+    c.onNotification((m, p) => {
+      if (m === "attention.changed") heard.push(p as { project_id: string; kind: string })
+    })
+    const repo = daemon.repo
+    const w = repo.createWorkItem({ project_id: beta.id, title: "desplegar beta", kind: "chore" })
+    const run = repo.createRun({ project_id: beta.id, work_item_id: w.id, purpose: "execute" })
+    const id = repo.createApproval({
+      project_id: beta.id,
+      run_id: run.id,
+      operation_hash: "h",
+      operation: { tool: "Bash", input: { command: "ls" }, run_id: run.id },
+      expires_at: null,
+    })
+    ;(daemon as unknown as { emitSystem: (k: string, r: string, p: unknown) => void }).emitSystem(
+      "approval.requested",
+      run.id,
+      {
+        approval_id: id,
+        operation_hash: "h",
+        tool: "Bash",
+        input: { command: "ls" },
+        expires_at: null,
+      },
+    )
+    const end = Date.now() + 5_000
+    while (heard.length === 0 && Date.now() < end) await Bun.sleep(10)
+    expect(heard[0]).toEqual({ project_id: beta.id, kind: "approval.requested" })
+
+    // Sin all_projects, la ventana sólo ve las de su proyecto; con él, también la de beta.
+    const own = (await c.call("approvals.list", {})) as { approvals: unknown[] }
+    expect(own.approvals).toHaveLength(0)
+    const all = (await c.call("approvals.list", { all_projects: true })) as {
+      approvals: { id: string; project_name: string; work_item_title: string }[]
+    }
+    expect(all.approvals).toMatchObject([
+      { id, project_name: "beta", work_item_title: "desplegar beta" },
+    ])
+    await c.call("approvals.resolve", {
+      ...meta(),
+      approval_id: id,
+      operation_hash: "h",
+      decision: "deny",
+    })
+    expect(repo.getApproval(id)?.state).toBe("denied")
+  })
+})

@@ -36,21 +36,38 @@ function editable(t: EventTarget | null): boolean {
   return t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)
 }
 
-export function useNavigation(root: () => Element | null) {
+export function useNavigation(
+  root: () => Element | null,
+  /** El proyecto activo: cada lugar nuevo lo recuerda. */
+  projectOf: () => string | undefined = () => undefined,
+  /** Volver a un lugar de otro proyecto lo vuelve a abrir. */
+  onProject: (project: string) => void = () => {},
+) {
   const [nav, setNav] = useState<Nav>(() => startNav("board"))
   const ref = useRef(nav)
+  // En refs: cambian en cada render y el efecto de la historia debe montarse una vez.
+  const projectRef = useRef(projectOf)
+  projectRef.current = projectOf
+  const onProjectRef = useRef(onProject)
+  onProjectRef.current = onProject
   const commit = useCallback((next: Nav) => {
     ref.current = next
     setNav(next)
   }, [])
+  // El lugar que se deja recuerda su scroll y, si no lo tenía, su proyecto.
   const marked = useCallback(
-    () => patch(ref.current, (p) => ({ ...p, scroll: captureScroll(root()) })),
+    () =>
+      patch(ref.current, (p) => {
+        const project = p.project ?? projectRef.current()
+        return { ...p, scroll: captureScroll(root()), ...(project ? { project } : {}) }
+      }),
     [root],
   )
   const navigate = useCallback(
     (to: To) => {
       const before = marked()
-      const next = push(before, to)
+      const project = to.project ?? projectRef.current()
+      const next = push(before, project ? { ...to, project } : to)
       if (next === before) return
       commit(next)
       history.pushState({ keel: next.index }, "")
@@ -73,7 +90,10 @@ export function useNavigation(root: () => Element | null) {
     history.replaceState({ keel: 0 }, "")
     const onPop = (e: PopStateEvent) => {
       const i = (e.state as { keel?: unknown } | null)?.keel
-      commit(go(marked(), typeof i === "number" ? i : 0))
+      const next = go(marked(), typeof i === "number" ? i : 0)
+      commit(next)
+      const project = current(next).project
+      if (project && project !== projectRef.current()) onProjectRef.current(project)
     }
     const onKey = (e: KeyboardEvent) => {
       if (!e.altKey || e.ctrlKey || e.metaKey || editable(e.target)) return

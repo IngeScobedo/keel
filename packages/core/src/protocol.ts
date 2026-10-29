@@ -342,10 +342,22 @@ export const RunRequestViewSchema = z.object({
   run_id: z.string().nullable(),
   created_at: z.string(),
 })
+/**
+ * ADR-0034 §6: notificación a todos los clientes humanos, sin importar su proyecto
+ * activo, cuando cambia lo que espera al humano en cualquier proyecto.
+ */
+export const AttentionChangedSchema = z.object({ project_id: z.string(), kind: z.string() })
+export type AttentionChanged = z.infer<typeof AttentionChangedSchema>
 export const ApprovalViewSchema = z.object({
   id: z.string(),
   run_id: z.string(),
   work_item_id: z.string(),
+  /** ADR-0034 §6: de qué proyecto es, para avisar desde otro. */
+  project_id: z.string(),
+  project_name: z.string(),
+  /** La tarea, para que el aviso diga de cuál se trata sin otra llamada. */
+  work_item_display_id: z.string(),
+  work_item_title: z.string(),
   operation_hash: z.string(),
   /** La operación ya redactada (ADR-0002): herramienta y entrada. */
   operation: z.unknown(),
@@ -1051,6 +1063,8 @@ export const Methods = {
       include_resolved: z.boolean().optional(),
       run_id: z.string().optional(),
       limit: z.number().int().positive().max(1000).optional(),
+      /** ADR-0034 §6: las de todos los proyectos abiertos en el daemon; sólo humanos. */
+      all_projects: z.boolean().optional(),
     }),
     result: z.object({ approvals: z.array(ApprovalViewSchema) }),
   },

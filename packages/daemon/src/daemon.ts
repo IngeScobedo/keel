@@ -294,6 +294,16 @@ export class Daemon {
         ),
     })
     this.bus.subscribe((n) => {
+      // ADR-0034 §6: lo que espera al humano cambió en algún proyecto; se avisa a todas
+      // las ventanas, no sólo a las que miran ese proyecto.
+      if (ATTENTION_KINDS.test(n.kind))
+        // El bus puede publicar antes de que exista el servidor (reconciliación al arrancar).
+        for (const c of (this.server as IpcServer | undefined)?.clients ?? [])
+          if (!c.closed && (c.actor === undefined || c.actor.kind === "human"))
+            this.server.notifyClient(c, "attention.changed", {
+              project_id: n.project_id,
+              kind: n.kind,
+            })
       const row = this.repo.eventBySeq(n.event_seq)
       if (!row) return
       this.semantic.onEvent(row)
@@ -1681,7 +1691,7 @@ export class Daemon {
         const p = params as Params<"approvals.list">
         return {
           approvals: repo
-            .listApprovals(this.scopeOf(ctx), {
+            .listApprovals(p.all_projects ? null : this.scopeOf(ctx), {
               ...(p.state ? { state: p.state } : {}),
               ...(p.include_resolved ? { includeResolved: true } : {}),
               ...(p.run_id ? { runId: p.run_id } : {}),
@@ -4883,6 +4893,9 @@ function rpcError(code: number, message: string, details?: unknown, retryable = 
     ...(details === undefined ? {} : { details }),
   })
 }
+
+/** Eventos que cambian lo que espera al humano: aprobaciones, planes y peticiones. */
+const ATTENTION_KINDS = /^(approval\.|git\.plan\.|run\.requested$|run\.request_resolved$)/
 
 function requireHuman(ctx: HandlerContext, what: string): void {
   if (ctx.actor.kind !== "human")

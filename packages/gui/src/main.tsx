@@ -7,11 +7,17 @@ import "@fontsource/jetbrains-mono/400.css"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { App } from "./App.js"
+import { ToastProvider, ToastViewport, TooltipProvider } from "./ui/index.js"
 
 const root = document.getElementById("root")
 if (root)
   createRoot(root).render(
     <StrictMode>
-      <App />
+      <ToastProvider>
+        <TooltipProvider>
+          <App />
+          <ToastViewport />
+        </TooltipProvider>
+      </ToastProvider>
     </StrictMode>,
   )

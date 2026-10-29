@@ -1257,12 +1257,13 @@ export class Repo {
    * Pendientes (excluye las vencidas aunque el gate aún no las haya marcado) o,
    * con `includeResolved`, el historial de decisiones para la vista de permisos.
    */
+  /** `projectId` null: las de todos los proyectos (ADR-0034 §6). */
   listApprovals(
-    projectId: string,
+    projectId: string | null,
     q: { state?: string; includeResolved?: boolean; runId?: string; limit?: number } = {},
   ): ApprovalListRow[] {
-    const where = ["a.project_id = ?"]
-    const args: string[] = [projectId]
+    const where = projectId ? ["a.project_id = ?"] : ["1 = 1"]
+    const args: string[] = projectId ? [projectId] : []
     if (q.runId) {
       where.push("a.run_id = ?")
       args.push(q.runId)
@@ -1279,8 +1280,11 @@ export class Repo {
     return this.db
       .query<ApprovalListRow, string[]>(
         `SELECT a.id, a.run_id, r.work_item_id, a.operation_hash, a.operation_json, a.state,
-                a.expires_at, a.decision_actor
+                a.expires_at, a.decision_actor, a.project_id, p.name AS project_name,
+                w.display_id AS work_item_display_id, w.title AS work_item_title
            FROM approval_requests a JOIN runs r ON r.id = a.run_id
+           JOIN projects p ON p.id = a.project_id
+           JOIN work_items w ON w.id = r.work_item_id
           WHERE ${where.join(" AND ")}
           ORDER BY a.id DESC LIMIT ${Math.min(q.limit ?? 200, 1000)}`,
       )
@@ -1720,6 +1724,10 @@ export type ApprovalListRow = {
   id: string
   run_id: string
   work_item_id: string
+  project_id: string
+  project_name: string
+  work_item_display_id: string
+  work_item_title: string
   operation_hash: string
   operation_json: string
   state: string

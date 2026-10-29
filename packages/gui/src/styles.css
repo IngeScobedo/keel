@@ -4637,3 +4637,22 @@ button.rc-ledger-row:hover {
   max-height: 140px;
   overflow-y: auto;
 }
+
+/* ADR-0034 §6: un aviso que se contesta ahí mismo. */
+.attention {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+.attention-what {
+  margin: 0;
+  font-size: var(--text-meta-size);
+  color: var(--color-text-secondary);
+  overflow-wrap: anywhere;
+}
+.attention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
