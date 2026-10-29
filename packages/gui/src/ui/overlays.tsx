@@ -84,16 +84,18 @@ export function Drawer({
       swipeDirection="right"
     >
       <BDrawer.Portal>
-        <BDrawer.Popup className="ui-drawer" initialFocus={false} finalFocus={false}>
-          <header className="ui-drawer-head">
-            <BDrawer.Title className="ui-drawer-title">{title}</BDrawer.Title>
-            {actions}
-            <BDrawer.Close className="ui-icon-button" aria-label="Cerrar el panel">
-              <X size={15} aria-hidden />
-            </BDrawer.Close>
-          </header>
-          <div className="ui-drawer-body">{children}</div>
-        </BDrawer.Popup>
+        <BDrawer.Viewport className="ui-drawer-viewport">
+          <BDrawer.Popup className="ui-drawer" initialFocus={false} finalFocus={false}>
+            <header className="ui-drawer-head">
+              <BDrawer.Title className="ui-drawer-title">{title}</BDrawer.Title>
+              {actions}
+              <BDrawer.Close className="ui-icon-button" aria-label="Cerrar el panel">
+                <X size={15} aria-hidden />
+              </BDrawer.Close>
+            </header>
+            <div className="ui-drawer-body">{children}</div>
+          </BDrawer.Popup>
+        </BDrawer.Viewport>
       </BDrawer.Portal>
     </BDrawer.Root>
   )

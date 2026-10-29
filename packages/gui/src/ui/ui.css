@@ -410,6 +410,22 @@
     padding: var(--space-6);
   }
 
+  .ui-side-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid var(--color-border-subtle);
+    background: var(--color-surface-raised);
+    animation: ui-panel-in 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes ui-panel-in {
+    from {
+      opacity: 0;
+      transform: translateX(16px);
+    }
+  }
+
   /* avisos */
   .ui-toasts {
     position: fixed;
@@ -475,6 +491,9 @@
     .ui-toast,
     .ui-tab-indicator {
       transition: none;
+    }
+    .ui-side-panel {
+      animation: none;
     }
   }
 }

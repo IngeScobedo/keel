@@ -30,11 +30,14 @@ export function TaskWork({
   runs,
   call,
   onRun,
+  composer = true,
 }: {
   task: WorkItem
   runs: Run[]
   call: Call
   onRun: (run: Run) => void
+  /** En la vista de foco, con conversación, se le escribe al agente desde el hilo. */
+  composer?: boolean
 }) {
   const [flow, setFlow] = useState<TaskFlowView | null>(null)
   const [text, setText] = useState("")
@@ -142,7 +145,7 @@ export function TaskWork({
           al agente que proponga otro plan con lo que falta.
         </p>
       )}
-      {!done && (
+      {!done && composer && (
         <form
           onSubmit={(e) => {
             e.preventDefault()

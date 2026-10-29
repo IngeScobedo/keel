@@ -618,7 +618,7 @@ function DemoRunView({ run, task, demo, events, onBack, onTask, call }: RunViewP
 }
 
 /** Dónde corrió: el worktree que anunció el daemon; un run que no ejecuta usa la raíz. */
-function workspaceOf(
+export function workspaceOf(
   run: Run,
   events: EventNotification[],
 ): { branch?: string; base?: string; label: string } {

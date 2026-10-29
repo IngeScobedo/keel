@@ -59,7 +59,7 @@ test("navegación: referencias, detalle y «atrás» exacto", async ({ page }) =
   await expect(note.locator(".md-task[data-done]")).toHaveCount(1)
   await expect(note.locator(".md-preview[data-cut]")).toBeVisible()
 
-  const scroller = page.locator(".task-main")
+  const scroller = page.locator(".tf-panel")
   const top = () => scroller.evaluate((el) => el.scrollTop)
 
   // «Ver detalle» abre encima; «atrás» lo cierra sin salir de la tarea ni moverla.
@@ -88,12 +88,15 @@ test("navegación: referencias, detalle y «atrás» exacto", async ({ page }) =
   await expect(page.locator(".breadcrumbs [aria-current=page]")).toHaveText(origin)
   await expect.poll(top).toBe(before)
 
-  // Pestaña recordada: en Notes, ir y volver deja Notes.
-  await page.getByRole("tab", { name: "Notes" }).click()
+  // Pestaña recordada: en Conversación, ir y volver deja Conversación.
+  await page.getByRole("tab", { name: "Conversación" }).click()
   await rail.getByRole("button", { name: "Inbox", exact: true }).click()
   await page.goBack()
   await expect(page.locator(".breadcrumbs [aria-current=page]")).toHaveText(origin)
-  await expect(page.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true")
+  await expect(page.getByRole("tab", { name: "Conversación" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
 
   // Una miga del camino regresa a ese punto: el tablero.
   await page.locator(".breadcrumbs .crumb button").first().click()

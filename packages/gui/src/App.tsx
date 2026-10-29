@@ -46,6 +46,7 @@ import { RunsList, RunView } from "./RunView.js"
 import { SecretPrompts } from "./SecretPrompts.js"
 import { SETUP_EVENT } from "./SetupCard.js"
 import { Connections, DesignStudio, Settings, Workbench } from "./SupportViews.js"
+import { TaskFocus } from "./TaskFocus.js"
 import { Select } from "./ui/index.js"
 import { Button, Hint, Modal } from "./ui.js"
 import { PlaceProvider, useNavigation } from "./useNav.js"
@@ -483,31 +484,45 @@ export function App() {
                   : {})}
               />
             )}
+            {page === "task" && task && workspace.mode === "live" && (
+              <TaskFocus
+                key={task.id}
+                task={task}
+                runs={workspace.runs}
+                events={workspace.events}
+                call={workspace.call}
+                tasks={workspace.work_items}
+                onRun={openRun}
+                onOpenTask={openTask}
+                waitingYou={waitingYou}
+                onCloseTask={() => setClosing(task)}
+              />
+            )}
             {page === "task" &&
               (task ? (
-                <Inspector
-                  waitingYou={waitingYou}
-                  key={task.id}
-                  task={task}
-                  {...(details[task.id] ? { details: details[task.id] } : {})}
-                  demo={demo}
-                  runs={workspace.runs}
-                  events={workspace.events}
-                  onBack={backOr("board")}
-                  onRun={openRun}
-                  onUpdate={workspace.updateDemo}
-                  notes={sessionNotes[task.id] ?? []}
-                  {...(workspace.mode === "live" ? { call: workspace.call } : {})}
-                  tasks={workspace.work_items}
-                  onOpenTask={openTask}
-                  {...(workspace.mode === "live" ? { onCloseTask: () => setClosing(task) } : {})}
-                  onAddNote={(text) =>
-                    setSessionNotes((old) => ({
-                      ...old,
-                      [task.id]: [{ id: crypto.randomUUID(), text }, ...(old[task.id] ?? [])],
-                    }))
-                  }
-                />
+                workspace.mode !== "live" && (
+                  <Inspector
+                    waitingYou={waitingYou}
+                    key={task.id}
+                    task={task}
+                    {...(details[task.id] ? { details: details[task.id] } : {})}
+                    demo={demo}
+                    runs={workspace.runs}
+                    events={workspace.events}
+                    onBack={backOr("board")}
+                    onRun={openRun}
+                    onUpdate={workspace.updateDemo}
+                    notes={sessionNotes[task.id] ?? []}
+                    tasks={workspace.work_items}
+                    onOpenTask={openTask}
+                    onAddNote={(text) =>
+                      setSessionNotes((old) => ({
+                        ...old,
+                        [task.id]: [{ id: crypto.randomUUID(), text }, ...(old[task.id] ?? [])],
+                      }))
+                    }
+                  />
+                )
               ) : (
                 <div className="padded">
                   <Button onClick={() => setPage("board")}>Volver al tablero</Button>

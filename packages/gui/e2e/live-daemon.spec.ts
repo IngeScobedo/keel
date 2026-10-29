@@ -143,10 +143,12 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
 
   await page.getByRole("button", { name: "Board", exact: true }).click()
   await page.locator(".task-card").first().click()
+  // ADR-0034 §5: con conversación, la vista abre en ella; las notas están en Actividad.
+  await page.getByRole("tab", { name: "Actividad", exact: true }).click()
   const note = page.getByTestId("note").filter({ hasText: "hola desde fuera" })
   await expect(note).toContainText("Agente externo")
   // Evidencia propia del humano (ADR-0012): se adjunta, se lista con su hash y se ve.
-  await page.getByRole("tab", { name: "Evidence", exact: true }).click()
+  await page.getByRole("button", { name: "Evidencia", exact: true }).click()
   await page.getByLabel("Archivo de evidencia").setInputFiles({
     name: "resultado.txt",
     mimeType: "text/plain",
@@ -178,7 +180,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.getByTestId("result-table")).toContainText("sep")
   await page.getByRole("button", { name: "Graficar", exact: true }).click()
   await expect(page.getByTestId("chart").locator("svg, canvas").first()).toBeVisible()
-  await page.getByRole("tab", { name: "Activity", exact: true }).click()
+  await page.getByRole("tab", { name: "Actividad", exact: true }).click()
   await page.getByLabel("Nota para la tarea").fill("revisado")
   await page.getByRole("button", { name: "Post", exact: true }).click()
   await expect(page.getByTestId("note").filter({ hasText: "revisado" })).toContainText("Tú")

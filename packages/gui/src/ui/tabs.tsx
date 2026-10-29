@@ -15,7 +15,7 @@ export function Tabs<T extends string>({
 }) {
   return (
     <BTabs.Root value={active} onValueChange={(v) => onChange(v as T)}>
-      <BTabs.List className="ui-tabs tabs">
+      <BTabs.List className="ui-tabs">
         {values.map((tab) => (
           <BTabs.Tab key={tab} value={tab} className={`ui-tab ${active === tab ? "active" : ""}`}>
             {labels?.[tab] ?? tab}

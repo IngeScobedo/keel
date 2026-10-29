@@ -54,3 +54,59 @@ test("feature: el gate (b) muestra el árbol, las subtareas se integran solas y 
   await expect(fold).toContainText("Tarjeta por capítulos")
   if (shots) await page.screenshot({ path: join(shots, "feature-board.png") })
 })
+
+test("feature: la vista de la tarea dibuja el plan, marca la checklist y pide el plan de git en su panel", async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "New task", exact: false }).click()
+  await page.getByLabel("Title", { exact: true }).fill("feature: capítulos sin integrar solos")
+  await page.getByRole("button", { name: "Create task", exact: true }).click()
+  await page.getByRole("button", { name: "Trabajar", exact: true }).click()
+  const brief = page.getByTestId("chat-gate").filter({ hasText: "Aprobar el brief" })
+  await brief.getByRole("button", { name: /Aprobar/ }).click()
+  // Sin la casilla: cada integración le pregunta al humano.
+  const design = page.getByTestId("chat-gate").filter({ hasText: "Congelar el contrato" })
+  await design.getByRole("button", { name: /Aprobar/ }).click()
+  await expect(page.getByTestId("chat-feature").first()).toContainText("Nacieron 3 subtareas")
+
+  // ADR-0034 §5: la tarea padre, con su plan como DAG y la checklist del spec.
+  await page.getByRole("button", { name: "Board", exact: true }).click()
+  await page.locator(".task-card").first().click()
+  await expect(page.getByTestId("task-focus")).toBeVisible()
+  await page.getByRole("tab", { name: "Plan", exact: true }).click()
+  const dag = page.getByTestId("plan-dag")
+  await expect(dag.locator("[data-node]")).toHaveCount(3)
+  // Fase 2 depende de toda la fase 1: dos flechas hacia T3.
+  await expect(dag.locator(".tf-dag-edges path")).toHaveCount(2)
+  if (shots) await page.screenshot({ path: join(shots, "task-focus-dag.png") })
+  await page.getByRole("tab", { name: /Checklist/ }).click()
+  const checklist = page.getByTestId("checklist")
+  await expect(checklist).toContainText("R1")
+  await expect(checklist).toContainText("Capítulos en el backoffice")
+  if (shots) await page.screenshot({ path: join(shots, "task-focus-plan.png") })
+
+  // Una subtarea espera que el humano apruebe su plan: el panel «Por decidir» se abre solo.
+  const waiting = page.getByTestId("feature-plan").getByText("espera tu decisión").first()
+  await expect(waiting).toBeVisible({ timeout: 30_000 })
+  await waiting.click()
+  const panel = page.getByRole("complementary", { name: "Por decidir" })
+  await expect(panel).toBeVisible()
+  await expect(panel.getByRole("button", { name: "Aprobar plan" })).toBeVisible()
+  if (shots) await page.screenshot({ path: join(shots, "task-focus-decide.png") })
+  // Cerrado a mano, no se vuelve a abrir por el mismo plan.
+  await panel.getByRole("button", { name: "Cerrar el panel" }).click()
+  await expect(panel).toBeHidden()
+  await page.getByRole("tab", { name: "Actividad", exact: true }).click()
+  await page.getByRole("tab", { name: "Conversación", exact: true }).click()
+  await expect(panel).toBeHidden()
+  // «Atrás» vuelve a la feature, en su pestaña.
+  await page.goBack()
+  await expect(page.getByRole("tab", { name: /Checklist/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
+})
