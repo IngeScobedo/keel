@@ -146,7 +146,8 @@ export function Attention({
 }) {
   const toasts = useToasts()
   const seen = useRef<Set<string> | null>(null)
-  const shown = useRef(new Map<string, string>())
+  /** Aviso abierto por aprobación: su toast y su tarea. */
+  const shown = useRef(new Map<string, { toast: string; task: string }>())
   const live = workspace.mode === "live"
   const { call, attentionTick, inboxTick } = workspace
   const here = useRef(place)
@@ -162,9 +163,9 @@ export function Attention({
         if (!alive) return
         const ids = new Set(approvals.map((a) => a.id))
         // Lo que ya no espera (se contestó aquí o en otra ventana) deja de avisar.
-        for (const [id, toastId] of shown.current)
+        for (const [id, s] of shown.current)
           if (!ids.has(id)) {
-            toasts.close(toastId)
+            toasts.close(s.toast)
             shown.current.delete(id)
           }
         // Al conectar no se avisa de lo viejo: para eso está la bandeja.
@@ -199,7 +200,7 @@ export function Attention({
               ),
             },
           })
-          shown.current.set(a.id, toastId)
+          shown.current.set(a.id, { toast: toastId, task: a.work_item_id })
         }
       })
       .catch(() => {})
@@ -207,5 +208,15 @@ export function Attention({
       alive = false
     }
   }, [live, call, attentionTick, inboxTick])
+  // Al llegar a la tarea del aviso, el aviso sobra: lo pendiente ya se ve ahí.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sólo al cambiar de lugar.
+  useEffect(() => {
+    if (place.page !== "task") return
+    for (const [id, s] of shown.current)
+      if (s.task === place.task) {
+        toasts.close(s.toast)
+        shown.current.delete(id)
+      }
+  }, [place.page, place.task])
   return null
 }

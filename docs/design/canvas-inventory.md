@@ -3,8 +3,10 @@
 Documento:
 `C:/Users/amara/.pencil/documents/e7e51bf1-eda9-4e08-ae4f-b01377e7b2ee/untitled.pen`
 (Pencil desktop en Windows). **Es la fuente de verdad visual** (ADR-0001 §6).
-Los tokens están exportados en `tokens.json`. Este inventario se regenera con el
-MCP `pencil` (ver `.mcp.json`).
+Los tokens están exportados en `tokens.json`. Desde el 2026-10-29 tienen dos
+capas (ADR-0034 §1): primitivos `gray/*` y `blue/*`, y semánticos con el tema
+neutro; `scripts/design-tokens.ts` genera `tokens.css`. Este inventario se
+regenera con el MCP `pencil` (ver `.mcp.json`).
 
 ## Cómo leerlo desde una sesión
 
@@ -52,7 +54,7 @@ Windows). Útiles:
 | Pantallas GUI (frames `screen/*` de 1440x900, 1920x1080 y 1280x800) | 123     |
 | Pantallas TUI                                                       | 12      |
 | Componentes reutilizables `ds/*`                                    | 112     |
-| Variables de diseño (con tema dark/light)                           | 107     |
+| Variables de diseño (con tema dark/light)                           | 125     |
 | Estados de dominio en `ds/StatusDot` y `ds/StatusBadge`             | 13      |
 
 ## Pantallas de referencia (ids para exportar)
