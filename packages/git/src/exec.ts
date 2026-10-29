@@ -52,7 +52,17 @@ export function git(args: readonly string[], opts: GitExecOptions): Promise<GitR
       [...args],
       {
         cwd: opts.cwd,
-        env: { ...process.env, ...opts.env, LC_ALL: "C", GIT_TERMINAL_PROMPT: "0" },
+        // GIT_OPTIONAL_LOCKS=0: `git status` no toma el lock del índice para refrescarlo.
+        // Con él, leer el estado de un worktree mientras otro proceso hace commit ahí
+        // hacía fallar el commit con «Unable to create index.lock» (medido en el e2e de
+        // feature: la captura al terminar el run chocaba con el commit del plan).
+        env: {
+          ...process.env,
+          ...opts.env,
+          LC_ALL: "C",
+          GIT_TERMINAL_PROMPT: "0",
+          GIT_OPTIONAL_LOCKS: "0",
+        },
         maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
         encoding: "utf8",
       },

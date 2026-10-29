@@ -91,10 +91,13 @@ export async function nativeShell(page: Page, daemon: Daemon) {
       if (command === "ipc_connect") {
         line?.sock.destroy()
         line = await Line.open(args.path as string, (frame) => {
-          void page.evaluate(
-            (f) => (window as unknown as { __keelPush(f: unknown): void }).__keelPush(f),
-            frame,
-          )
+          // Una notificación puede llegar con la página ya cerrada al final de la prueba.
+          page
+            .evaluate(
+              (f) => (window as unknown as { __keelPush(f: unknown): void }).__keelPush(f),
+              frame,
+            )
+            .catch(() => {})
         })
         return null
       }

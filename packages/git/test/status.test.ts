@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { repoStatus } from "../src/index.ts"
@@ -64,3 +64,21 @@ test("rama, HEAD, upstream con adelanto y atraso, y archivos cambiados", async (
   expect(await repoStatus(empty)).toMatchObject({ branch: "main", head: null })
   // Tres repos, un clone y un fetch: en Windows pasa de los 5 s por defecto.
 }, 30_000)
+
+test("leer el estado no reescribe el índice: un commit concurrente no choca con su lock", async () => {
+  const base = mkdtempSync(join(tmpdir(), "keel-status-"))
+  dirs.push(base)
+  sh(base, "init", "-q", "-b", "main", base)
+  writeFileSync(join(base, "a.txt"), "uno\n")
+  sh(base, "add", "a.txt")
+  sh(base, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "a")
+  const index = join(base, ".git", "index")
+  const before = statSync(index).mtimeMs
+  // Mismo contenido, mtime nuevo: un `git status` con locks opcionales refrescaría el
+  // índice y lo escribiría tomando `index.lock`.
+  await Bun.sleep(1100)
+  const t = new Date()
+  utimesSync(join(base, "a.txt"), t, t)
+  await repoStatus(base)
+  expect(statSync(index).mtimeMs).toBe(before)
+})
