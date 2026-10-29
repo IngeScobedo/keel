@@ -6,7 +6,7 @@ import { writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 import { advanced, bootDaemon, type Daemon, Line, meta, nativeShell } from "./daemon-bridge.js"
-import { pick } from "./ui.js"
+import { openLatestRun, pick } from "./ui.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -35,6 +35,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await expect(page.locator(".task-spec")).toHaveText("Reintentos acotados.")
   await advanced(page)
   await page.locator(".live-actions").getByRole("button", { name: "Planear" }).click()
+  await openLatestRun(page)
   await expect(page.locator(".rc-head")).toContainText("Succeeded", { timeout: 20_000 })
   // El run se lee como conversación: instrucción, herramientas y respuesta, lo nuevo abajo.
   await expect(page.getByTestId("chat-tool").first()).toBeVisible()
@@ -58,6 +59,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
     await page.screenshot({ path: join(process.env.KEEL_E2E_SHOTS, "start.png") })
   await page.getByLabel("Instrucción para el agente").fill("approval")
   await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()
+  await openLatestRun(page)
   await expect(page.locator(".rc-head")).toContainText("Waiting for you", {
     timeout: 20_000,
   })
@@ -209,6 +211,7 @@ test("ciclo real desde la GUI: tarea, plan, execute con aprobación, sesión ext
   await pick(page, page.getByLabel("Proveedor"), "Codex")
   await page.getByLabel("Instrucción para el agente").fill("wait")
   await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()
+  await openLatestRun(page)
   await expect(page.getByText("El agente está trabajando")).toBeVisible()
   await page.getByLabel("Mensaje al agente").fill("usa bun")
   await page.getByRole("button", { name: "Enviar", exact: true }).click()

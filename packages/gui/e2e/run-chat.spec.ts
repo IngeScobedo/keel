@@ -6,6 +6,7 @@
 import { join } from "node:path"
 import { expect, test } from "@playwright/test"
 import { advanced, bootDaemon, type Daemon, nativeShell } from "./daemon-bridge.js"
+import { openLatestRun } from "./ui.js"
 
 let daemon: Daemon
 test.beforeEach(async () => {
@@ -32,6 +33,7 @@ test("chat de foco: diff, tarea de Keel, pregunta contestada, permiso por patró
   await page.getByRole("button", { name: "Mover a planned" }).click()
   await page.getByLabel("Instrucción para el agente").fill("chat: agrega capítulos al detalle")
   await page.locator(".live-actions").getByRole("button", { name: "Ejecutar" }).click()
+  await openLatestRun(page)
 
   // La pregunta del agente se ve con sus opciones, no como un permiso (§7).
   const question = page.getByTestId("chat-question")

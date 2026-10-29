@@ -13,3 +13,13 @@ export async function pick(page: Page, trigger: Locator, option: string | RegExp
     )
     .click()
 }
+
+/**
+ * ADR-0034 §5: trabajar deja la vista en la tarea. Para la vista del run a pantalla
+ * completa, se abre el más reciente desde el panel «Runs».
+ */
+export async function openLatestRun(page: Page) {
+  const rail = page.getByRole("navigation", { name: "Contexto" })
+  await rail.getByRole("button", { name: "Runs", exact: true }).click()
+  await page.getByRole("complementary", { name: "Runs" }).locator(".run-card").first().click()
+}

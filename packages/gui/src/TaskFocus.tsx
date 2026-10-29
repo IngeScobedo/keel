@@ -106,7 +106,11 @@ export function TaskFocus({
   waitingYou?: Set<string>
   onCloseTask?: () => void
 }) {
-  const taskRuns = runs.filter((r) => r.work_item_id === task.id)
+  // Los ids son ULID: ordenados, el primero es el más reciente. El orden de `runs` mezcla
+  // el snapshot y lo que llegó después.
+  const taskRuns = runs
+    .filter((r) => r.work_item_id === task.id)
+    .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
   const latest = taskRuns[0]
   const current = taskRuns.find(isLive) ?? latest
   const subtasks = tasks.filter((t) => t.parent_work_item_id === task.id)
@@ -185,7 +189,6 @@ export function TaskFocus({
     else if (a.kind === "close") onCloseTask?.()
     else if (a.kind === "work" && !latest)
       document.querySelector<HTMLElement>("[data-testid=task-work] textarea")?.focus()
-    else if (a.kind === "work" && current) onRun(current)
     else setTab("Conversación")
   }
   const counts: Partial<Record<Section, number>> = {
@@ -237,7 +240,14 @@ export function TaskFocus({
       )}
       <div className="tf-body" data-panel={section !== null || undefined}>
         <aside className="tf-work" aria-label="Trabajo">
-          <TaskWork task={task} runs={taskRuns} call={call} onRun={onRun} composer={!latest} />
+          {/* Trabajar no saca de la tarea: el run nuevo se ve en su conversación. */}
+          <TaskWork
+            task={task}
+            runs={taskRuns}
+            call={call}
+            onRun={() => setTab("Conversación")}
+            composer={!latest}
+          />
           <WorkFacts task={task} runs={taskRuns} events={events} call={call} />
           {task.feature && (
             <SubtaskLanes

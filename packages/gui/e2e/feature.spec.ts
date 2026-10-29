@@ -44,7 +44,10 @@ test("feature: el gate (b) muestra el árbol, las subtareas se integran solas y 
   await design.getByRole("button", { name: /Aprobar/ }).click()
 
   await expect(page.getByTestId("chat-feature").first()).toContainText("Nacieron 3 subtareas")
-  await page.getByRole("button", { name: "Board", exact: true }).click()
+  await page
+    .getByRole("navigation", { name: "Navegación principal" })
+    .getByRole("button", { name: "Board", exact: true })
+    .click()
   const progress = page.getByTestId("feature-progress")
   await expect(progress).toContainText("3/3 subtareas", { timeout: 30_000 })
   // Las hijas no ocupan columnas: van plegadas bajo el padre.
@@ -74,7 +77,10 @@ test("feature: la vista de la tarea dibuja el plan, marca la checklist y pide el
   await expect(page.getByTestId("chat-feature").first()).toContainText("Nacieron 3 subtareas")
 
   // ADR-0034 §5: la tarea padre, con su plan como DAG y la checklist del spec.
-  await page.getByRole("button", { name: "Board", exact: true }).click()
+  await page
+    .getByRole("navigation", { name: "Navegación principal" })
+    .getByRole("button", { name: "Board", exact: true })
+    .click()
   await page.locator(".task-card").first().click()
   await expect(page.getByTestId("task-focus")).toBeVisible()
   await page.getByRole("tab", { name: "Plan", exact: true }).click()

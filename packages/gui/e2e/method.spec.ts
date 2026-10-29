@@ -30,13 +30,20 @@ test("trabajar una tarea: etapas, gates en el chat, documentos y cierre sin eleg
   await page.getByRole("button", { name: "Create task", exact: true }).click()
   await page.getByLabel("Qué necesitas").fill("Que el detalle muestre los capítulos")
   await page.getByRole("button", { name: "Trabajar", exact: true }).click()
+  // Trabajar no saca de la tarea: la conversación del run nuevo queda al frente.
+  await expect(page.getByTestId("task-focus")).toBeVisible()
+  await expect(page.getByRole("tab", { name: "Conversación" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  )
 
   // Gate (a): el brief se lee en la tarjeta y se aprueba con Y.
   const brief = page.getByTestId("chat-gate").filter({ hasText: "Aprobar el brief" })
   await expect(brief).toContainText("ciclo formal")
   await expect(brief).toContainText("cambia el contrato del detalle")
   await expect(brief.locator(".rc-doc-body")).toContainText("El detalle no muestra capítulos")
-  await expect(page.locator(".rc-ledger")).toContainText("Aprobar el brief")
+  // ADR-0034 §5: Trabajar deja la vista en la tarea; el gate también cuenta en el panel.
+  await expect(page.getByRole("button", { name: "Por decidir" })).toContainText("1")
   await expect(page.getByTestId("stage-track").first()).toContainText("espera tu gate")
   if (shots) await page.screenshot({ path: join(shots, "method-brief.png") })
   await page.locator(".rc-scroll").click({ position: { x: 5, y: 5 } })
@@ -55,16 +62,21 @@ test("trabajar una tarea: etapas, gates en el chat, documentos y cierre sin eleg
     timeout: 20_000,
   })
   await expect(page.getByTestId("chat-method").filter({ hasText: "QA v1" })).toContainText("valida")
-  await expect(page.locator(".rc-branch")).toContainText("keel/KEEL-1/")
+  await expect(page.getByRole("complementary", { name: "Trabajo" })).toContainText("keel/KEEL-1/")
+  await page.getByRole("button", { name: "Documentos" }).click()
   await page
-    .locator(".rc-ledger")
-    .getByRole("button", { name: /Diseño v1/ })
+    .getByRole("complementary", { name: "Documentos" })
+    .getByRole("button", { name: /^Diseño/ })
     .click()
-  await expect(page.getByTestId("doc-peek")).toContainText("Contrato congelado")
+  await expect(page.getByRole("dialog")).toContainText("Contrato congelado")
+  await page.keyboard.press("Escape")
   if (shots) await page.screenshot({ path: join(shots, "method-close.png") })
 
   // En el tablero la tarjeta está en In Review con su etapa.
-  await page.getByRole("button", { name: "Board", exact: true }).click()
+  await page
+    .getByRole("navigation", { name: "Navegación principal" })
+    .getByRole("button", { name: "Board", exact: true })
+    .click()
   const card = page.locator(".board-column", { hasText: "In Review" }).locator(".task-card")
   await expect(card).toContainText("método: capítulos")
   await expect(card.getByTestId("card-stage")).toHaveText("Cierre · formal")
