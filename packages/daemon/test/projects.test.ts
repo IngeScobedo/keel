@@ -153,6 +153,56 @@ describe("ADR-0019 §2: proyectos", () => {
     }
     expect(basename(health.project.root_path)).toBe("beta")
   })
+
+  test("un evento de sistema sin run va al proyecto de su tarea, y los que cayeron en otro se vuelven a registrar", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keel-proj-"))
+    dirs.push(dir)
+    const a = initRepo(join(dir, "alpha"))
+    const b = initRepo(join(dir, "beta"))
+    const daemon = start(dir, a)
+    const c = await connect(daemon)
+    const beta = (await c.call("projects.open", { path: b })) as { id: string }
+    const parent = daemon.repo.createWorkItem({
+      project_id: beta.id,
+      title: "feature",
+      kind: "feature",
+    })
+    const where = (kind: string) =>
+      daemon.store.db
+        .query<{ project_id: string; payload_json: string }, [string]>(
+          "SELECT project_id, payload_json FROM events WHERE kind = ? ORDER BY event_seq",
+        )
+        .all(kind)
+    const internals = daemon as unknown as {
+      emitSystem(kind: string, runId: string | null, payload: unknown): void
+      refileMisplacedEvents(): void
+    }
+
+    // El padre de una feature no tiene run: antes caía en el proyecto por defecto (alpha).
+    internals.emitSystem("feature.subtask_integrated", null, { work_item_id: parent.id, key: "T1" })
+    expect(where("feature.subtask_integrated").map((e) => e.project_id)).toEqual([beta.id])
+
+    // Uno que quedó en alpha se copia a beta una sola vez.
+    daemon.repo.appendEvent({
+      project_id: daemon.project.project_id,
+      run_id: null,
+      source: "daemon",
+      source_event_key: "viejo",
+      fidelity: "full",
+      adapter_version: "daemon/0",
+      kind: "feature.branch_created",
+      occurred_at: null,
+      payload_json: JSON.stringify({ work_item_id: parent.id, branch: "feat/x" }),
+    })
+    internals.refileMisplacedEvents()
+    internals.refileMisplacedEvents()
+    const copies = where("feature.branch_created")
+    expect(copies.map((e) => e.project_id)).toEqual([daemon.project.project_id, beta.id])
+    expect(JSON.parse(copies[1]?.payload_json ?? "{}")).toMatchObject({
+      branch: "feat/x",
+      refiled_from: expect.any(Number),
+    })
+  })
 })
 
 describe("ADR-0034 §6: avisos entre proyectos", () => {

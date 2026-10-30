@@ -765,6 +765,19 @@ export class Repo {
           .all(seq, upTo, limit)
   }
   /** Eventos de un tipo que nombran una tarea en su payload, en orden. */
+  /** Eventos de sistema cuyo proyecto no es el de la tarea de la que hablan, sin copia aún. */
+  misplacedEvents(): (EventRow & { target_project_id: string })[] {
+    return this.db
+      .query<EventRow & { target_project_id: string }, []>(
+        `SELECT e.*, w.project_id AS target_project_id FROM events e
+         JOIN work_items w ON w.id = json_extract(e.payload_json, '$.work_item_id')
+         WHERE e.source = 'daemon' AND e.run_id IS NULL AND e.project_id != w.project_id
+           AND NOT EXISTS (SELECT 1 FROM events c WHERE c.kind = e.kind
+             AND json_extract(c.payload_json, '$.refiled_from') = e.event_seq)
+         ORDER BY e.event_seq`,
+      )
+      .all()
+  }
   eventsAbout(kind: string, workItemId: string): EventRow[] {
     return this.db
       .query<EventRow, [string, string]>(

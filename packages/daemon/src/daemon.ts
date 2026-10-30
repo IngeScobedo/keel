@@ -516,7 +516,10 @@ export class Daemon {
     this.server.start()
     this.agentServer.start()
     // ADR-0039: lo que esperaba lugar antes de reiniciar vuelve a la fila.
-    queueMicrotask(() => this.scheduleAllFeatures())
+    queueMicrotask(() => {
+      this.refileMisplacedEvents()
+      this.scheduleAllFeatures()
+    })
     let last = performance.now()
     this.lagTimer = setInterval(() => {
       const t = performance.now()
@@ -6362,8 +6365,28 @@ export class Daemon {
     )
   }
 
+  /**
+   * Los eventos de sistema que cayeron en otro proyecto que el de su tarea se vuelven a
+   * registrar en el suyo, con `refiled_from`. Los eventos son append-only: el original
+   * queda donde está. Idempotente.
+   */
+  private refileMisplacedEvents(): void {
+    for (const e of this.repo.misplacedEvents())
+      runUnitOfWork(this.uowDeps(), this.systemScope(e.target_project_id), (uow) =>
+        uow.emit(e.kind, null, { ...JSON.parse(e.payload_json), refiled_from: e.event_seq }),
+      )
+  }
+
   private emitSystem(kind: string, runId: string | null, payload: unknown): void {
-    const projectId = runId ? this.repo.getRun(runId)?.project_id : undefined
+    // Sin run, el evento es del proyecto de la tarea de la que habla: el padre de una
+    // feature no tiene run propio y sus eventos caían en el proyecto por defecto.
+    const about = payload as { project_id?: unknown; work_item_id?: unknown } | null
+    const projectId =
+      (runId ? this.repo.getRun(runId)?.project_id : undefined) ??
+      (typeof about?.project_id === "string" ? about.project_id : undefined) ??
+      (typeof about?.work_item_id === "string"
+        ? this.repo.getWorkItem(about.work_item_id)?.project_id
+        : undefined)
     runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
       uow.emit(kind, runId, payload),
     )
