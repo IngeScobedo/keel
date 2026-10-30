@@ -1,6 +1,6 @@
 # ADR-0041: Foco en tres niveles y un composer que no se va
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Media
 - **Relacionados:**

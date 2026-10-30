@@ -181,3 +181,19 @@ Las cinco del research siguen abiertas. Además:
    el idioma actual y el cambio de idioma va después?
 3. ¿Corrijo en el canvas los puntos 1, 4, 5, 7 y 8 de §3, o prefieres hacerlo
    tú?
+
+## 8. Actualización del mismo día: orquestador agente
+
+El humano aceptó 0035 a 0041 y pidió que el razonador y el orquestador sean
+agentes, con lo determinista como tools que ellos corren. ADR-0042 (Propuesto)
+supersede a 0036. Con eso, el corte de la Fase 1 queda así:
+
+1. Las tools deterministas en `@keel/core` y el daemon: `intake_draft`,
+   `repo_anchor`, `ready_check`, `quality_gaps`, con tests de tabla.
+2. El agente de la conversación gana esas tools y `plan_propose`; Keel valida el
+   esquema y el check de listo de lo que propone.
+3. La tarjeta de plan en el hilo, editable, con el perfil de agente que propone
+   el orquestador para cada intent.
+4. Aprobar crea las subtareas (ADR-0022), un carril, y el cierre de lote con los
+   gates del perfil y el changelog.
+5. El spike de ADR-0042 mide tokens con y sin tools sobre los mensajes reales.

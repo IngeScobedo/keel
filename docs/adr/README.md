@@ -44,34 +44,37 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0032](./0032-riesgo-de-un-comando-ssh.md)                      | El riesgo de un comando SSH lo clasifica Keel antes de correrlo                                                      | Aceptado (2026-10-28)  | Alta       |
 | [0033](./0033-bases-de-datos-por-tunel-ssh.md)                  | Bases de datos detrás de un túnel SSH                                                                                | Aceptado (2026-10-28)  | Alta       |
 | [0034](./0034-sistema-visual-y-navegacion-de-la-gui.md)         | La GUI como superficie de foco: sistema visual, controles y navegación                                               | Aceptado (2026-10-29)  | Alta       |
-| [0035](./0035-la-conversacion-orquesta-el-lote.md)              | La conversación orquesta: de un mensaje nace un lote                                                                 | Propuesto              | Alta       |
-| [0036](./0036-razonador-de-intake-determinista.md)              | El razonador de intake es código determinista                                                                        | Propuesto              | Alta       |
-| [0037](./0037-decisiones-supuestos-e-invariantes.md)            | Decisiones, supuestos e invariantes como objetos                                                                     | Propuesto              | Alta       |
-| [0038](./0038-gates-diferidos-y-cierre-de-lote.md)              | Gates como objetos, diferidos al cierre del lote                                                                     | Propuesto              | Alta       |
-| [0039](./0039-carriles-y-leases-de-archivo.md)                  | Carriles en paralelo sobre las fronteras de archivo                                                                  | Propuesto              | Media      |
-| [0040](./0040-fuentes-y-procedencia.md)                         | Fuentes y procedencia                                                                                                | Propuesto              | Media      |
-| [0041](./0041-foco-en-tres-niveles-y-composer-persistente.md)   | Foco en tres niveles y un composer que no se va                                                                      | Propuesto              | Media      |
+| [0035](./0035-la-conversacion-orquesta-el-lote.md)              | La conversación orquesta: de un mensaje nace un lote                                                                 | Aceptado (2026-10-30)  | Alta       |
+| [0036](./0036-razonador-de-intake-determinista.md)              | El razonador de intake es código determinista                                                                        | Aceptado (2026-10-30)  | Alta       |
+| [0037](./0037-decisiones-supuestos-e-invariantes.md)            | Decisiones, supuestos e invariantes como objetos                                                                     | Aceptado (2026-10-30)  | Alta       |
+| [0038](./0038-gates-diferidos-y-cierre-de-lote.md)              | Gates como objetos, diferidos al cierre del lote                                                                     | Aceptado (2026-10-30)  | Alta       |
+| [0039](./0039-carriles-y-leases-de-archivo.md)                  | Carriles en paralelo sobre las fronteras de archivo                                                                  | Aceptado (2026-10-30)  | Media      |
+| [0040](./0040-fuentes-y-procedencia.md)                         | Fuentes y procedencia                                                                                                | Aceptado (2026-10-30)  | Media      |
+| [0041](./0041-foco-en-tres-niveles-y-composer-persistente.md)   | Foco en tres niveles y un composer que no se va                                                                      | Aceptado (2026-10-30)  | Media      |
+| [0042](./0042-orquestador-agente-con-tools-deterministas.md)    | El orquestador es un agente; lo determinista son sus tools y las garantías de Keel                                   | Propuesto              | Alta       |
 
 ## Estado
 
 Están **Aceptados**: 0008, 0009 y 0010 el 2026-10-22; 0001 a 0007 y 0011 a 0019
 el 2026-10-23; 0020, 0021, 0022, 0024, 0025, 0027 y 0028 el 2026-10-26, por el
-humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0030 y 0035 a
-0041 están **Propuestos**; 0026, 0029, 0031, 0032 y 0033 se aceptaron el
-2026-10-28, y 0034 el 2026-10-29. Los escribió Claude a petición del humano a
-partir del SDD, los ADRs de Mirador, el canvas de pen.dev y los docs oficiales
-de Anthropic verificados en su fecha. Uno nuevo nace como **Propuesto** y sólo
-el humano lo acepta; uno aceptado no se edita: se supersede, y las desviaciones
-que se encuentren al implementarlo van a `../reviews/`.
+humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0030 y 0042
+están **Propuestos**; 0026, 0029, 0031, 0032 y 0033 se aceptaron el 2026-10-28,
+0034 el 2026-10-29 y 0035 a 0041 el 2026-10-30. 0042 supersede a 0036. Los
+escribió Claude a petición del humano a partir del SDD, los ADRs de Mirador, el
+canvas de pen.dev y los docs oficiales de Anthropic verificados en su fecha. Uno
+nuevo nace como **Propuesto** y sólo el humano lo acepta; uno aceptado no se
+edita: se supersede, y las desviaciones que se encuentren al implementarlo van a
+`../reviews/`.
 
 ## Orden de lectura
 
 0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0018 → 0008 → 0010 →
 0011 → 0012 → 0013 → 0015 → 0014 → 0016 → 0017 → 0019 → 0020 → 0021 → 0022 →
 0023 → 0024 → 0025 → 0026 → 0027 → 0028 → 0029 → 0030 → 0031 → 0032 → 0033 →
-0034 → 0035 → 0036 → 0037 → 0038 → 0039 → 0040 → 0041. Los dos primeros son el
-porqué; 0006 es lo que bloquea el primer componente de UI; 0004, 0005 y 0003 son
-consecuencias; 0007 reparte el código en librerías reutilizables y producto.
+0034 → 0035 → 0036 → 0037 → 0038 → 0039 → 0040 → 0041 → 0042. Los dos primeros
+son el porqué; 0006 es lo que bloquea el primer componente de UI; 0004, 0005 y
+0003 son consecuencias; 0007 reparte el código en librerías reutilizables y
+producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 

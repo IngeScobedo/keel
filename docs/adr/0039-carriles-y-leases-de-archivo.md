@@ -1,6 +1,6 @@
 # ADR-0039: Carriles en paralelo sobre las fronteras de archivo
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Media
 - **Relacionados:**

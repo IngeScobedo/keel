@@ -1,6 +1,6 @@
 # ADR-0040: Fuentes y procedencia
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Media
 - **Relacionados:**

@@ -1,6 +1,6 @@
 # ADR-0035: La conversación orquesta: de un mensaje nace un lote
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Alta
 - **Relacionados:**

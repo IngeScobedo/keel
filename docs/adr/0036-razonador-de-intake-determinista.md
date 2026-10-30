@@ -1,6 +1,6 @@
 # ADR-0036: El razonador de intake es código determinista
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Alta
 - **Relacionados:**

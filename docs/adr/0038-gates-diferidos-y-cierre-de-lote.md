@@ -1,6 +1,6 @@
 # ADR-0038: Gates como objetos, diferidos al cierre del lote
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Alta
 - **Relacionados:**
