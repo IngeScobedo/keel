@@ -31,7 +31,9 @@
     "gui:dev": "bun run --cwd packages/core build && bun run --cwd packages/gui dev",
     "gui:build": "bun run --cwd packages/core build && bun run --cwd packages/gui build",
     "gui:e2e": "bun run --cwd packages/gui e2e",
-    "gui:desktop": "bun run --cwd packages/core build && bun run --cwd packages/gui desktop"
+    "gui:desktop": "bun run --cwd packages/core build && bun run --cwd packages/gui desktop",
+    "gui:release": "bun run --cwd packages/core build && PATH=\"$HOME/.cargo/bin:$PATH\" bun run --cwd packages/gui desktop:build",
+    "gui:app": "./packages/gui/src-tauri/target/release/keel-gui"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.9",
