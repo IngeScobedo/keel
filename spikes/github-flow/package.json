@@ -1,0 +1,10 @@
+{
+  "name": "@keel/spike-github-flow",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike: qué da el gh del humano para ver PRs, promociones y Actions en vivo desde Keel (ADR-0043).",
+  "type": "module",
+  "scripts": {
+    "probe": "bun src/probe.ts"
+  }
+}

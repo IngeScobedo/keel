@@ -52,29 +52,30 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0040](./0040-fuentes-y-procedencia.md)                         | Fuentes y procedencia                                                                                                | Aceptado (2026-10-30)  | Media      |
 | [0041](./0041-foco-en-tres-niveles-y-composer-persistente.md)   | Foco en tres niveles y un composer que no se va                                                                      | Aceptado (2026-10-30)  | Media      |
 | [0042](./0042-orquestador-agente-con-tools-deterministas.md)    | El orquestador es un agente; lo determinista son sus tools y las garantías de Keel                                   | Aceptado (2026-10-30)  | Alta       |
+| [0043](./0043-github-prs-promociones-y-actions-en-vivo.md)      | PRs, promociones entre ramas y GitHub Actions, vivos dentro de Keel                                                  | Propuesto              | Alta       |
 
 ## Estado
 
 Están **Aceptados**: 0008, 0009 y 0010 el 2026-10-22; 0001 a 0007 y 0011 a 0019
 el 2026-10-23; 0020, 0021, 0022, 0024, 0025, 0027 y 0028 el 2026-10-26, por el
 humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0030 está
-**Propuesto**; 0026, 0029, 0031, 0032 y 0033 se aceptaron el 2026-10-28, 0034 el
-2026-10-29 y 0035 a 0042 el 2026-10-30. 0042 supersede a 0036. Los escribió
-Claude a petición del humano a partir del SDD, los ADRs de Mirador, el canvas de
-pen.dev y los docs oficiales de Anthropic verificados en su fecha. Uno nuevo
-nace como **Propuesto** y sólo el humano lo acepta; uno aceptado no se edita: se
-supersede, y las desviaciones que se encuentren al implementarlo van a
-`../reviews/`.
+**Propuesto**, igual que 0043; 0026, 0029, 0031, 0032 y 0033 se aceptaron el
+2026-10-28, 0034 el 2026-10-29 y 0035 a 0042 el 2026-10-30. 0042 supersede
+a 0036. Los escribió Claude a petición del humano a partir del SDD, los ADRs de
+Mirador, el canvas de pen.dev y los docs oficiales de Anthropic verificados en
+su fecha. Uno nuevo nace como **Propuesto** y sólo el humano lo acepta; uno
+aceptado no se edita: se supersede, y las desviaciones que se encuentren al
+implementarlo van a `../reviews/`.
 
 ## Orden de lectura
 
 0001 → 0002 → 0006 → 0004 → 0005 → 0003 → 0007 → 0009 → 0018 → 0008 → 0010 →
 0011 → 0012 → 0013 → 0015 → 0014 → 0016 → 0017 → 0019 → 0020 → 0021 → 0022 →
 0023 → 0024 → 0025 → 0026 → 0027 → 0028 → 0029 → 0030 → 0031 → 0032 → 0033 →
-0034 → 0035 → 0036 → 0037 → 0038 → 0039 → 0040 → 0041 → 0042. Los dos primeros
-son el porqué; 0006 es lo que bloquea el primer componente de UI; 0004, 0005 y
-0003 son consecuencias; 0007 reparte el código en librerías reutilizables y
-producto.
+0034 → 0035 → 0036 → 0037 → 0038 → 0039 → 0040 → 0041 → 0042 → 0043. Los dos
+primeros son el porqué; 0006 es lo que bloquea el primer componente de UI; 0004,
+0005 y 0003 son consecuencias; 0007 reparte el código en librerías reutilizables
+y producto.
 
 ## Decisiones abiertas (no decididas a propósito)
 
