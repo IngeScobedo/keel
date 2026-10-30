@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Database,
   FilePlus2,
   FileSearch,
   ListChecks,
@@ -19,6 +20,8 @@ import { TableWithChart, tableFromOutput } from "./Chart.js"
 import {
   basename,
   clock,
+  DB_TOOLS,
+  dbCall,
   duration,
   type FileDiff,
   firstLine,
@@ -30,6 +33,7 @@ import {
 import { mutationMeta } from "./client.js"
 import { InfraCard } from "./InfraCard.js"
 import type { useWorkspace } from "./useWorkspace.js"
+import "./ToolCards.css"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
 export type Density = "story" | "balanced" | "raw"
@@ -51,7 +55,10 @@ export function isExplore(t: ToolCall): boolean {
 
 /** Acción de dominio de Keel o de la checklist del agente: entra con destello. */
 export function isKeelAction(t: ToolCall): boolean {
-  return (t.name.startsWith("mcp__keel__") && !KEEL_READS.has(t.name)) || t.name === "TodoWrite"
+  return (
+    (t.name.startsWith("mcp__keel__") && !KEEL_READS.has(t.name) && !DB_TOOLS.has(t.name)) ||
+    t.name === "TodoWrite"
+  )
 }
 
 /** Una tarjeta por intención; cerrada con su resumen y el detalle a un clic. */
@@ -71,6 +78,7 @@ export function ToolCard({
 }) {
   // ADR-0031 §5: lo que abrió una ejecución de infraestructura se ve como su tarjeta.
   if (t.infra) return <InfraCard r={t.infra} {...(call ? { call } : {})} />
+  if (DB_TOOLS.has(t.name)) return <DbCard t={t} density={density} {...(call ? { call } : {})} />
   if (isKeelAction(t))
     return (
       <KeelCard t={t} fresh={fresh ?? false} onOpenTask={onOpenTask} {...(call ? { call } : {})} />
@@ -314,6 +322,90 @@ function CardBody({ t, call }: { t: ToolCall; call?: Call }) {
   )
 }
 
+/**
+ * Una consulta a una base del proyecto: el SQL siempre a la vista, cuántas filas o por
+ * qué falló, y la tabla al abrir. Abre sola si falló o si el resultado es corto.
+ */
+function DbCard({ t, density, call }: { t: ToolCall; density: Density; call?: Call }) {
+  const db = dbCall(t)
+  const shown = db?.table?.rows.length ?? 0
+  const startOpen =
+    density === "raw" || t.state === "failed" || (density === "balanced" && shown > 0 && shown <= 8)
+  const [open, setOpen] = useState(startOpen)
+  useEffect(() => setOpen(startOpen), [startOpen])
+  if (!db) return null
+  const schema = db.sql === null
+  return (
+    <div className="rc-card rc-db" data-state={t.state} data-testid="chat-db" data-tool={t.name}>
+      <button
+        type="button"
+        className="rc-card-head"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="rc-tag sql">{schema ? "ESQUEMA" : "SQL"}</span>
+        <span className="rc-card-title">
+          <Database size={13} /> {db.connection}
+        </span>
+        <span className={`rc-pill ${db.write ? "rc-db-write" : ""}`}>
+          {schema ? "esquema" : db.write ? "escritura" : "lectura"}
+        </span>
+        <span className="rc-card-meta mono">
+          <Meta t={t} />
+        </span>
+        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+      </button>
+      {db.sql !== null && (
+        <pre className={`rc-sql mono ${open ? "" : "peek"}`} data-testid="chat-db-sql">
+          {db.sql.trim()}
+        </pre>
+      )}
+      {!open && (
+        <p className={`rc-card-summary ${t.state === "failed" ? "error" : ""}`}>
+          {t.state === "done" ? <Check size={12} /> : t.state === "failed" ? <X size={12} /> : null}
+          {dbSummary(t, db)}
+        </p>
+      )}
+      {open && (
+        <div className="rc-card-body">
+          {db.params.length > 0 && (
+            <p className="rc-path mono">parámetros: {JSON.stringify(db.params)}</p>
+          )}
+          {db.error && <pre className="rc-error">{db.error}</pre>}
+          {db.table &&
+            (db.table.rows.length ? (
+              <div className="rc-db-table">
+                <p className="rc-db-count muted">{dbSummary(t, db)}</p>
+                <div className="rc-db-scroll">
+                  <TableWithChart table={db.table} {...(call ? { call } : {})} />
+                </div>
+              </div>
+            ) : (
+              <p className="rc-db-empty muted">La consulta no devolvió filas.</p>
+            ))}
+          {t.state === "running" && <p className="rc-db-empty muted">Consultando…</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function dbSummary(t: ToolCall, db: NonNullable<ReturnType<typeof dbCall>>): string {
+  if (t.state === "running") return "consultando…"
+  if (t.state === "failed") return db.error ?? "falló"
+  const table = db.table
+  if (!table) return "sin resultado"
+  const n = table.row_count_total
+  if (db.sql === null) {
+    const ti = table.columns.findIndex((c) => c.name === "table_name")
+    const tables = ti >= 0 ? new Set(table.rows.map((r) => r[ti])).size : 0
+    return `${tables} ${tables === 1 ? "tabla" : "tablas"} · ${n} columnas`
+  }
+  if (n === 0) return "sin filas"
+  const cols = table.columns.map((c) => c.name)
+  return `${n} ${n === 1 ? "fila" : "filas"} · ${cols.slice(0, 4).join(", ")}${cols.length > 4 ? ` +${cols.length - 4}` : ""}${table.truncated ? " · recortado" : ""}`
+}
+
 /** Diff unificado con números de línea y el contexto que trae el hunk. */
 export function DiffView({ diff }: { diff: FileDiff }) {
   return (
@@ -500,6 +592,11 @@ function KeelCard({
     action =
       t.name === "mcp__keel__git_propose" ? "Propuso cambios de git" : `git · ${action.slice(4)}`
   }
+  // Las demás tools de Keel: qué recibió y qué devolvió, en una línea.
+  if (body === null) {
+    const brief = keelBrief(t, res?.raw)
+    if (brief) body = <span className="rc-keel-brief mono">{brief}</span>
+  }
   return (
     <div
       className={`rc-keel ${fresh ? "fresh" : ""}`}
@@ -523,6 +620,20 @@ function KeelCard({
   )
 }
 
+function keelBrief(t: ToolCall, raw: unknown): string {
+  const args = Object.values(t.input)
+    .filter((v): v is string | number | boolean =>
+      ["string", "number", "boolean"].includes(typeof v),
+    )
+    .map((v) => firstLine(String(v)))
+    .filter(Boolean)
+    .join(" · ")
+  const r = raw as Loose | null | undefined
+  const out =
+    typeof r?.summary === "string" ? r.summary : typeof raw === "string" ? firstLine(raw) : ""
+  return [text(args, 120), out && `→ ${text(out, 120)}`].filter(Boolean).join("  ")
+}
+
 /** Densidad «Historia»: una línea por grupo de acciones (ADR-0020 §1). */
 export function StoryLine({ tools }: { tools: ToolCall[] }) {
   const explored = new Set(
@@ -535,7 +646,11 @@ export function StoryLine({ tools }: { tools: ToolCall[] }) {
   const failed = commands.filter((t) => t.state === "failed").length
   const todos = [...tools].reverse().find((t) => t.name === "TodoWrite")
   const list = (todos?.input.todos ?? []) as Todo[]
-  const keel = tools.filter((t) => t.name.startsWith("mcp__keel__") && !KEEL_READS.has(t.name))
+  const keel = tools.filter(
+    (t) => t.name.startsWith("mcp__keel__") && !KEEL_READS.has(t.name) && !DB_TOOLS.has(t.name),
+  )
+  const queries = tools.filter((t) => DB_TOOLS.has(t.name))
+  const failedQueries = queries.filter((t) => t.state === "failed").length
   const agents = tools.filter((t) => t.name === "Task" || t.name === "Agent").length
   return (
     <p className="rc-story" data-testid="chat-story">
@@ -556,6 +671,12 @@ export function StoryLine({ tools }: { tools: ToolCall[] }) {
           {failed ? <X size={12} /> : <Check size={12} />} {commands.length}{" "}
           {commands.length === 1 ? "comando" : "comandos"}
           {failed ? ` · ${failed} falló` : ""}
+        </span>
+      )}
+      {queries.length > 0 && (
+        <span className={failedQueries ? "error" : ""}>
+          <Database size={12} /> {queries.length} {queries.length === 1 ? "consulta" : "consultas"}
+          {failedQueries ? ` · ${failedQueries} falló` : ""}
         </span>
       )}
       {agents > 0 && (

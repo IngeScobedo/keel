@@ -54,6 +54,16 @@ test("chat de foco: diff, tarea de Keel, pregunta contestada, permiso por patró
     "2 / 4",
   )
   await expect(page.locator(".rc-ledger")).toContainText("DesignProjectDetailPage.spec.tsx")
+  // Las consultas a bases: el SQL a la vista, sus filas, y la razón si la base la rechaza.
+  const ok = page.getByTestId("chat-db").filter({ hasText: "layout_templates" })
+  await expect(ok).toContainText("Tienda DB")
+  await expect(ok).toContainText("lectura")
+  await expect(ok.getByTestId("result-table")).toContainText("hero")
+  const bad = page.getByTestId("chat-db").filter({ hasText: "FROM users" })
+  await expect(bad).toContainText('invalid input value for enum user_role: "user"')
+  if (shots) await ok.screenshot({ path: join(shots, "chat-db-rows.png") })
+  if (shots) await bad.scrollIntoViewIfNeeded()
+  if (shots) await page.screenshot({ path: join(shots, "chat-db.png") })
   // Modelo a la vista (§5) y modo en vivo con su registro (§4).
   await expect(page.getByRole("button", { name: "Modelo y esfuerzo" })).toContainText(
     "Opus 5.5 · alto",

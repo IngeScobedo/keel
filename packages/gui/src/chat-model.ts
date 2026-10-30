@@ -756,6 +756,48 @@ export function keelResult(t: ToolCall): {
   }
 }
 
+/** Una consulta a una base del proyecto (`db_query`, `db_schema`): qué corrió y qué volvió. */
+export type DbCall = {
+  connection: string
+  /** `null` en `db_schema`: Keel arma la consulta del esquema. */
+  sql: string | null
+  params: unknown[]
+  write: boolean
+  table: {
+    columns: { name: string }[]
+    rows: unknown[][]
+    row_count_total: number
+    truncated: boolean
+  } | null
+  /** Sin el prefijo del transporte MCP: la razón que dio la base. */
+  error: string | null
+}
+
+export const DB_TOOLS = new Set(["mcp__keel__db_query", "mcp__keel__db_schema"])
+
+export function dbCall(t: ToolCall): DbCall | null {
+  if (!DB_TOOLS.has(t.name)) return null
+  const i = t.input
+  const r = (t.state === "done" ? parseMaybe(mcpText(t.response)) : null) as Loose | null
+  const rows = Array.isArray(r?.rows) ? (r.rows as unknown[][]) : null
+  const columns = Array.isArray(r?.columns) ? (r.columns as unknown[]).map(String) : []
+  return {
+    connection: String(i.connection ?? ""),
+    sql: t.name === "mcp__keel__db_schema" ? null : String(i.sql ?? ""),
+    params: Array.isArray(i.params) ? i.params : [],
+    write: i.write === true,
+    table: rows
+      ? {
+          columns: columns.map((name) => ({ name })),
+          rows,
+          row_count_total: typeof r?.row_count === "number" ? r.row_count : rows.length,
+          truncated: r?.truncated === true,
+        }
+      : null,
+    error: t.error ? t.error.replace(/^(MCP error -?\d+:\s*)+/i, "").trim() : null,
+  }
+}
+
 /** La respuesta de una tool MCP llega como texto o como bloques `{type:"text"}`. */
 function mcpText(response: unknown): unknown {
   if (Array.isArray(response)) {

@@ -310,6 +310,53 @@ export function chatQuery(): QueryFn {
           lifecycle: "triage",
         }),
       )
+      // Una consulta que vuelve con filas y otra que la base rechaza: el SQL a la vista.
+      await tool(
+        "mcp__keel__db_query",
+        {
+          connection: "Tienda DB",
+          sql: "SELECT id, name, slots\nFROM layout_templates\nORDER BY id",
+        },
+        [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                operation: "query.read",
+                summary: "2 fila(s)",
+                columns: ["id", "name", "slots"],
+                rows: [
+                  [1, "grid", 6],
+                  [2, "hero", 1],
+                ],
+                row_count: 2,
+                truncated: false,
+                evidence_id: null,
+                result_ref: null,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      )
+      {
+        const id = `toolu_chat_${++n}`
+        const tool_input = {
+          connection: "Tienda DB",
+          sql: "SELECT count(*) FROM users WHERE role = 'user'",
+        }
+        await hook("PreToolUse", { tool_name: "mcp__keel__db_query", tool_input }, id)
+        await hook(
+          "PostToolUseFailure",
+          {
+            tool_name: "mcp__keel__db_query",
+            tool_input,
+            error: 'query.read en Tienda DB falló: invalid input value for enum user_role: "user"',
+          },
+          id,
+        )
+      }
       yield say("El API ya devuelve chapters. Antes de tocar la vista necesito una decisión:")
       const q = "¿Cómo cargo los capítulos cuando un proyecto tiene muchos?"
       const answer = await asked(

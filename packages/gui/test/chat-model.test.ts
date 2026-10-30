@@ -3,6 +3,7 @@ import {
   type Approval,
   buildChat,
   buildLedger,
+  dbCall,
   fromUnified,
   keelResult,
   modelLabel,
@@ -191,6 +192,84 @@ describe("panel del run", () => {
       ],
     } as unknown as ToolCall
     expect(keelResult(t)?.item).toMatchObject({ display_id: "KEEL-1" })
+  })
+})
+
+describe("consultas a bases en el chat", () => {
+  const tool = (over: Partial<ToolCall>): ToolCall =>
+    ({
+      kind: "tool",
+      key: "k",
+      id: "t",
+      name: "mcp__keel__db_query",
+      input: {},
+      response: undefined,
+      error: null,
+      state: "done",
+      duration_ms: 40,
+      started_at: "",
+      approval: null,
+      diff: null,
+      infra: null,
+      ...over,
+    }) as ToolCall
+
+  test("db_query trae su SQL, su conexión y la tabla de la respuesta MCP", () => {
+    const db = dbCall(
+      tool({
+        input: { connection: "Casa Matte Prod DB", sql: "SELECT id, name FROM layout_templates" },
+        response: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                operation: "query.read",
+                summary: "2 fila(s)",
+                columns: ["id", "name"],
+                rows: [
+                  [1, "grid"],
+                  [2, "hero"],
+                ],
+                row_count: 2,
+                truncated: false,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      }),
+    )
+    expect(db).toMatchObject({
+      connection: "Casa Matte Prod DB",
+      sql: "SELECT id, name FROM layout_templates",
+      write: false,
+      error: null,
+      table: { columns: [{ name: "id" }, { name: "name" }], row_count_total: 2 },
+    })
+    expect(db?.table?.rows).toHaveLength(2)
+  })
+
+  test("si la base falla se ve su razón, sin el prefijo del transporte", () => {
+    const db = dbCall(
+      tool({
+        state: "failed",
+        input: { connection: "Prod", sql: "SELECT * FROM users WHERE role = 'user'" },
+        error:
+          'MCP error -32603: query.read en Prod falló: invalid input value for enum user_role: "user"',
+      }),
+    )
+    expect(db?.error).toBe(
+      'query.read en Prod falló: invalid input value for enum user_role: "user"',
+    )
+    expect(db?.table).toBeNull()
+  })
+
+  test("db_schema no tiene SQL propio; otras tools no son consultas", () => {
+    expect(
+      dbCall(tool({ name: "mcp__keel__db_schema", input: { connection: "Prod" } }))?.sql,
+    ).toBeNull()
+    expect(dbCall(tool({ name: "mcp__keel__note_add" }))).toBeNull()
   })
 })
 
