@@ -83,7 +83,8 @@ export function redactSecrets<T>(value: T, secrets: string[]): T {
 
 /**
  * Patrones que se borran aunque no estén en el vault (ADR-0025 §8): llaves privadas,
- * llaves de AWS y credenciales dentro de una URL. Un `cat .env` remoto no los devuelve.
+ * llaves de AWS, tokens de GitHub y de DigitalOcean (los logs de Actions, ADR-0043) y
+ * credenciales dentro de una URL. Un `cat .env` remoto no los devuelve.
  */
 const PATTERNS: [RegExp, string][] = [
   [
@@ -91,6 +92,9 @@ const PATTERNS: [RegExp, string][] = [
     "[llave privada redactada]",
   ],
   [/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, "[redactado]"],
+  [/\bgh[pousr]_[A-Za-z0-9]{36,}\b/g, "[redactado]"],
+  [/\bgithub_pat_[A-Za-z0-9_]{22,}\b/g, "[redactado]"],
+  [/\bdo[opr]_v1_[a-f0-9]{64}\b/g, "[redactado]"],
   [/\b([a-z][a-z0-9+.-]*:\/\/[^\s:/@]+):([^\s@/]+)@/gi, "$1:[redactado]@"],
 ]
 export function redactKnownPatterns<T>(value: T): T {

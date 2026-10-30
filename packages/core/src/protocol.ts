@@ -499,6 +499,118 @@ export const GrantPolicySchema = z.enum(["auto", "ask", "deny"])
 export const AUTH_METHODS = ["agent", "file", "key", "password", "ask"] as const
 export const AuthMethodSchema = z.enum(AUTH_METHODS)
 export type AuthMethod = z.infer<typeof AuthMethodSchema>
+/** ADR-0043 §1: la sesión del `gh` del humano. Nunca lleva el token. */
+export const GithubStatusSchema = z.object({
+  gh: z.object({
+    installed: z.boolean(),
+    version: z.string().nullable(),
+    ready: z.boolean(),
+    accounts: z.array(
+      z.object({
+        host: z.string(),
+        login: z.string().nullable(),
+        active: z.boolean(),
+        ok: z.boolean(),
+        scopes: z.array(z.string()),
+        git_protocol: z.string().nullable(),
+        error: z.string().nullable(),
+      }),
+    ),
+  }),
+  /** El repo de GitHub del proyecto, si `gh` tiene sesión y el remoto es de GitHub. */
+  repo: z
+    .object({
+      name_with_owner: z.string(),
+      url: z.string(),
+      default_branch: z.string().nullable(),
+      merge_methods: z.array(z.enum(["merge", "squash", "rebase"])),
+      delete_branch_on_merge: z.boolean(),
+    })
+    .nullable(),
+  repo_error: z.string().nullable(),
+})
+export type GithubStatus = z.infer<typeof GithubStatusSchema>
+/** El inicio de sesión de `gh` (ADR-0043 §1): su código de un solo uso y en qué va. */
+export const GithubLoginStateSchema = z.object({
+  state: z.enum(["idle", "waiting", "done", "failed", "cancelled"]),
+  code: z.string().nullable(),
+  url: z.string().nullable(),
+  message: z.string().nullable(),
+})
+export const GithubCheckSchema = z.object({
+  name: z.string(),
+  workflow: z.string().nullable(),
+  /** `queued`, `in_progress`, `completed`… en minúsculas. */
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+  url: z.string().nullable(),
+})
+export const GithubPrSchema = z.object({
+  number: z.number().int(),
+  title: z.string(),
+  url: z.string(),
+  state: z.enum(["open", "closed", "merged"]),
+  draft: z.boolean(),
+  base: z.string(),
+  head: z.string(),
+  head_sha: z.string(),
+  /** `mergeable`, `conflicting` o `unknown` (GitHub lo calcula aparte). */
+  mergeable: z.string(),
+  merge_state: z.string(),
+  review_decision: z.string().nullable(),
+  additions: z.number().int(),
+  deletions: z.number().int(),
+  author: z.string().nullable(),
+  merged_at: z.string().nullable(),
+  merged_by: z.string().nullable(),
+  body: z.string(),
+  checks: z.array(GithubCheckSchema),
+  files: z.array(
+    z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() }),
+  ),
+})
+export type GithubPr = z.infer<typeof GithubPrSchema>
+export const GithubRunSchema = z.object({
+  id: z.number().int(),
+  workflow: z.string(),
+  title: z.string().nullable(),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  event: z.string(),
+  branch: z.string(),
+  sha: z.string(),
+  url: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  attempt: z.number().int().nullable(),
+})
+export type GithubRun = z.infer<typeof GithubRunSchema>
+const GithubStepSchema = z.object({
+  name: z.string(),
+  status: z.string(),
+  conclusion: z.string().nullable(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+})
+export const GithubRunDetailSchema = GithubRunSchema.extend({
+  jobs: z.array(
+    z.object({
+      name: z.string(),
+      status: z.string(),
+      conclusion: z.string().nullable(),
+      started_at: z.string().nullable(),
+      completed_at: z.string().nullable(),
+      url: z.string().nullable(),
+      steps: z.array(GithubStepSchema),
+    }),
+  ),
+  /** Mediana de las últimas corridas verdes del mismo workflow: «suele tardar». */
+  typical_ms: z.number().int().nullable(),
+})
+export type GithubRunDetail = z.infer<typeof GithubRunDetailSchema>
+
 export const ConnectionViewSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1550,6 +1662,78 @@ export const Methods = {
   "resources.cancel": {
     params: MutationMeta.extend({ run_key: z.string() }),
     result: z.object({ cancelled: z.boolean() }),
+  },
+  // --- GitHub por el gh del humano (ADR-0043) -------------------------------------------
+  "github.status": {
+    params: z.object({ project_id: z.string().optional(), fresh: z.boolean().optional() }),
+    result: GithubStatusSchema,
+  },
+  /** Lanza `gh auth login --web`; Keel sólo muestra el código que imprime `gh`. Sólo humanos. */
+  "github.login": {
+    params: MutationMeta.extend({ git_protocol: z.enum(["ssh", "https"]).optional() }),
+    result: GithubLoginStateSchema,
+  },
+  "github.login_state": { params: z.object({}), result: GithubLoginStateSchema },
+  "github.login_cancel": { params: MutationMeta, result: GithubLoginStateSchema },
+  /** Una PR del repo del proyecto por número o por rama. */
+  "github.pr": {
+    params: z.object({
+      project_id: z.string().optional(),
+      number: z.number().int().positive().optional(),
+      branch: z.string().optional(),
+    }),
+    result: GithubPrSchema,
+  },
+  "github.prs": {
+    params: z.object({
+      project_id: z.string().optional(),
+      state: z.enum(["open", "closed", "merged", "all"]).optional(),
+      base: z.string().optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    }),
+    result: z.object({ prs: z.array(GithubPrSchema) }),
+  },
+  /**
+   * ADR-0043 §3: mergear es del humano, atado a la cabeza que vio. Si cambió, GitHub
+   * lo rechaza y la tarjeta muestra la nueva.
+   */
+  "github.pr_merge": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      number: z.number().int().positive(),
+      method: z.enum(["merge", "squash", "rebase"]),
+      head_sha: z.string().min(7),
+      subject: z.string().max(300).optional(),
+      body: z.string().max(60_000).optional(),
+      delete_branch: z.boolean().optional(),
+    }),
+    result: GithubPrSchema,
+  },
+  "github.runs": {
+    params: z.object({
+      project_id: z.string().optional(),
+      commit: z.string().optional(),
+      branch: z.string().optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    }),
+    result: z.object({ runs: z.array(GithubRunSchema) }),
+  },
+  "github.run": {
+    params: z.object({ project_id: z.string().optional(), id: z.number().int() }),
+    result: GithubRunDetailSchema,
+  },
+  /** Las últimas líneas del log de los pasos fallidos (llegan al terminar el paso). */
+  "github.run_log": {
+    params: z.object({ project_id: z.string().optional(), id: z.number().int() }),
+    result: z.object({ tail: z.string() }),
+  },
+  "github.run_rerun": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      id: z.number().int(),
+      failed_only: z.boolean().optional(),
+    }),
+    result: z.object({ ok: z.literal(true) }),
   },
   "connections.test": {
     params: z.object({ connection_id: z.string() }),

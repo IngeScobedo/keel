@@ -70,6 +70,18 @@ import {
   repoStatus,
   unifiedDiff,
 } from "@keel/git"
+import {
+  failedLogTail,
+  GhError,
+  type GhOptions,
+  mergePullRequest,
+  pullRequest,
+  pullRequests,
+  repoSettings,
+  rerunWorkflow,
+  workflowRun,
+  workflowRuns,
+} from "@keel/git/github"
 import type { z } from "zod"
 import {
   ClaudeAdapter,
@@ -107,6 +119,7 @@ import {
   workPrompt,
 } from "./flows.js"
 import { buildPlan, DIFF_INLINE_MAX, executePlan, type GitPlansDeps } from "./git-plans.js"
+import { GithubService, prView, runDetailView, runView, typicalMs } from "./github.js"
 import { canonicalJson, nowIso, sha256Hex, ulid } from "./ids.js"
 import { agentDoorPath, isNamedPipe } from "./ipc/endpoint.js"
 import {
@@ -130,6 +143,7 @@ import { detectProfile } from "./project-profile.js"
 import { Research, ResearchError } from "./research.js"
 import { describePlaybook, discoverPlaybooks } from "./resources/ansible-discover.js"
 import { BrokerError, ResourceBroker } from "./resources/broker.js"
+import { redactKnownPatterns } from "./resources/secrets.js"
 import { describeTerraform, discoverTerraform } from "./resources/terraform-discover.js"
 import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
@@ -228,6 +242,10 @@ export class Daemon {
   readonly artifacts: ArtifactStore
   readonly semantic: SemanticProjector
   readonly broker: ResourceBroker
+  /** ADR-0043: GitHub por el `gh` del humano. */
+  readonly github: GithubService
+  /** «Suele tardar» por workflow y repo, refrescado cada 10 min. */
+  private readonly typicalRun = new Map<string, { at: number; ms: number | null }>()
   /** ADR-0025: el vault y las credenciales de las conexiones. */
   readonly vault: Vault
   readonly credentials: CredentialService
@@ -322,6 +340,7 @@ export class Daemon {
       if (!row.kind.startsWith("plugin.")) this.track(this.plugins.onEvent(row))
     })
     // ADR-0013: el intermediario ejecuta con la credencial; el agente sólo ve el resultado.
+    this.github = new GithubService(() => this.ghPath())
     this.broker = new ResourceBroker({
       db: this.store.db,
       artifacts: this.artifacts,
@@ -479,6 +498,7 @@ export class Daemon {
     this.credentials.stop()
     // ADR-0033: ningún túnel a una base queda abierto al apagar.
     this.broker.close()
+    this.github.close()
     this.plugins.stopAll()
     this.server.stop()
     this.agentServer.stop()
@@ -2439,6 +2459,138 @@ export class Daemon {
             p.connection_id,
           ),
         )
+      },
+      // --- GitHub por el gh del humano (ADR-0043) -------------------------------------
+      "github.status": (params, ctx) => {
+        const p = params as Params<"github.status">
+        const root = repo.projectRoot(this.scopeOf(ctx, p.project_id)) ?? this.rootPath
+        return this.github.status(p.fresh === true).then(async (gh) => {
+          const bin = this.ghPath()
+          if (!gh.ready || !bin) return { gh, repo: null, repo_error: null }
+          try {
+            const r = await repoSettings({ cwd: root, gh: bin })
+            return {
+              gh,
+              repo: {
+                name_with_owner: r.nameWithOwner,
+                url: r.url,
+                default_branch: r.defaultBranchRef?.name ?? null,
+                merge_methods: [
+                  ...(r.mergeCommitAllowed ? (["merge"] as const) : []),
+                  ...(r.squashMergeAllowed ? (["squash"] as const) : []),
+                  ...(r.rebaseMergeAllowed ? (["rebase"] as const) : []),
+                ],
+                delete_branch_on_merge: r.deleteBranchOnMerge,
+              },
+              repo_error: null,
+            }
+          } catch (e) {
+            return { gh, repo: null, repo_error: e instanceof Error ? e.message : String(e) }
+          }
+        })
+      },
+      "github.login": (params, ctx) => {
+        requireHuman(ctx, "iniciar sesión en GitHub")
+        const p = params as Params<"github.login">
+        return this.github.startLogin(p.git_protocol ?? "ssh")
+      },
+      "github.login_state": (_params, ctx) => {
+        requireHuman(ctx, "ver el inicio de sesión de GitHub")
+        return this.github.loginState()
+      },
+      "github.login_cancel": (_params, ctx) => {
+        requireHuman(ctx, "cancelar el inicio de sesión de GitHub")
+        return this.github.cancelLogin()
+      },
+      "github.pr": (params, ctx) => {
+        const p = params as Params<"github.pr">
+        const ref = p.number ?? p.branch
+        if (ref === undefined)
+          throw rpcError(ErrorCode.invalidParams, "di la PR por número o por rama")
+        return ghCall(pullRequest(this.ghOpts(ctx, p.project_id), ref)).then(prView)
+      },
+      "github.prs": (params, ctx) => {
+        const p = params as Params<"github.prs">
+        return ghCall(
+          pullRequests(this.ghOpts(ctx, p.project_id), {
+            state: p.state ?? "open",
+            ...(p.base ? { base: p.base } : {}),
+            ...(p.limit ? { limit: p.limit } : {}),
+          }),
+        ).then((prs) => ({ prs: prs.map(prView) }))
+      },
+      "github.pr_merge": (params, ctx) => {
+        // ADR-0043 §3 y ADR-0015 §4: mergear es del humano; el agente sólo lo pide.
+        requireHuman(ctx, "mergear una PR")
+        const p = params as Params<"github.pr_merge">
+        const opts = this.ghOpts(ctx, p.project_id)
+        return ghCall(
+          (async () => {
+            const before = await pullRequest(opts, p.number)
+            await mergePullRequest(opts, p.number, {
+              method: p.method,
+              headSha: p.head_sha,
+              ...(p.subject !== undefined ? { subject: p.subject } : {}),
+              ...(p.body !== undefined ? { body: p.body } : {}),
+              deleteBranch: p.delete_branch ? before.headRefName : null,
+            })
+            return pullRequest(opts, p.number)
+          })(),
+        ).then((after) => {
+          const view = prView(after)
+          this.emitSystem("github.pr.merged", null, {
+            number: view.number,
+            title: view.title,
+            url: view.url,
+            base: view.base,
+            head: view.head,
+            method: p.method,
+            merged_by: view.merged_by,
+            actor: actorOf(ctx),
+          })
+          return view
+        })
+      },
+      "github.runs": (params, ctx) => {
+        const p = params as Params<"github.runs">
+        return ghCall(
+          workflowRuns(this.ghOpts(ctx, p.project_id), {
+            ...(p.commit ? { commit: p.commit } : {}),
+            ...(p.branch ? { branch: p.branch } : {}),
+            limit: p.limit ?? 20,
+          }),
+        ).then((runs) => ({ runs: runs.map(runView) }))
+      },
+      "github.run": (params, ctx) => {
+        const p = params as Params<"github.run">
+        const opts = this.ghOpts(ctx, p.project_id)
+        return ghCall(workflowRun(opts, p.id)).then(async (run) => {
+          const key = `${opts.cwd}::${run.workflowName}`
+          let typical = this.typicalRun.get(key)
+          if (!typical || Date.now() - typical.at > 10 * 60_000) {
+            const past = await workflowRuns(opts, { workflow: run.workflowName, limit: 15 }).catch(
+              () => [],
+            )
+            typical = { at: Date.now(), ms: typicalMs(past) }
+            this.typicalRun.set(key, typical)
+          }
+          return runDetailView(run, typical.ms === null ? null : Math.round(typical.ms))
+        })
+      },
+      "github.run_log": (params, ctx) => {
+        const p = params as Params<"github.run_log">
+        return ghCall(failedLogTail(this.ghOpts(ctx, p.project_id), p.id)).then((tail) => ({
+          tail: redactKnownPatterns(tail),
+        }))
+      },
+      "github.run_rerun": (params, ctx) => {
+        requireHuman(ctx, "volver a correr un workflow")
+        const p = params as Params<"github.run_rerun">
+        return ghCall(
+          rerunWorkflow(this.ghOpts(ctx, p.project_id), p.id, {
+            failedOnly: p.failed_only === true,
+          }),
+        ).then(() => ({ ok: true as const }))
       },
       "terraform.discover": (params, ctx) => {
         requireHuman(ctx, "buscar carpetas de Terraform")
@@ -4942,11 +5094,24 @@ export class Daemon {
     return decision
   }
 
+  /** El `gh` del humano: el de las opciones o el del PATH (ADR-0015 §5, ADR-0043 §1). */
+  private ghPath(): string | null {
+    return this.opts.gh === undefined ? (Bun.which("gh") ?? null) : this.opts.gh
+  }
+
+  /** Cómo llamar a `gh` para el repo del proyecto; sin `gh`, el error que la GUI entiende. */
+  private ghOpts(ctx: HandlerContext, projectId?: string): GhOptions {
+    const gh = this.ghPath()
+    if (!gh) throw rpcError(ErrorCode.unauthorized, "gh no está instalado", { gh: "missing" })
+    const root = this.repo.projectRoot(this.scopeOf(ctx, projectId)) ?? this.rootPath
+    return { cwd: root, gh }
+  }
+
   private gitPlanDeps(): GitPlansDeps {
     return {
       artifacts: this.artifacts,
       emit: (runId, kind, payload) => this.emitSystem(kind, runId, payload),
-      gh: this.opts.gh === undefined ? (Bun.which("gh") ?? null) : this.opts.gh,
+      gh: this.ghPath(),
       remoteEnv: (runId) =>
         this.credentials.gitEnv(
           this.repo.getRun(runId)?.project_id ?? this.project.project_id,
@@ -5484,6 +5649,22 @@ export function featureHeader(own: FeatureInfo | null, parent: FeatureInfo | nul
  * mecánico lo hace con las tools de Keel; nada arranca sin el gate del humano.
  */
 const DEFAULT_CONVERSATION_TITLE = "Conversación del proyecto"
+
+/** Un error de `gh` como error del protocolo: la GUI distingue sin sesión de rechazado. */
+function ghCall<T>(work: Promise<T>): Promise<T> {
+  return work.catch((e) => {
+    if (!(e instanceof GhError)) throw e
+    const code =
+      e.kind === "missing" || e.kind === "unauthenticated"
+        ? ErrorCode.unauthorized
+        : e.kind === "not_found"
+          ? ErrorCode.notFound
+          : e.kind === "rejected"
+            ? ErrorCode.conflict
+            : ErrorCode.internal
+    throw rpcError(code, e.message, { gh: e.kind })
+  })
+}
 
 /** El título de una conversación nueva: la primera línea de su primer mensaje. */
 function conversationTitle(text: string): string {
