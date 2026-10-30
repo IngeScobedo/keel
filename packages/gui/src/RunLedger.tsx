@@ -245,11 +245,13 @@ function waitingLabel(a: Approval): string {
   return String(i.description ?? shellCommand(i) ?? i.file_path ?? a.tool)
 }
 
-function ago(iso: string): string {
+export function ago(iso: string): string {
   const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000)
   if (s < 60) return "ahora"
   if (s < 3600) return `hace ${Math.floor(s / 60)} min`
-  return `hace ${Math.floor(s / 3600)} h`
+  if (s < 86_400) return `hace ${Math.floor(s / 3600)} h`
+  const d = Math.floor(s / 86_400)
+  return d === 1 ? "ayer" : `hace ${d} días`
 }
 
 /** La tarea abierta al lado del chat, sin cambiar de pantalla (ADR-0020 §1). */

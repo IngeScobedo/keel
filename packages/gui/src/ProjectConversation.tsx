@@ -1,12 +1,15 @@
 /**
  * ADR-0024: la conversación del proyecto. Consultas de sólo lectura sin tarea;
  * lo que el agente encuentra nace como tarea con «Trabajar» y «Abrir». El chat es
- * el de ADR-0020: la cadena de runs de una tarea oculta.
+ * el de ADR-0020: la cadena de runs de una tarea oculta. ADR-0035 §1: hay varias,
+ * cada una con su sesión, sus notas y sus lotes; `/resume` retoma otra y `/clear`
+ * empieza una nueva.
  */
 import type { EventNotification } from "@keel/core"
-import { MessageSquarePlus, Paperclip, Play, Send } from "lucide-react"
+import { History, MessageSquarePlus, Paperclip, Play, Send } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { type ComposerExtras, ComposerExtrasContext } from "./Composer.js"
+import { CommandHints, ConversationHistory, parseCommand } from "./ConversationHistory.js"
 import { mutationMeta } from "./client.js"
 import type { Run, WorkItem } from "./model.js"
 import {
@@ -50,6 +53,9 @@ export function ProjectConversation({
   onBack: () => void
 }) {
   const [opened, setOpened] = useState<Opened | null>(null)
+  // La conversación abierta; null hasta saber cuál es la más reciente.
+  const [convId, setConvId] = useState<string | null>(null)
+  const [history, setHistory] = useState(false)
   const [runId, setRunId] = useState<string | null>(null)
   const [asked, setAsked] = useState<Run | null>(null)
   const [fresh, setFresh] = useState(false)
@@ -85,30 +91,32 @@ export function ProjectConversation({
     },
     [call],
   )
-  const extras = useMemo<ComposerExtras>(
-    () => ({
-      suffix: () => sourcesSuffix(pending),
-      onSent: () => setPending([]),
-      preview: (draft) => <IntentChips text={draft} />,
-      attach: (files) => void attach(files),
-      pending: (
-        <PendingSources
-          sources={pending}
-          onRemove={(id) => setPending((all) => all.filter((x) => x.id !== id))}
-        />
-      ),
-    }),
-    [pending, attach],
-  )
   const load = useCallback(async () => {
     try {
-      const r = (await call("conversation.open", {})) as Opened
+      const r = (await call(
+        "conversation.open",
+        convId ? { conversation_id: convId } : {},
+      )) as Opened
       setOpened(r)
+      setConvId(r.work_item.id)
       setRunId((cur) => cur ?? r.run?.id ?? null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
-  }, [call])
+  }, [call, convId])
+  /** Retomar otra conversación: su último run, sus notas y lo que nació en ella. */
+  const switchTo = useCallback((id: string) => {
+    setHistory(false)
+    setFresh(false)
+    setAsked(null)
+    setRunId(null)
+    setConvId(id)
+  }, [])
+  const startNew = useCallback(() => {
+    setHistory(false)
+    setFresh(true)
+    setText("")
+  }, [])
   useEffect(() => {
     void createdCount
     void load()
@@ -123,11 +131,12 @@ export function ProjectConversation({
         const r = (await call("conversation.ask", {
           ...mutationMeta(),
           text: q.trim(),
-          ...(isFresh ? { fresh: true } : {}),
+          ...(isFresh ? { fresh: true } : convId ? { conversation_id: convId } : {}),
           ...(pending.length ? { sources: pending.map((x) => x.id) } : {}),
-        })) as { run: Run }
+        })) as { run: Run; conversation: WorkItem }
         setAsked(r.run)
         setRunId(r.run.id)
+        setConvId(r.conversation.id)
         setFresh(false)
         setText("")
         setPending([])
@@ -137,7 +146,47 @@ export function ProjectConversation({
         setSending(false)
       }
     },
-    [call, pending],
+    [call, pending, convId],
+  )
+  /** `/resume`, `/clear` y `/rename`, como en Claude Code; lo demás se manda. */
+  const command = useCallback(
+    (raw: string): boolean => {
+      const c = parseCommand(raw)
+      if (!c) return false
+      if (c.kind === "resume") setHistory(true)
+      else if (c.kind === "new") startNew()
+      else if (convId)
+        void call("conversation.rename", {
+          ...mutationMeta(),
+          conversation_id: convId,
+          title: c.title,
+        })
+          .then(() => load())
+          .catch((e: Error) => setError(e.message))
+      return true
+    },
+    [call, convId, load, startNew],
+  )
+  const extras = useMemo<ComposerExtras>(
+    () => ({
+      suffix: () => sourcesSuffix(pending),
+      onSent: () => setPending([]),
+      preview: (draft) =>
+        draft.trimStart().startsWith("/") ? (
+          <CommandHints draft={draft} />
+        ) : (
+          <IntentChips text={draft} />
+        ),
+      command: (t) => command(t),
+      attach: (files) => void attach(files),
+      pending: (
+        <PendingSources
+          sources={pending}
+          onRemove={(id) => setPending((all) => all.filter((x) => x.id !== id))}
+        />
+      ),
+    }),
+    [pending, attach, command],
   )
   // ⌘K «preguntar al proyecto…»: se manda una sola vez.
   const sent = useRef<string | null>(null)
@@ -180,23 +229,38 @@ export function ProjectConversation({
         }}
       >
         <header className="conv-head">
-          <h1>Conversación del proyecto</h1>
+          <div className="conv-title">
+            <h1 data-testid="conv-title">
+              {fresh ? "Nueva conversación" : (opened?.work_item.title ?? "Conversación")}
+            </h1>
+            {!fresh && opened && <span className="mono muted">{opened.work_item.display_id}</span>}
+          </div>
           <span className="mono muted">{projectName}</span>
           <span className="mode-badge plan" title="El agente no edita nada aquí">
             sólo lectura
           </span>
           <div className="toolbar-spacer" />
+          <Button icon={History} onClick={() => setHistory(true)} title="Historial (/resume)">
+            Historial
+          </Button>
           <Button
             icon={MessageSquarePlus}
-            onClick={() => {
-              setFresh(true)
-              setText("")
-            }}
+            onClick={startNew}
             disabled={fresh}
+            title="Nueva conversación (/clear)"
           >
             Nueva conversación
           </Button>
         </header>
+        {history && (
+          <ConversationHistory
+            call={call}
+            current={fresh ? null : convId}
+            onPick={switchTo}
+            onNew={startNew}
+            onClose={() => setHistory(false)}
+          />
+        )}
         {error && (
           <p className="error-banner" role="alert">
             {error}
@@ -208,13 +272,14 @@ export function ProjectConversation({
               <div className="conv-empty">
                 <Hint>
                   {fresh
-                    ? "Una conversación nueva no arrastra la sesión anterior."
-                    : "Pregunta sobre el código o pide trabajo: adjunta una lista de tareas o explícalo, y el orquestador te propone un plan que corriges antes de arrancar."}
+                    ? "Una conversación nueva: no arrastra la sesión, las notas ni los lotes de las otras. Las fuentes del proyecto siguen a mano. /resume retoma otra."
+                    : "Pregunta sobre el código o pide trabajo: adjunta una lista de tareas o explícalo, y el orquestador te propone un plan que corriges antes de arrancar. /resume retoma otra conversación; /clear empieza una nueva."}
                 </Hint>
                 <form
                   onSubmit={(e: FormEvent) => {
                     e.preventDefault()
-                    void ask(text, fresh)
+                    if (command(text)) setText("")
+                    else void ask(text, fresh)
                   }}
                 >
                   <PendingSources
@@ -229,11 +294,16 @@ export function ProjectConversation({
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault()
-                        void ask(text, fresh)
+                        if (command(text)) setText("")
+                        else void ask(text, fresh)
                       }
                     }}
                   />
-                  <IntentChips text={text} />
+                  {text.trimStart().startsWith("/") ? (
+                    <CommandHints draft={text} />
+                  ) : (
+                    <IntentChips text={text} />
+                  )}
                   <div className="modal-actions">
                     <Button
                       variant="ghost"

@@ -191,7 +191,7 @@ describe("ADR-0024: la conversación del proyecto", () => {
     }
     expect(detail.item.origin_work_item_id).toBe(open.work_item.id)
     expect(detail.spec_markdown).toContain("orders/export.ts:41")
-    expect(detail.notes[0]?.content_markdown).toContain("Nació de la conversación del proyecto")
+    expect(detail.notes[0]?.content_markdown).toContain("Nació de la conversación CHAT «")
 
     // «Trabajar» empieza su brief con la especificación que dejó el agente.
     scripts.push(async () => {})
@@ -210,10 +210,11 @@ describe("ADR-0024: la conversación del proyecto", () => {
     expect(found.results.some((r) => r.snippet.includes("streams"))).toBe(true)
   })
 
-  test("seguir la conversación retoma la sesión; «Nueva conversación» empieza sin padre", async () => {
+  test("seguir la conversación retoma la sesión; «Nueva conversación» abre otra, aislada", async () => {
     const { human, settled } = await boot()
     const first = (await human.call("conversation.ask", { ...meta(), text: "hola" })) as {
       run: RunView
+      conversation: { id: string; display_id: string }
     }
     await settled(first.run.id)
     const second = (await human.call("conversation.ask", { ...meta(), text: "¿y luego?" })) as {
@@ -223,13 +224,64 @@ describe("ADR-0024: la conversación del proyecto", () => {
     expect(second.delivered).toBe("continued")
     expect(second.run.parent_run_id).toBe(first.run.id)
     await settled(second.run.id)
+    // ADR-0035 §1: otra conversación, titulada con el mensaje, sin la sesión de la primera.
     const fresh = (await human.call("conversation.ask", {
       ...meta(),
-      text: "otro tema",
+      text: "Otro tema: los precios\ncon detalle",
       fresh: true,
-    })) as { delivered: string; run: RunView }
+    })) as {
+      delivered: string
+      run: RunView
+      conversation: { id: string; display_id: string; title: string }
+    }
     expect(fresh.delivered).toBe("started")
     expect(fresh.run.parent_run_id).toBeNull()
+    expect(fresh.conversation).toMatchObject({
+      display_id: "CHAT-2",
+      title: "Otro tema: los precios",
+    })
+    expect(fresh.conversation.id).not.toBe(first.conversation.id)
     await settled(fresh.run.id)
+
+    // La lista, la más reciente primero; sin decir cuál, se sigue la más reciente.
+    const list = (await human.call("conversation.list", {})) as {
+      conversations: { work_item: { id: string; display_id: string }; runs: number }[]
+    }
+    expect(list.conversations.map((c) => [c.work_item.display_id, c.runs])).toEqual([
+      ["CHAT-2", 1],
+      ["CHAT", 2],
+    ])
+    const opened = (await human.call("conversation.open", {})) as { work_item: { id: string } }
+    expect(opened.work_item.id).toBe(fresh.conversation.id)
+
+    // Retomar la primera desde el historial continúa su propia sesión.
+    const resumed = (await human.call("conversation.ask", {
+      ...meta(),
+      conversation_id: first.conversation.id,
+      text: "volviendo",
+    })) as { delivered: string; run: RunView }
+    expect(resumed.delivered).toBe("continued")
+    expect(resumed.run.parent_run_id).toBe(second.run.id)
+    await settled(resumed.run.id)
+
+    const renamed = (await human.call("conversation.rename", {
+      ...meta(),
+      conversation_id: fresh.conversation.id,
+      title: "Precios",
+    })) as { title: string }
+    expect(renamed.title).toBe("Precios")
+
+    // Las conversaciones no van al tablero ni cuentan en KEEL-n.
+    const items = (await human.call("work_items.list", {})) as { items: { display_id: string }[] }
+    expect(items.items.map((w) => w.display_id)).not.toContain("CHAT-2")
+    const task = (await human.call("work_items.create", {
+      ...meta(),
+      title: "una tarea",
+      kind: "chore",
+    })) as { display_id: string }
+    expect(task.display_id).toBe("KEEL-1")
+    await expect(human.call("conversation.open", { conversation_id: "no-existe" })).rejects.toThrow(
+      "no existe",
+    )
   })
 })

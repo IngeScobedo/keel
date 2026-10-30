@@ -287,6 +287,8 @@ export type ComposerExtras = {
   preview: (draft: string) => ReactNode
   attach: (files: File[]) => void
   pending: ReactNode
+  /** Un comando del composer (`/resume`…): si lo atiende, el texto no se manda. */
+  command?: (text: string) => boolean
 }
 export const ComposerExtrasContext = createContext<ComposerExtras | null>(null)
 
@@ -316,6 +318,10 @@ export function Composer({
   async function send() {
     const text = draft.trim()
     if (!text || sending) return
+    if (extras?.command?.(text)) {
+      setDraft("")
+      return
+    }
     if (await onSend(text)) setDraft("")
   }
   return (

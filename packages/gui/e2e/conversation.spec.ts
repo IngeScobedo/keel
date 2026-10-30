@@ -60,3 +60,53 @@ test("⌘K pregunta al proyecto y la respuesta sigue la misma conversación", as
   )
   await expect(page.getByTestId("chat-agent").first()).toContainText("no pide rol")
 })
+
+test("varias conversaciones: /clear empieza otra aislada y /resume retoma la anterior", async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Conversación", exact: true }).click()
+  const conv = page.getByTestId("project-conversation")
+  await conv.getByLabel("Pregunta al proyecto").fill("¿Quién puede exportar pedidos?")
+  await conv.getByRole("button", { name: /Preguntar/ }).click()
+  await expect(page.getByTestId("chat-agent").first()).toContainText("no pide rol")
+  // El primer mensaje titula la conversación.
+  await expect(conv.getByTestId("conv-title")).toHaveText("¿Quién puede exportar pedidos?")
+  await expect(conv.getByTestId("conv-born")).toHaveCount(1)
+
+  // /clear desde el chat: una conversación vacía, sin lo que nació en la otra.
+  const composer = page.getByLabel("Mensaje al agente")
+  await composer.fill("/cl")
+  await expect(page.getByTestId("conv-commands")).toContainText("/clear")
+  await composer.fill("/clear")
+  await composer.press("Enter")
+  await expect(conv.getByTestId("conv-title")).toHaveText("Nueva conversación")
+  await conv.getByLabel("Pregunta al proyecto").fill("Precios de la tienda")
+  await conv.getByRole("button", { name: /Preguntar/ }).click()
+  await expect(conv.getByTestId("conv-title")).toHaveText("Precios de la tienda")
+  await expect(conv).toContainText("CHAT-2")
+  await expect(page.getByTestId("chat-agent").first()).toContainText("no pide rol")
+  await expect(conv.getByTestId("conv-born")).toHaveCount(1)
+  await expect(conv.getByTestId("conv-born")).toContainText("KEEL-2")
+
+  // /resume: la lista, la más reciente arriba; retomar la primera trae su chat y lo suyo.
+  await composer.fill("/resume")
+  await composer.press("Enter")
+  const history = page.getByTestId("conv-history")
+  const items = history.getByTestId("conv-history-item")
+  await expect(items).toHaveCount(2)
+  await expect(items.first()).toContainText("Precios de la tienda")
+  await expect(items.first()).toContainText("abierta")
+  await expect(items.nth(1)).toContainText("¿Quién puede exportar pedidos?")
+  if (shots) await page.screenshot({ path: join(shots, "conversation-history.png") })
+  await page.getByLabel("Buscar conversación").press("ArrowDown")
+  await page.getByLabel("Buscar conversación").press("Enter")
+  await expect(conv.getByTestId("conv-title")).toHaveText("¿Quién puede exportar pedidos?")
+  if (shots) await page.screenshot({ path: join(shots, "conversation-resumed.png") })
+  // Cada una conserva lo suyo: aquí nació KEEL-1; en «Precios», KEEL-2.
+  await expect(conv.getByTestId("conv-born")).toHaveCount(1)
+  await expect(conv.getByTestId("conv-born")).toContainText("KEEL-1")
+})

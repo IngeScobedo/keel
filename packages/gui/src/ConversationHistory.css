@@ -1,0 +1,88 @@
+/* ADR-0035 §1: el historial de conversaciones, como /resume. */
+@layer components {
+  .conv-history {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .conv-history-list {
+    display: grid;
+    gap: var(--space-1);
+    max-height: 420px;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    list-style: none;
+  }
+  .conv-history-list li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    border-radius: var(--radius-md);
+  }
+  .conv-history-list li[data-active] {
+    background: var(--color-surface-hover);
+  }
+  .conv-history-pick {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    grid-template-areas:
+      "icon title id"
+      ". meta meta";
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+    flex: 1;
+    min-width: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 0;
+    background: transparent;
+    color: var(--color-text-primary);
+    text-align: left;
+    cursor: pointer;
+  }
+  .conv-history-title {
+    grid-area: title;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .conv-history-list li[data-current] .conv-history-title {
+    color: var(--color-accent-default);
+  }
+  .conv-history-meta {
+    grid-area: meta;
+    font-size: var(--text-meta-size);
+  }
+  .conv-history-rename {
+    display: flex;
+    flex: 1;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-4);
+  }
+  .conv-history-rename input {
+    flex: 1;
+  }
+  .conv-history-keys {
+    flex: 1;
+    font-size: var(--text-meta-size);
+  }
+  .conv-commands {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: var(--text-meta-size);
+  }
+  .conv-title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+  .conv-title h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

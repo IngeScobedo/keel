@@ -944,8 +944,40 @@ export const Methods = {
    * ADR-0024: la conversación del proyecto. `open` la crea la primera vez (una
    * tarea oculta) y devuelve su último run, lo que nació de ella y sus notas.
    */
-  "conversation.open": {
+  /**
+   * ADR-0035 §1: las conversaciones del proyecto, la de actividad más reciente primero,
+   * con cuántos runs y lotes tiene cada una. Es la lista para retomar una («/resume»).
+   */
+  "conversation.list": {
     params: z.object({ project_id: z.string().optional() }),
+    result: z.object({
+      conversations: z.array(
+        z.object({
+          work_item: WorkItemViewSchema,
+          last_activity_at: z.string(),
+          runs: z.number().int(),
+          /** Lotes (features) que nacieron de ella. */
+          batches: z.number().int(),
+          /** Tareas que nacieron de ella, lotes incluidos. */
+          born: z.number().int(),
+        }),
+      ),
+    }),
+  },
+  /** ADR-0035 §1: renombrar una conversación. Sólo humanos. */
+  "conversation.rename": {
+    params: MutationMeta.extend({
+      conversation_id: z.string(),
+      title: z.string().trim().min(1).max(120),
+    }),
+    result: WorkItemViewSchema,
+  },
+  "conversation.open": {
+    params: z.object({
+      project_id: z.string().optional(),
+      /** Sin ella, la de actividad más reciente (la primera, si aún no hay ninguna). */
+      conversation_id: z.string().optional(),
+    }),
     result: z.object({
       work_item: WorkItemViewSchema,
       run: RunViewSchema.nullable(),
@@ -954,12 +986,15 @@ export const Methods = {
     }),
   },
   /**
-   * Pregunta al proyecto: le escribe al run vivo, continúa la última sesión o,
-   * con `fresh`, empieza una conversación nueva sin la sesión anterior.
+   * Pregunta al proyecto: le escribe al run vivo de la conversación, continúa su última
+   * sesión o, con `fresh`, abre una conversación nueva (ADR-0035 §1) titulada con el
+   * mensaje, sin nada de las otras.
    */
   "conversation.ask": {
     params: MutationMeta.extend({
       project_id: z.string().optional(),
+      /** La conversación; sin ella, la de actividad más reciente. */
+      conversation_id: z.string().optional(),
       text: z.string().min(1).max(20_000),
       fresh: z.boolean().optional(),
       /** ADR-0040: fuentes adjuntas a este mensaje (ids); el agente las lee con `source_read`. */
@@ -970,6 +1005,8 @@ export const Methods = {
     result: z.object({
       delivered: z.enum(["message", "continued", "started"]),
       run: RunViewSchema,
+      /** La conversación a la que llegó: la nueva, con `fresh`. */
+      conversation: WorkItemViewSchema,
     }),
   },
   /** ADR-0040: adjuntar una fuente al proyecto; Keel la parte en pasajes. Sólo humanos. */

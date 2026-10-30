@@ -15,7 +15,7 @@ import { join } from "node:path"
 import { Daemon, IpcClient } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
 import { writeFakeAnsible } from "./fake-ansible.ts"
-import { CONVERSATION_KEY } from "../../src/store/repo.ts"
+import { isConversationKey } from "../../src/store/repo.ts"
 import { memoryKeyStore } from "../../src/vault/keystore.ts"
 import {
   chatQuery,
@@ -53,7 +53,7 @@ const daemon: Daemon = new Daemon({
       // «desplegar…» pide una conexión con setup_request (ADR-0025 §6).
       if (task?.title.startsWith("desplegar")) return setupQuery(daemon)(a)
       // La conversación del proyecto (ADR-0024) la contesta su propio guion.
-      if (task?.dedupe_key === CONVERSATION_KEY) return conversationQuery(daemon)(a)
+      if (isConversationKey(task?.dedupe_key)) return conversationQuery(daemon)(a)
       return firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a)
     },
     binary: "/fake/claude",

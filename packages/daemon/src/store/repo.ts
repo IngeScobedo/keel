@@ -57,6 +57,13 @@ export type WorkItemRow = {
 }
 /** La tarea oculta de la conversación del proyecto (ADR-0024 §1). */
 export const CONVERSATION_KEY = "keel:conversation"
+/** ADR-0035 §1: las demás conversaciones del proyecto llevan `keel:conversation:<ulid>`. */
+const CONVERSATION_LIKE = `${CONVERSATION_KEY}:%`
+export function isConversationKey(key: string | null | undefined): boolean {
+  return key === CONVERSATION_KEY || (key?.startsWith(`${CONVERSATION_KEY}:`) ?? false)
+}
+/** Una conversación del proyecto, con lo que la lista necesita (ADR-0035 §1). */
+export type ConversationRow = WorkItemRow & { last_activity_at: string; runs: number }
 const WORK_ITEM_COLS =
   "id, project_id, display_id, title, kind, lifecycle, board_status, revision, priority, dedupe_key, parent_work_item_id, origin_work_item_id, origin_run_id"
 export type RunRow = {
@@ -786,13 +793,13 @@ export class Repo {
     origin_work_item_id?: string
     origin_run_id?: string
   }): WorkItemRow {
-    // La numeración KEEL-n no cuenta la conversación del proyecto.
+    // La numeración KEEL-n no cuenta las conversaciones del proyecto.
     const n =
       this.db
-        .query<{ n: number }, [string, string]>(
-          "SELECT count(*) n FROM work_items WHERE project_id = ? AND coalesce(dedupe_key, '') <> ?",
+        .query<{ n: number }, [string, string, string]>(
+          "SELECT count(*) n FROM work_items WHERE project_id = ? AND coalesce(dedupe_key, '') <> ? AND coalesce(dedupe_key, '') NOT LIKE ?",
         )
-        .get(p.project_id, CONVERSATION_KEY)?.n ?? 0
+        .get(p.project_id, CONVERSATION_KEY, CONVERSATION_LIKE)?.n ?? 0
     const id = ulid()
     const display = p.display_id ?? `KEEL-${n + 1}`
     this.db
@@ -823,6 +830,38 @@ export class Repo {
         `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE project_id = ? AND dedupe_key = ? ORDER BY created_at LIMIT 1`,
       )
       .get(projectId, CONVERSATION_KEY)
+  }
+  /** Las conversaciones del proyecto, la de actividad más reciente primero (ADR-0035 §1). */
+  conversations(projectId: string): ConversationRow[] {
+    const cols = WORK_ITEM_COLS.split(", ")
+      .map((c) => `w.${c}`)
+      .join(", ")
+    return this.db
+      .query<ConversationRow, [string, string, string]>(
+        `SELECT ${cols}, coalesce(max(r.created_at), w.created_at) last_activity_at, count(r.id) runs
+         FROM work_items w LEFT JOIN runs r ON r.work_item_id = w.id
+         WHERE w.project_id = ? AND (w.dedupe_key = ? OR w.dedupe_key LIKE ?)
+         GROUP BY w.id ORDER BY last_activity_at DESC, max(r.id) DESC, w.created_at DESC`,
+      )
+      .all(projectId, CONVERSATION_KEY, CONVERSATION_LIKE)
+  }
+  /** Una conversación nueva: `CHAT-n`, sin arrastrar nada de las otras. */
+  createConversation(projectId: string, title: string, dedupeKey: string): WorkItemRow {
+    const n = this.conversations(projectId).length
+    return this.createWorkItem({
+      project_id: projectId,
+      title,
+      kind: "research",
+      display_id: n === 0 ? "CHAT" : `CHAT-${n + 1}`,
+      dedupe_key: dedupeKey,
+      spec_markdown:
+        "Consultas sobre el proyecto, de sólo lectura. Lo que haya que hacer nace aquí como tarea.",
+    })
+  }
+  renameWorkItem(id: string, title: string): void {
+    this.db
+      .query("UPDATE work_items SET title = ?, updated_at = ? WHERE id = ?")
+      .run(title, new Date().toISOString(), id)
   }
   /** Las tareas que nacieron de otra (ADR-0024 §2), la más nueva primero. */
   bornFrom(workItemId: string): WorkItemRow[] {
@@ -864,13 +903,13 @@ export class Repo {
       .query<WorkItemRow, [string]>(`SELECT ${WORK_ITEM_COLS} FROM work_items WHERE id = ?`)
       .get(id)
   }
-  /** Las tareas del proyecto, sin la conversación (ADR-0024 §1: no va al tablero ni a las listas). */
+  /** Las tareas del proyecto, sin las conversaciones (ADR-0024 §1: no van al tablero ni a las listas). */
   listWorkItems(projectId: string): WorkItemRow[] {
     return this.db
-      .query<WorkItemRow, [string, string]>(
-        `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE project_id = ? AND coalesce(dedupe_key, '') <> ? ORDER BY created_at`,
+      .query<WorkItemRow, [string, string, string]>(
+        `SELECT ${WORK_ITEM_COLS} FROM work_items WHERE project_id = ? AND coalesce(dedupe_key, '') <> ? AND coalesce(dedupe_key, '') NOT LIKE ? ORDER BY created_at`,
       )
-      .all(projectId, CONVERSATION_KEY)
+      .all(projectId, CONVERSATION_KEY, CONVERSATION_LIKE)
   }
   /**
    * Compare-and-set: cambia el lifecycle sólo si la fila sigue en `from` y, si
