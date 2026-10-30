@@ -77,6 +77,55 @@ export async function readChanges(worktree: string, baseSha: string): Promise<Ch
   }
 }
 
+/**
+ * Lo que cambió una rama desde `baseSha`, sin worktree: la rama de una feature junta lo
+ * que integraron sus subtareas (ADR-0022), con sus commits y los de integración.
+ */
+export async function readRefChanges(
+  root: string,
+  baseSha: string,
+  branch: string,
+): Promise<ChangeRecord | null> {
+  const head = await git(
+    root,
+    ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`],
+    {},
+  )
+  if (head.code !== 0) return null
+  const log = await git(
+    root,
+    [
+      "log",
+      "--reverse",
+      "--format=%x1e%H%x1f%s%x1f%an%x1f%cI",
+      "--numstat",
+      `${baseSha}..${head.out}`,
+    ],
+    {},
+  )
+  const commits = log.out
+    .split("\x1e")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((block) => {
+      const [first = "", ...rest] = block.split("\n")
+      const [sha = "", subject = "", author = "", date = ""] = first.split("\x1f")
+      return { sha, subject, author, date, files: numstat(rest.filter(Boolean)) }
+    })
+  const diff = await git(root, ["diff", "--no-color", baseSha, head.out], {})
+  const stats = numstat(
+    (await git(root, ["diff", "--numstat", baseSha, head.out], {})).out.split("\n"),
+  )
+  return {
+    branch,
+    base_sha: baseSha,
+    head_sha: head.out,
+    commits,
+    files: stats,
+    diff: diff.out ? `${diff.out}\n` : "",
+  }
+}
+
 /** «3 commits · +40 −2 en 5 archivos». */
 export function changesSummary(r: { commits: unknown[]; files: FileStat[] }): string {
   const add = r.files.reduce((s, f) => s + f.additions, 0)

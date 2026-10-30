@@ -290,6 +290,58 @@ describe("ADR-0022: feature y subtareas", () => {
     // El padre revisa la feature en un worktree sobre su rama.
     expect(daemon.repo.getFlow(parent.id)?.stage).toBe("review")
     expect(existsSync(join(reviewCwd, "web/photos/T3.ts"))).toBe(true)
+
+    // La vista unificada: la rama de la feature junta todo, cada commit con su subtarea y
+    // cada subtarea con lo suyo (sus worktrees ya se liberaron: viene de su registro).
+    const unified = (await human.call("tasks.changes", { work_item_id: parent.id })) as {
+      source: string
+      branch: string
+      commits: { subject: string; subtask_key: string | null }[]
+      files: { path: string }[]
+      diff: string
+      subtasks: {
+        key: string
+        integrated_sha: string | null
+        source: string
+        commits: string[]
+        files: { path: string }[]
+      }[]
+    }
+    expect(unified.source).toBe("branch")
+    expect(unified.branch).toBe(branch)
+    expect(unified.files.map((f) => f.path).sort()).toEqual([
+      "api/contract/T1.ts",
+      "api/repo/T2.ts",
+      "web/photos/T3.ts",
+    ])
+    expect(unified.diff).toContain("+++ b/web/photos/T3.ts")
+    expect(new Set(unified.commits.map((c) => c.subtask_key).filter(Boolean))).toEqual(
+      new Set(["T1", "T2", "T3"]),
+    )
+    expect(unified.subtasks.map((x) => [x.key, x.source, x.integrated_sha !== null])).toEqual([
+      ["T1", "record", true],
+      ["T2", "record", true],
+      ["T3", "record", true],
+    ])
+    expect(unified.subtasks[2]?.files.map((f) => f.path)).toEqual(["web/photos/T3.ts"])
+    // Y queda guardada en el padre: sobrevive a que la rama se borre al mergear.
+    const ev = (await human.call("evidence.list", { work_item_id: parent.id })) as {
+      evidence: { kind: string; title: string | null }[]
+    }
+    expect(
+      ev.evidence.some(
+        (e) => e.kind === "diff" && e.title?.startsWith(`Cambios de ${parent.display_id}`),
+      ),
+    ).toBe(true)
+    // Se borra la rama (como al mergear la PR): la vista sale del registro, igual de completa.
+    gitOut("update-ref", "-d", `refs/heads/${branch}`)
+    const kept = (await human.call("tasks.changes", { work_item_id: parent.id })) as typeof unified
+    expect(kept.source).toBe("record")
+    expect(kept.files.map((f) => f.path).sort()).toEqual(unified.files.map((f) => f.path).sort())
+    expect(kept.subtasks.map((x) => x.key)).toEqual(["T1", "T2", "T3"])
+    expect(new Set(kept.commits.map((c) => c.subtask_key).filter(Boolean))).toEqual(
+      new Set(["T1", "T2", "T3"]),
+    )
   }, 60_000)
 
   test("si el run de diseño sigue vivo al aprobar, la primera hija espera lugar y arranca al liberarse", async () => {

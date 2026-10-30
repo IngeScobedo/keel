@@ -433,3 +433,33 @@
     white-space: nowrap;
   }
 }
+@layer components {
+  .tf-changes-filter {
+    display: flex;
+    flex-wrap: wrap;
+  }
+  .tf-subchanges {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .tf-subchanges button {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-sunken);
+    color: var(--color-text-primary);
+    font-size: 12px;
+    text-align: left;
+  }
+  .tf-subchanges li[data-active] button {
+    background: var(--color-accent-subtle);
+  }
+}

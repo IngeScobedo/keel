@@ -687,6 +687,13 @@ export const DeliveryStatusSchema = z.object({
 })
 export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>
 
+/** Un archivo con sus líneas añadidas y quitadas. */
+export const TaskFileStatSchema = z.object({
+  path: z.string(),
+  additions: z.number().int(),
+  deletions: z.number().int(),
+})
+
 export const ConnectionViewSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -1498,7 +1505,11 @@ export const Methods = {
   "tasks.changes": {
     params: z.object({ work_item_id: z.string() }),
     result: z.object({
-      source: z.enum(["worktree", "record", "none"]),
+      /**
+       * `worktree`: en vivo; `branch`: la rama de una feature, que junta lo que integraron
+       * sus subtareas; `record`: lo que Keel guardó antes de liberar el worktree.
+       */
+      source: z.enum(["worktree", "branch", "record", "none"]),
       captured_at: z.string().nullable(),
       branch: z.string().nullable(),
       base_sha: z.string().nullable(),
@@ -1509,21 +1520,31 @@ export const Methods = {
           subject: z.string(),
           author: z.string(),
           date: z.string(),
-          files: z.array(
-            z.object({
-              path: z.string(),
-              additions: z.number().int(),
-              deletions: z.number().int(),
-            }),
-          ),
+          files: z.array(TaskFileStatSchema),
+          /** En una feature: la subtarea de la que viene (`T1`…), o null si es de la feature. */
+          subtask_key: z.string().nullable().optional(),
         }),
       ),
-      files: z.array(
-        z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() }),
-      ),
+      files: z.array(TaskFileStatSchema),
       diff: z.string(),
       truncated: z.boolean(),
       pull_requests: z.array(z.object({ number: z.number().int(), url: z.string() })),
+      /** ADR-0022: en una feature, cada subtarea con lo suyo y si ya está integrada. */
+      subtasks: z
+        .array(
+          z.object({
+            id: z.string(),
+            display_id: z.string(),
+            key: z.string(),
+            title: z.string(),
+            lifecycle: z.string(),
+            integrated_sha: z.string().nullable(),
+            source: z.enum(["worktree", "branch", "record", "none"]),
+            commits: z.array(z.string()),
+            files: z.array(TaskFileStatSchema),
+          }),
+        )
+        .default([]),
     }),
   },
   "git.diff": {

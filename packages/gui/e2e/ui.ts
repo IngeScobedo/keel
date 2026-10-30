@@ -2,16 +2,21 @@
  * Los controles de `ui/` (ADR-0034 §2) no son `<select>` nativos: se abren con un clic y
  * la opción se elige por su texto, en la lista que se monta encima de la página.
  */
-import type { Locator, Page } from "@playwright/test"
+import { expect, type Locator, type Page } from "@playwright/test"
 
 export async function pick(page: Page, trigger: Locator, option: string | RegExp) {
+  // La lista anterior puede seguir cerrándose (animación de Base UI): se espera antes
+  // de abrir otra, si no hay dos opciones con el mismo nombre.
+  await expect(page.getByRole("listbox")).toHaveCount(0)
   await trigger.click()
   await page
+    .getByRole("listbox")
     .getByRole(
       "option",
       typeof option === "string" ? { name: option, exact: true } : { name: option },
     )
     .click()
+  await expect(page.getByRole("listbox")).toHaveCount(0)
 }
 
 /**

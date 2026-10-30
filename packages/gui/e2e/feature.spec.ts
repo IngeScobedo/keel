@@ -56,6 +56,28 @@ test("feature: el gate (b) muestra el árbol, las subtareas se integran solas y 
   await fold.locator("summary").click()
   await expect(fold).toContainText("Tarjeta por capítulos")
   if (shots) await page.screenshot({ path: join(shots, "feature-board.png") })
+
+  // La vista unificada de cambios: la rama de la feature, por subtarea.
+  await page.locator(".task-card").first().click()
+  await page
+    .getByRole("navigation", { name: "Contexto" })
+    .getByRole("button", { name: "Cambios" })
+    .click()
+  const changes = page.getByTestId("task-changes")
+  await expect(changes).toHaveAttribute("data-source", "branch")
+  const subs = changes.getByTestId("feature-subtasks")
+  await expect(subs).toContainText("T1")
+  await expect(subs).toContainText("Tarjeta por capítulos")
+  await expect(subs.locator("li")).toHaveCount(3)
+  await expect(changes).toContainText("3 de 3 integradas")
+  // Filtrar por una subtarea deja sólo lo suyo.
+  await changes
+    .getByRole("group", { name: "Ver cambios de" })
+    .getByRole("button", { name: "T3" })
+    .click()
+  await expect(changes).toContainText("Historia de T3")
+  await expect(changes.locator(".tf-file")).toHaveCount(1)
+  if (shots) await page.screenshot({ path: join(shots, "feature-changes.png") })
 })
 
 test("feature: la vista de la tarea dibuja el plan, marca la checklist y pide el plan de git en su panel", async ({

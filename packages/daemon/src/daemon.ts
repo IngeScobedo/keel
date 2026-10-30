@@ -177,7 +177,7 @@ import {
   type SubtaskInfo,
   type WorkItemRow,
 } from "./store/repo.js"
-import { changesSummary, readChanges } from "./task-changes.js"
+import { type ChangeRecord, changesSummary, readChanges, readRefChanges } from "./task-changes.js"
 import { CredentialService } from "./vault/credentials.js"
 import { type KeyStore, noKeyStore } from "./vault/keystore.js"
 import {
@@ -2104,76 +2104,7 @@ export class Daemon {
         const p = params as Params<"tasks.changes">
         const item = this.requireWorkItem(p.work_item_id)
         if (ctx.actor.kind === "agent") this.scopeOf(ctx, item.project_id)
-        const prs = this.store.db
-          .query<{ payload_json: string }, [string]>(
-            `SELECT payload_json FROM events WHERE kind = 'git.pull_request.created'
-               AND run_id IN (SELECT id FROM runs WHERE work_item_id = ?) ORDER BY event_seq`,
-          )
-          .all(item.id)
-          .map((r) => JSON.parse(r.payload_json) as { number?: number; url?: string })
-          .filter((x) => typeof x.number === "number")
-          .map((x) => ({ number: x.number as number, url: String(x.url ?? "") }))
-        const MAX = 2_000_000
-        return (async () => {
-          // Mientras vive el worktree, lo de ahora; si ya se liberó, lo que se guardó.
-          for (const runId of repo.runsWithWorkspaces(item.id))
-            for (const w of repo.runWorktrees(runId)) {
-              if (!existsSync(w.worktree_path)) continue
-              const r = await readChanges(w.worktree_path, w.base_sha)
-              return {
-                source: "worktree" as const,
-                captured_at: null,
-                branch: r.branch ?? w.branch_name,
-                base_sha: r.base_sha,
-                head_sha: r.head_sha,
-                commits: r.commits,
-                files: r.files,
-                diff: r.diff.slice(0, MAX),
-                truncated: r.diff.length > MAX,
-                pull_requests: prs,
-              }
-            }
-          const last = this.lastChangeRecord(item.id)
-          if (!last)
-            return {
-              source: "none" as const,
-              captured_at: null,
-              branch: null,
-              base_sha: null,
-              head_sha: null,
-              commits: [],
-              files: [],
-              diff: "",
-              truncated: false,
-              pull_requests: prs,
-            }
-          const diff = this.artifacts.readAll(last.sha256).toString("utf8")
-          const m = last.meta as {
-            branch?: string
-            base_sha?: string
-            head_sha?: string
-            commits?: {
-              sha: string
-              subject: string
-              author: string
-              date: string
-              files: { path: string; additions: number; deletions: number }[]
-            }[]
-            files?: { path: string; additions: number; deletions: number }[]
-          }
-          return {
-            source: "record" as const,
-            captured_at: last.created_at,
-            branch: m.branch ?? null,
-            base_sha: m.base_sha ?? null,
-            head_sha: m.head_sha ?? null,
-            commits: m.commits ?? [],
-            files: m.files ?? [],
-            diff: diff.slice(0, MAX),
-            truncated: diff.length > MAX,
-            pull_requests: prs,
-          }
-        })()
+        return this.taskChanges(item)
       },
       "git.propose": async (params, ctx) => {
         // El plan (diff, hashes, ramas protegidas) se arma fuera de la transacción;
@@ -4846,6 +4777,9 @@ export class Daemon {
     })
     const parentRun = this.repo.lastRunFor(parentId)?.id ?? null
     if (r.ok) {
+      await this.recordFeatureChanges(parentId, parentRun).catch((e) =>
+        console.error(`keel: no pude guardar los cambios de la feature ${parentId}`, e),
+      )
       this.emitSystem("feature.subtask_integrated", parentRun, {
         work_item_id: parentId,
         subtask_id: item.id,
@@ -5595,6 +5529,8 @@ export class Daemon {
     const run = this.repo.getRun(runId)
     const item = run ? this.repo.getWorkItem(run.work_item_id) : null
     if (!run || !item) return
+    // Una feature se registra por su rama, que junta lo de sus subtareas.
+    if (this.featureOf(item.id)) return this.recordFeatureChanges(item.id, runId)
     for (const w of this.repo.runWorktrees(runId)) {
       if (!existsSync(w.worktree_path)) continue
       const r = await readChanges(w.worktree_path, w.base_sha)
@@ -5639,6 +5575,166 @@ export class Daemon {
         })
       })
     }
+  }
+
+  /**
+   * Los cambios de una tarea (ADR-0012 §3): del worktree mientras vive, de la rama de la
+   * feature si es una, o del registro guardado. En una feature, además, cada subtarea con
+   * lo suyo, y cada commit marcado con la subtarea de la que viene.
+   */
+  private async taskChanges(item: WorkItemRow): Promise<TaskChangesView> {
+    const own = await this.changesOf(item)
+    const feat = this.featureOf(item.id)
+    if (!feat) return { ...own, subtasks: [] }
+    const integrated = new Map<string, string>()
+    for (const e of this.repo.eventsAbout("feature.subtask_integrated", item.id)) {
+      const pl = JSON.parse(e.payload_json) as { subtask_id?: string; sha?: string }
+      if (pl.subtask_id && pl.sha) integrated.set(pl.subtask_id, pl.sha)
+    }
+    const subtasks = []
+    const keyOfSha = new Map<string, string>()
+    for (const [key, id] of Object.entries(feat.subtasks)) {
+      const sub = this.repo.getWorkItem(id)
+      if (!sub) continue
+      const c = await this.changesOf(sub)
+      for (const k of c.commits) keyOfSha.set(k.sha, key)
+      subtasks.push({
+        id,
+        display_id: sub.display_id,
+        key,
+        title: sub.title,
+        lifecycle: sub.lifecycle,
+        integrated_sha: integrated.get(id) ?? null,
+        source: c.source,
+        commits: c.commits.map((k) => k.sha),
+        files: c.files,
+      })
+    }
+    const commits = own.commits.map((k) => ({
+      ...k,
+      subtask_key: keyOfSha.get(k.sha) ?? /^Integra (T\d+) ·/.exec(k.subject)?.[1] ?? null,
+    }))
+    return { ...own, commits, subtasks }
+  }
+
+  /** Los cambios de una sola tarea, sin sus subtareas. */
+  private async changesOf(item: WorkItemRow): Promise<Omit<TaskChangesView, "subtasks">> {
+    const prs = this.store.db
+      .query<{ payload_json: string }, [string]>(
+        `SELECT payload_json FROM events WHERE kind = 'git.pull_request.created'
+           AND run_id IN (SELECT id FROM runs WHERE work_item_id = ?) ORDER BY event_seq`,
+      )
+      .all(item.id)
+      .map((r) => JSON.parse(r.payload_json) as { number?: number; url?: string })
+      .filter((x) => typeof x.number === "number")
+      .map((x) => ({ number: x.number as number, url: String(x.url ?? "") }))
+    const MAX = 2_000_000
+    const view = (
+      source: "worktree" | "branch" | "record",
+      r: ChangeRecord,
+      captured_at: string | null,
+    ) => ({
+      source,
+      captured_at,
+      branch: r.branch,
+      base_sha: r.base_sha,
+      head_sha: r.head_sha,
+      commits: r.commits,
+      files: r.files,
+      diff: r.diff.slice(0, MAX),
+      truncated: r.diff.length > MAX,
+      pull_requests: prs,
+    })
+    // Una feature es su rama: junta lo que integraron sus subtareas.
+    const feat = this.featureOf(item.id)
+    const last = this.lastChangeRecord(item.id)
+    const fromRecord = (rec: NonNullable<typeof last>) => {
+      const m = rec.meta as Partial<ChangeRecord>
+      return view(
+        "record",
+        {
+          branch: m.branch ?? null,
+          base_sha: m.base_sha ?? "",
+          head_sha: m.head_sha ?? null,
+          commits: m.commits ?? [],
+          files: m.files ?? [],
+          diff: this.artifacts.readAll(rec.sha256).toString("utf8"),
+        },
+        rec.created_at,
+      )
+    }
+    if (feat?.base_sha) {
+      const root = this.repo.projectRoot(item.project_id) ?? this.rootPath
+      const r = await readRefChanges(root, feat.base_sha, feat.branch)
+      if (r) return view("branch", r, null)
+      // Sin rama (se borró al mergear): lo guardado de ella, antes que un worktree suelto.
+      if (last) return fromRecord(last)
+    }
+    for (const runId of this.repo.runsWithWorkspaces(item.id))
+      for (const w of this.repo.runWorktrees(runId)) {
+        if (!existsSync(w.worktree_path)) continue
+        const r = await readChanges(w.worktree_path, w.base_sha)
+        return view("worktree", { ...r, branch: r.branch ?? w.branch_name }, null)
+      }
+    if (!last)
+      return {
+        source: "none",
+        captured_at: null,
+        branch: null,
+        base_sha: null,
+        head_sha: null,
+        commits: [],
+        files: [],
+        diff: "",
+        truncated: false,
+        pull_requests: prs,
+      }
+    return fromRecord(last)
+  }
+
+  /**
+   * El registro de la rama de una feature (ADR-0022): se guarda cada vez que una subtarea
+   * se integra, así la historia unificada sobrevive a que la rama se borre al mergear.
+   */
+  private async recordFeatureChanges(parentId: string, runId: string | null): Promise<void> {
+    const item = this.repo.getWorkItem(parentId)
+    const feat = this.featureOf(parentId)
+    if (!item || !feat?.base_sha) return
+    const root = this.repo.projectRoot(item.project_id) ?? this.rootPath
+    const r = await readRefChanges(root, feat.base_sha, feat.branch)
+    if (!r || (r.commits.length === 0 && r.files.length === 0)) return
+    const last = this.lastChangeRecord(item.id)
+    const stored = this.artifacts.put(r.diff, "text/x-diff")
+    if (last && last.sha256 === stored.sha256 && last.head_sha === r.head_sha) return
+    runUnitOfWork(this.uowDeps(), this.systemScope(item.project_id), (uow) => {
+      const ev = this.repo.addEvidence({
+        project_id: item.project_id,
+        work_item_id: item.id,
+        run_id: runId,
+        kind: "diff",
+        title: `Cambios de ${item.display_id} · ${changesSummary(r)}`,
+        artifact_ref: stored.ref,
+        sha256: stored.sha256,
+        metadata: {
+          record: "task_changes",
+          reason: "integrate",
+          summary: changesSummary(r),
+          branch: r.branch,
+          base_sha: r.base_sha,
+          head_sha: r.head_sha,
+          commits: r.commits,
+          files: r.files,
+        },
+        provenance: {
+          actor: { id: "system:daemon", kind: "system" },
+          captured_at: nowIso(),
+          source: { branch: feat.branch, base: feat.base_sha },
+        },
+        created_by: "system:daemon",
+        supersedes_id: last?.id ?? null,
+      })
+      uow.emit("evidence.attached", runId, this.evidenceView(ev))
+    })
   }
 
   /** El último registro de cambios de la tarea, si hay. */
@@ -6210,6 +6306,8 @@ export function conventionalPlan<
     }
   return out
 }
+
+type TaskChangesView = z.infer<(typeof Methods)["tasks.changes"]["result"]>
 
 /** Un error de `gh` como error del protocolo: la GUI distingue sin sesión de rechazado. */
 function ghCall<T>(work: Promise<T>): Promise<T> {

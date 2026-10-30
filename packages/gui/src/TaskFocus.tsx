@@ -765,6 +765,8 @@ function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; ca
   const [c, setC] = useState<TaskChanges | null>(null)
   const [error, setError] = useState("")
   const [prOpen, setPrOpen] = useState<number | null>(null)
+  // En una feature: «todo» o una subtarea (T1…), que filtra la historia y el diff.
+  const [only, setOnly] = useState<string | null>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: el estado del run sólo dispara la relectura.
   useEffect(() => {
     let alive = true
@@ -778,9 +780,13 @@ function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; ca
   if (error) return <Hint>{error}</Hint>
   if (!c) return <Hint>Leyendo los cambios…</Hint>
   if (c.source === "none") return <Empty title="Esta tarea todavía no cambió nada" />
-  const files: FileDiff[] = splitUnified(c.diff)
-  const add = c.files.reduce((s, f) => s + f.additions, 0)
-  const del = c.files.reduce((s, f) => s + f.deletions, 0)
+  const sub = only ? (c.subtasks.find((x) => x.key === only) ?? null) : null
+  const subPaths = sub ? new Set(sub.files.map((f) => f.path)) : null
+  const files: FileDiff[] = splitUnified(c.diff).filter((f) => !subPaths || subPaths.has(f.path))
+  const stats = subPaths ? c.files.filter((f) => subPaths.has(f.path)) : c.files
+  const commits = only ? c.commits.filter((k) => k.subtask_key === only) : c.commits
+  const add = stats.reduce((s, f) => s + f.additions, 0)
+  const del = stats.reduce((s, f) => s + f.deletions, 0)
   return (
     <div className="tf-drawer-list tf-changes" data-testid="task-changes" data-source={c.source}>
       <p className="muted tf-changes-head">
@@ -793,8 +799,10 @@ function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; ca
         )}
         {" · "}
         {c.source === "record"
-          ? `guardado ${c.captured_at ? new Date(c.captured_at).toLocaleString() : ""} (el worktree ya se liberó)`
-          : "en vivo, del worktree"}
+          ? `guardado ${c.captured_at ? new Date(c.captured_at).toLocaleString() : ""} (ya se liberó)`
+          : c.source === "branch"
+            ? "en vivo, de la rama de la feature"
+            : "en vivo, del worktree"}
       </p>
       {c.pull_requests.length > 0 && (
         <p className="tf-changes-prs">
@@ -805,14 +813,62 @@ function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; ca
           ))}
         </p>
       )}
+      {c.subtasks.length > 0 && (
+        <>
+          <h4>
+            Subtareas · {c.subtasks.filter((x) => x.integrated_sha).length} de {c.subtasks.length}{" "}
+            integradas
+          </h4>
+          <fieldset className="segmented tf-changes-filter" aria-label="Ver cambios de">
+            <button type="button" aria-pressed={only === null} onClick={() => setOnly(null)}>
+              Todo
+            </button>
+            {c.subtasks.map((x) => (
+              <button
+                key={x.key}
+                type="button"
+                className="mono"
+                aria-pressed={only === x.key}
+                onClick={() => setOnly(only === x.key ? null : x.key)}
+              >
+                {x.key}
+              </button>
+            ))}
+          </fieldset>
+          <ul className="tf-subchanges" data-testid="feature-subtasks">
+            {c.subtasks.map((x) => {
+              const a = x.files.reduce((s, f) => s + f.additions, 0)
+              const d = x.files.reduce((s, f) => s + f.deletions, 0)
+              return (
+                <li key={x.id} data-active={only === x.key || undefined}>
+                  <button type="button" onClick={() => setOnly(only === x.key ? null : x.key)}>
+                    <span className="mono">{x.key}</span>
+                    <span className="tf-commit-subject">{x.title}</span>
+                    <span className="mono muted">
+                      {x.integrated_sha ? `integrada ${x.integrated_sha.slice(0, 7)}` : x.lifecycle}
+                    </span>
+                    <span className="mono">
+                      <span className="added">+{a}</span> <span className="deleted">−{d}</span>
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+        </>
+      )}
       <h4>
-        Historia · {c.commits.length} commit{c.commits.length === 1 ? "" : "s"}
+        Historia{only ? ` de ${only}` : ""} · {commits.length} commit
+        {commits.length === 1 ? "" : "s"}
       </h4>
-      {c.commits.length === 0 && <Hint>Sin commits todavía: lo de abajo aún no se confirma.</Hint>}
+      {commits.length === 0 && <Hint>Sin commits todavía: lo de abajo aún no se confirma.</Hint>}
       <ol className="tf-commits">
-        {c.commits.map((k) => (
+        {commits.map((k) => (
           <li key={k.sha}>
-            <span className="mono muted">{k.sha.slice(0, 7)}</span>
+            <span className="mono muted">
+              {k.subtask_key && !only ? `${k.subtask_key} · ` : ""}
+              {k.sha.slice(0, 7)}
+            </span>
             <span className="tf-commit-subject">{k.subject}</span>
             <span className="muted">
               {k.author} · {new Date(k.date).toLocaleDateString()} · {k.files.length} archivo
@@ -822,8 +878,9 @@ function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; ca
         ))}
       </ol>
       <h4>
-        Diff contra la base · {c.files.length} archivo{c.files.length === 1 ? "" : "s"} ·{" "}
-        <span className="added">+{add}</span> <span className="deleted">−{del}</span>
+        Diff{only ? ` de ${only}` : " contra la base"} · {stats.length} archivo
+        {stats.length === 1 ? "" : "s"} · <span className="added">+{add}</span>{" "}
+        <span className="deleted">−{del}</span>
       </h4>
       {c.truncated && <Hint>El diff es muy grande: se muestra el principio.</Hint>}
       {files.map((f) => (
