@@ -70,45 +70,45 @@ hay que corregir antes de implementarlos:
 
 ### Reglas que el diseño rompe
 
-1. **USD sin `cost_kind` (ADR-0002, regla 4).** La barra de estado de los 20
-   frames dice `Session · $0.84`. Debe decir si es estimado u observado:
-   `$0.84 estimado`.
-2. **Carriles en paralelo sin decir que es una decisión tuya (ADR-0002, regla
-   5).** El frame 04 muestra dos agentes y un carril inline a la vez. Hoy
-   `max_concurrent_runs` es 1 y ADR-0022 hace una subtarea a la vez. El frame
-   debe mostrar el límite («3 carriles · límite 3, lo subiste tú») o el carril
-   que espera lugar.
-3. **El carril "inline" no tiene dueño en Keel.** La conversación corre en sólo
-   lectura (ADR-0024) y toda edición pasa por un run con worktree y gate
-   (ADR-0018). "Inline" debe ser una subtarea de ceremonia directa en el carril,
-   no el orquestador editando.
+- **1.** **USD sin `cost_kind` (ADR-0002, regla 4).** La barra de estado de los
+  20 frames dice `Session · $0.84`. Debe decir si es estimado u observado:
+  `$0.84 estimado`.
+- **2.** **Carriles en paralelo sin decir que es una decisión tuya (ADR-0002,
+  regla 5).** El frame 04 muestra dos agentes y un carril inline a la vez. Hoy
+  `max_concurrent_runs` es 1 y ADR-0022 hace una subtarea a la vez. El frame
+  debe mostrar el límite («3 carriles · límite 3, lo subiste tú») o el carril
+  que espera lugar.
+- **3.** **El carril "inline" no tiene dueño en Keel.** La conversación corre en
+  sólo lectura (ADR-0024) y toda edición pasa por un run con worktree y gate
+  (ADR-0018). "Inline" debe ser una subtarea de ceremonia directa en el carril,
+  no el orquestador editando.
 
 ### Datos del ejemplo que no cuadran con Keel
 
-4. **Ids.** El frame usa `B-024`, `T-2` y `refs/keel/run-84/a`. En Keel, el lote
-   sería la tarea padre (`KEEL-24`), las subtareas tienen clave `T2` (ADR-0022)
-   y el worktree vive en la rama `keel/KEEL-n/<run>/root`.
-5. **Los tres carriles del frame 04 repiten la misma ref (`refs/keel/run-84/a`)
-   y el mismo «2 of 4 steps».** Es copia del primero.
-6. **Gates.** Las seis celdas del frame 09 usan el mismo atajo `G`. Con varias
-   tarjetas en pantalla, `A` también se repite (ratificar decisión y revisar
-   supuesto). Hace falta un mapa de atajos por foco: el atajo vale en la tarjeta
-   enfocada.
-7. **"Waived" en violeta.** El violeta es la familia de `planning` en ADR-0006.
-   Una dispensa no es planear; mejor neutro con su forma propia (el rombo ya la
-   distingue).
-8. **Tres literales del acento (`#3B6FBF`)** en vez de `$color/accent/default`.
-   Los 19 restantes son la paleta de la tienda dentro del artifact: ahí sí son
-   contenido.
+- **4.** **Ids.** El frame usa `B-024`, `T-2` y `refs/keel/run-84/a`. En Keel,
+  el lote sería la tarea padre (`KEEL-24`), las subtareas tienen clave `T2`
+  (ADR-0022) y el worktree vive en la rama `keel/KEEL-n/<run>/root`.
+- **5.** **Los tres carriles del frame 04 repiten la misma ref
+  (`refs/keel/run-84/a`) y el mismo «2 of 4 steps».** Es copia del primero.
+- **6.** **Gates.** Las seis celdas del frame 09 usan el mismo atajo `G`. Con
+  varias tarjetas en pantalla, `A` también se repite (ratificar decisión y
+  revisar supuesto). Hace falta un mapa de atajos por foco: el atajo vale en la
+  tarjeta enfocada.
+- **7.** **"Waived" en violeta.** El violeta es la familia de `planning` en
+  ADR-0006. Una dispensa no es planear; mejor neutro con su forma propia (el
+  rombo ya la distingue).
+- **8.** **Tres literales del acento (`#3B6FBF`)** en vez de
+  `$color/accent/default`. Los 19 restantes son la paleta de la tienda dentro
+  del artifact: ahí sí son contenido.
 
 ### Decisiones abiertas que el canvas da por hechas
 
-9. **Idioma de la UI.** El research dice que la UI arranca en inglés con claves
-   i18n. Hoy la GUI mezcla español e inglés y no tiene librería de i18n. Eso es
-   una dependencia y un cambio en todas las vistas: necesita su propio ADR antes
-   de implementar.
-10. **Varias conversaciones por proyecto.** El rail del frame sugiere threads;
-    ADR-0024 tiene una sola conversación por proyecto. ADR-0035 lo abre.
+- **9.** **Idioma de la UI.** El research dice que la UI arranca en inglés con
+  claves i18n. Hoy la GUI mezcla español e inglés y no tiene librería de i18n.
+  Eso es una dependencia y un cambio en todas las vistas: necesita su propio ADR
+  antes de implementar.
+- **10.** **Varias conversaciones por proyecto.** El rail del frame sugiere
+  threads; ADR-0024 tiene una sola conversación por proyecto. ADR-0035 lo abre.
 
 ## 4. El research
 
