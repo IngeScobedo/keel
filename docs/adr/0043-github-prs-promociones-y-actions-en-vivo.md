@@ -1,6 +1,6 @@
 # ADR-0043: PRs, promociones entre ramas y GitHub Actions, vivos dentro de Keel
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Alta
 - **Relacionados:**
