@@ -1498,6 +1498,7 @@ export const Methods = {
           workspaces: z.array(z.string()),
           initialized: z.boolean(),
           module: z.boolean(),
+          resources: z.number().int(),
           suggested_environment: z.enum(["prod", "staging", "dev"]).nullable(),
           suggested_name: z.string(),
         }),

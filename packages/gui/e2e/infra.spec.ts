@@ -97,15 +97,17 @@ test("Terraform: la carpeta se elige, no se escribe; un entorno por carpeta", as
   const form = page.getByTestId("new-connection")
   await pick(page, form.getByLabel("Tipo", { exact: true }), "Terraform")
   const picker = form.getByTestId("terraform-picker")
-  // Keel encontró los dos entornos y el módulo, que no se aplica solo.
-  const production = picker.getByRole("radio", { name: /terraform\/environments\/production/ })
-  await expect(production).toBeChecked()
+  // Keel encontró los dos entornos y el módulo, que no se aplica solo. De entrada queda
+  // el menos sensible, no producción.
+  await expect(picker.getByRole("radio", { name: /terraform\/environments\/stage/ })).toBeChecked()
   await expect(picker.getByRole("radio", { name: /terraform\/modules\/vpc/ })).toBeDisabled()
+  await expect(form.getByLabel("Nombre de la conexión")).toHaveValue("terraform-stage")
+  await expect(form.getByLabel("Entorno", { exact: true })).toContainText("staging")
+  // Otro entorno: nombre y entorno lo siguen.
+  await picker.getByRole("radio", { name: /terraform\/environments\/production/ }).check()
   await expect(form.getByLabel("Nombre de la conexión")).toHaveValue("terraform-production")
   await expect(form.getByLabel("Entorno", { exact: true })).toContainText("prod")
-  // Otro entorno: nombre y entorno lo siguen.
   await picker.getByRole("radio", { name: /terraform\/environments\/stage/ }).check()
-  await expect(form.getByLabel("Nombre de la conexión")).toHaveValue("terraform-stage")
   await expect(form.getByLabel("Entorno", { exact: true })).toContainText("staging")
   await expect(picker).toContainText("aws · estado s3 · 2 variables")
   // La variable sensible se llena con una referencia, nunca con el valor.

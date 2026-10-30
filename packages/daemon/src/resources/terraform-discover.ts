@@ -8,6 +8,7 @@ import { join, relative } from "node:path"
 import { MAX_DEPTH, MAX_DIRS, SKIP } from "./ansible-discover.js"
 
 type Env = "prod" | "staging" | "dev"
+const ENV_RANK: Record<Env, number> = { dev: 0, staging: 1, prod: 2 }
 
 export type DiscoveredVariable = { name: string; sensitive: boolean; has_default: boolean }
 
@@ -25,8 +26,10 @@ export type DiscoveredTerraform = {
   workspaces: string[]
   /** Ya corrió `terraform init` (hay `.terraform/`). */
   initialized: boolean
-  /** Un módulo que otros llaman, no una raíz que se aplique. */
+  /** No se aplica sola: un módulo que otros llaman, o configuración compartida sin recursos. */
   module: boolean
+  /** Bloques `resource`, `module` y `data`: cero en un `versions.tf` compartido. */
+  resources: number
   /** Lo que dice la ruta: `prod`, `staging` o `dev`. */
   suggested_environment: Env | null
   /** La carpeta, o `padre-carpeta` si se llama `terraform`, `infra`… */
@@ -72,6 +75,7 @@ export function describeTerraform(root: string, dir: string): DiscoveredTerrafor
   const variables: DiscoveredVariable[] = []
   let backend: string | null = null
   let declaresRoot = false
+  let resources = 0
   for (const f of tf) {
     let src: string
     try {
@@ -93,6 +97,8 @@ export function describeTerraform(root: string, dir: string): DiscoveredTerrafor
       backend = b[1] as string
       declaresRoot = true
     }
+    resources += [...src.matchAll(/(^|\n)\s*(resource|data)\s+"[^"]+"\s+"[^"]+"\s*\{/g)].length
+    resources += [...src.matchAll(/(^|\n)\s*module\s+"[^"]+"\s*\{/g)].length
     for (const m of src.matchAll(/(^|\n)\s*variable\s+"([^"]+)"\s*\{/g)) {
       const body = blockBody(src, (m.index ?? 0) + m[0].length - 1)
       variables.push({
@@ -122,13 +128,14 @@ export function describeTerraform(root: string, dir: string): DiscoveredTerrafor
     tfvars,
     workspaces,
     initialized: existsSync(join(dir, ".terraform")),
-    module: !declaresRoot && rel.split("/").includes("modules"),
+    module: !declaresRoot && (resources === 0 || rel.split("/").includes("modules")),
+    resources,
     suggested_environment: environmentOf([rel]),
     suggested_name: suggestedName(rel),
   }
 }
 
-/** Las carpetas con `.tf` del proyecto: primero las raíces, luego los módulos. */
+/** Las carpetas con `.tf` del proyecto: entornos, otras raíces y al final lo que no se aplica. */
 export function discoverTerraform(root: string): DiscoveredTerraform[] {
   const out: DiscoveredTerraform[] = []
   let seen = 0
@@ -153,7 +160,10 @@ export function discoverTerraform(root: string): DiscoveredTerraform[] {
     }
   }
   walk(root, 0)
-  return out.sort((a, b) => Number(a.module) - Number(b.module) || a.dir.localeCompare(b.dir))
+  // Primero los entornos, de menos a más sensible: lo que queda elegido de entrada no es prod.
+  const rank = (d: DiscoveredTerraform) =>
+    d.module ? 4 : d.suggested_environment ? ENV_RANK[d.suggested_environment] : 3
+  return out.sort((a, b) => rank(a) - rank(b) || a.dir.localeCompare(b.dir))
 }
 
 const GENERIC = /^(terraform|tf|infra|infrastructure|iac|environments?|envs?|stacks?|live)$/i

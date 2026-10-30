@@ -49,8 +49,10 @@ variable "region" {
 `
 
 describe("terraform.discover", () => {
-  test("un entorno por carpeta: stage y production, y el módulo compartido al final", () => {
+  test("un entorno por carpeta: stage y production; lo compartido y los módulos al final", () => {
     const root = project({
+      "terraform/versions.tf":
+        'terraform {\n  required_providers {\n    digitalocean = { source = "digitalocean/digitalocean" }\n  }\n}\n',
       "terraform/environments/stage/main.tf": ENV_MAIN,
       "terraform/environments/stage/variables.tf": ENV_VARS,
       "terraform/environments/production/main.tf": ENV_MAIN,
@@ -59,12 +61,15 @@ describe("terraform.discover", () => {
       "node_modules/pkg/main.tf": "ignorado",
     })
     const found = discoverTerraform(root)
+    // stage antes que production: lo elegido de entrada no es prod. El versions.tf de
+    // arriba es compartido: sin recursos, no se aplica solo.
     expect(found.map((d) => [d.dir, d.suggested_environment, d.suggested_name, d.module])).toEqual([
-      ["terraform/environments/production", "prod", "terraform-production", false],
       ["terraform/environments/stage", "staging", "terraform-stage", false],
+      ["terraform/environments/production", "prod", "terraform-production", false],
+      ["terraform", null, "terraform", true],
       ["terraform/modules/vpc", null, "vpc", true],
     ])
-    expect(found[1]).toMatchObject({
+    expect(found[0]).toMatchObject({
       files: 2,
       providers: ["aws", "random"],
       backend: "s3",

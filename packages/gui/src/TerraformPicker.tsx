@@ -162,7 +162,13 @@ export function TerraformPicker({
             key={d.dir}
             className="ansible-playbook"
             data-module={d.module || undefined}
-            title={d.module ? "Un módulo: se usa desde otra carpeta, no se aplica solo" : undefined}
+            title={
+              d.module
+                ? d.resources
+                  ? "Un módulo: se usa desde otra carpeta, no se aplica solo"
+                  : "Configuración compartida (versiones, proveedores): no tiene recursos que aplicar"
+                : undefined
+            }
           >
             <input
               type="radio"
@@ -175,7 +181,9 @@ export function TerraformPicker({
             <span className="mono">{d.dir}</span>
             <small>
               {d.module
-                ? "módulo"
+                ? d.resources
+                  ? "módulo"
+                  : "compartida · sin recursos"
                 : [
                     d.suggested_environment,
                     d.providers.join(", ") || null,
