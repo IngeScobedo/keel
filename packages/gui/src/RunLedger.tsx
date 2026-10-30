@@ -239,6 +239,8 @@ function waitingLabel(a: Approval): string {
   if (a.tool === "AskUserQuestion")
     return `Pregunta: ${questionsOf(a.input)[0]?.header ?? "del agente"}`
   if (a.tool === "ExitPlanMode") return "Revisar el plan"
+  if (a.tool === "batch.plan")
+    return `Plan del lote · ${(a.input as { plan?: { title?: string } } | null)?.plan?.title ?? ""}`
   const i = (a.input ?? {}) as Record<string, unknown>
   return String(i.description ?? shellCommand(i) ?? i.file_path ?? a.tool)
 }

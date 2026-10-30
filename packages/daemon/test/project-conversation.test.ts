@@ -163,7 +163,9 @@ describe("ADR-0024: la conversación del proyecto", () => {
 
     const turn = seen[0] as Turn
     // Con el puente MCP, el prompt empieza con este encabezado (sin puente, no hay tools de Keel).
-    expect(conversationHeader()).toContain("Conversación del proyecto, de sólo lectura")
+    // ADR-0042: el agente de la conversación es el orquestador, en sólo lectura.
+    expect(conversationHeader()).toContain("Eres el orquestador del proyecto")
+    expect(conversationHeader()).toContain("en sólo lectura: no editas archivos")
     expect(conversationHeader()).toContain("task_create")
     expect(turn.prompt).toContain("¿Quién puede exportar pedidos?")
     expect(turn.options.permissionMode).toBe("plan")

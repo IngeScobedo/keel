@@ -475,7 +475,7 @@ export function methodQuery(daemon: Daemon): QueryFn {
  * los hooks dejan la tarjeta en el chat igual que el SDK real.
  */
 export function conversationQuery(daemon: Daemon): QueryFn {
-  return ({ options }) => {
+  return ({ prompt, options }) => {
     const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
     const session = `s-conv-${runId}`
     const signal = new AbortController().signal
@@ -520,6 +520,78 @@ export function conversationQuery(daemon: Daemon): QueryFn {
         model: "claude-sonnet-5-5",
         uuid: `u-conv-init-${runId}`,
       } as unknown as SDKMessage
+      // ADR-0042: con una fuente adjunta, el orquestador la lee y propone el lote.
+      const asked = firstPrompt(prompt)
+      const src = /Fuentes adjuntas: (S-\d+)/.exec(asked)?.[1]
+      if (src) {
+        const { file } = daemon.agentTokens.issue({
+          run_id: runId,
+          project_id: row.project_id,
+          work_item_id: row.work_item_id,
+        })
+        const agent = await IpcClient.connect(daemon.agentServer.path)
+        await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+        const got = (await agent.call("sources.get", { source: src })) as {
+          passages: { anchor: string; text: string }[]
+        }
+        await tool("mcp__keel__source_read", { source: src }, JSON.stringify(got))
+        const draft = await agent.call("intake.draft", {
+          text: got.passages.map((p) => p.text).join("\n"),
+        })
+        await tool("mcp__keel__intake_draft", { text: "…" }, JSON.stringify(draft))
+        yield say(
+          `Leí ${src}: ${got.passages.length} pendientes. Te propongo un lote con dos subtareas listas y una que necesita tu respuesta.`,
+        )
+        const plan = {
+          title: "feature: pendientes de la tienda",
+          summary: `Lo que pide ${src}.`,
+          intents: [
+            {
+              key: "T1",
+              title: "Proyectos arriba de Mis pedidos",
+              kind: "ui-change",
+              goal: "Proyectos aparece antes que Mis pedidos en el menú.",
+              scope: ["web/menu/**"],
+              acceptance: ["El menú muestra Proyectos primero"],
+              profile: { provider: "claude", model: "claude-haiku-5-5", effort: "low" },
+              provenance: [`${src} §1`],
+            },
+            {
+              key: "T2",
+              title: "Pines del Lab visibles",
+              kind: "bugfix",
+              goal: "El diseñador ve y abre cada pin del Lab.",
+              scope: ["web/lab/**"],
+              acceptance: ["Los pines se ven sobre el lienzo"],
+              provenance: [`${src} §2`],
+            },
+            {
+              key: "T3",
+              title: "Aviso de ronda nueva",
+              kind: "ui-change",
+              provenance: [`${src} §3`],
+            },
+          ],
+        }
+        const proposed = await agent.call("batch.propose", {
+          request_id: "r",
+          idempotency_key: `plan-${runId}`,
+          ...plan,
+        })
+        agent.close()
+        await tool("mcp__keel__plan_propose", plan, JSON.stringify(proposed))
+        yield {
+          type: "result",
+          subtype: "success",
+          uuid: `u-conv-res-${runId}`,
+          session_id: session,
+          is_error: false,
+          result: "ok",
+          total_cost_usd: 0.004,
+          usage: { input_tokens: 10, output_tokens: 10 },
+        } as unknown as SDKMessage
+        return
+      }
       await tool(
         "Grep",
         { pattern: "requireRoles", path: "orders" },

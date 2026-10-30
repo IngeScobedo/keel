@@ -51,19 +51,19 @@ ADR-0001 de Keel dice cuáles se adoptan como regla y cuáles no aplican.
 | [0039](./0039-carriles-y-leases-de-archivo.md)                  | Carriles en paralelo sobre las fronteras de archivo                                                                  | Aceptado (2026-10-30)  | Media      |
 | [0040](./0040-fuentes-y-procedencia.md)                         | Fuentes y procedencia                                                                                                | Aceptado (2026-10-30)  | Media      |
 | [0041](./0041-foco-en-tres-niveles-y-composer-persistente.md)   | Foco en tres niveles y un composer que no se va                                                                      | Aceptado (2026-10-30)  | Media      |
-| [0042](./0042-orquestador-agente-con-tools-deterministas.md)    | El orquestador es un agente; lo determinista son sus tools y las garantías de Keel                                   | Propuesto              | Alta       |
+| [0042](./0042-orquestador-agente-con-tools-deterministas.md)    | El orquestador es un agente; lo determinista son sus tools y las garantías de Keel                                   | Aceptado (2026-10-30)  | Alta       |
 
 ## Estado
 
 Están **Aceptados**: 0008, 0009 y 0010 el 2026-10-22; 0001 a 0007 y 0011 a 0019
 el 2026-10-23; 0020, 0021, 0022, 0024, 0025, 0027 y 0028 el 2026-10-26, por el
-humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0030 y 0042
-están **Propuestos**; 0026, 0029, 0031, 0032 y 0033 se aceptaron el 2026-10-28,
-0034 el 2026-10-29 y 0035 a 0041 el 2026-10-30. 0042 supersede a 0036. Los
-escribió Claude a petición del humano a partir del SDD, los ADRs de Mirador, el
-canvas de pen.dev y los docs oficiales de Anthropic verificados en su fecha. Uno
-nuevo nace como **Propuesto** y sólo el humano lo acepta; uno aceptado no se
-edita: se supersede, y las desviaciones que se encuentren al implementarlo van a
+humano. 0023 quedó **Rechazado** el 2026-10-26: lo reemplaza 0025. 0030 está
+**Propuesto**; 0026, 0029, 0031, 0032 y 0033 se aceptaron el 2026-10-28, 0034 el
+2026-10-29 y 0035 a 0042 el 2026-10-30. 0042 supersede a 0036. Los escribió
+Claude a petición del humano a partir del SDD, los ADRs de Mirador, el canvas de
+pen.dev y los docs oficiales de Anthropic verificados en su fecha. Uno nuevo
+nace como **Propuesto** y sólo el humano lo acepta; uno aceptado no se edita: se
+supersede, y las desviaciones que se encuentren al implementarlo van a
 `../reviews/`.
 
 ## Orden de lectura

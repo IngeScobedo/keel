@@ -6,6 +6,7 @@ import type { Database } from "bun:sqlite"
 import {
   type Ceremony,
   DEFAULT_BOARD,
+  type Effort,
   isLive,
   type Lifecycle,
   type LiveRun,
@@ -234,6 +235,8 @@ export type SubtaskInfo = {
   phase_title: string
   frontier: string[]
   requirements: string[]
+  /** ADR-0042 §4: con qué agente la trabaja, si el plan del lote lo dijo. */
+  profile?: { provider: "claude" | "codex"; model?: string; effort?: Effort }
 }
 export type TaskDocRow = {
   id: string
@@ -1291,6 +1294,62 @@ export class Repo {
       .all(...args)
   }
 
+  // --- fuentes (ADR-0040) ---------------------------------------------------------
+  /** Una fuente nueva con la siguiente clave del proyecto (`S-n`). */
+  addSource(p: {
+    project_id: string
+    title: string
+    media_type: string
+    artifact_ref: string
+    passages: unknown[]
+    created_by: string
+  }): SourceRow {
+    const id = ulid()
+    this.db.transaction(() => {
+      const n =
+        (this.db
+          .query<{ n: number | null }, [string]>(
+            "SELECT max(key_n) n FROM sources WHERE project_id = ?",
+          )
+          .get(p.project_id)?.n ?? 0) + 1
+      this.db
+        .query(
+          "INSERT INTO sources(id, project_id, key_n, title, media_type, artifact_ref, passages_json, created_by) VALUES (?,?,?,?,?,?,?,?)",
+        )
+        .run(
+          id,
+          p.project_id,
+          n,
+          p.title,
+          p.media_type,
+          p.artifact_ref,
+          JSON.stringify(p.passages),
+          p.created_by,
+        )
+    })()
+    return this.getSource(p.project_id, id) as SourceRow
+  }
+  listSources(projectId: string): SourceRow[] {
+    return this.db
+      .query<SourceRow, [string]>("SELECT * FROM sources WHERE project_id = ? ORDER BY key_n DESC")
+      .all(projectId)
+  }
+  /** Por id o por clave (`S-2`), siempre dentro del proyecto. */
+  getSource(projectId: string, ref: string): SourceRow | null {
+    const key = /^S-(\d+)$/i.exec(ref.trim())
+    return key
+      ? this.db
+          .query<SourceRow, [string, number]>(
+            "SELECT * FROM sources WHERE project_id = ? AND key_n = ?",
+          )
+          .get(projectId, Number(key[1]))
+      : this.db
+          .query<SourceRow, [string, string]>(
+            "SELECT * FROM sources WHERE project_id = ? AND id = ?",
+          )
+          .get(projectId, ref)
+  }
+
   // --- evidencia (ADR-0012 §3): append-only ------------------------------------------
   addEvidence(p: {
     project_id: string
@@ -1718,6 +1777,18 @@ export class Repo {
       visual_state: visualForNode(n.state),
     }
   }
+}
+
+export type SourceRow = {
+  id: string
+  project_id: string
+  key_n: number
+  title: string
+  media_type: string
+  artifact_ref: string
+  passages_json: string
+  created_by: string
+  created_at: string
 }
 
 export type ApprovalListRow = {

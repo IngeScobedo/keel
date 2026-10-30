@@ -1,6 +1,6 @@
 # ADR-0042: El orquestador es un agente; lo determinista son sus tools y las garantías de Keel
 
-- **Estado:** Propuesto
+- **Estado:** Aceptado (2026-10-30)
 - **Fecha:** 2026-10-30
 - **Criticidad:** Alta
 - **Relacionados:**

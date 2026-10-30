@@ -10,6 +10,7 @@
  * `z.infer`, nunca se escriben a mano.
  */
 import { z } from "zod"
+import { BatchIntentSchema, DRAFT_KINDS } from "./intake.js"
 import { CEREMONIES, STAGES, TASK_DOC_KINDS } from "./method.js"
 import { PluginManifestSchema } from "./plugins.js"
 import { ClaimKindSchema, ClaimViewSchema } from "./research.js"
@@ -342,6 +343,51 @@ export const RunRequestViewSchema = z.object({
   run_id: z.string().nullable(),
   created_at: z.string(),
 })
+/** ADR-0040: una fuente del proyecto, partida en pasajes citables. */
+export const SourceViewSchema = z.object({
+  id: z.string(),
+  /** `S-1`, `S-2`…: lo que se cita. */
+  key: z.string(),
+  title: z.string(),
+  media_type: z.string(),
+  passages: z.number().int(),
+  created_by: z.string(),
+  created_at: z.string(),
+})
+export const PassageSchema = z.object({
+  anchor: z.string(),
+  heading: z.string().nullable(),
+  text: z.string(),
+})
+export const DraftIntentSchema = z.object({
+  text: z.string(),
+  kind: z.enum(DRAFT_KINDS),
+  confidence: z.number(),
+  ordering: z.enum(["now", "end-of-batch", "deferred"]),
+  span: z.tuple([z.number().int(), z.number().int()]),
+})
+export const ReadyCheckSchema = z.object({
+  goal: z.boolean(),
+  scope: z.boolean(),
+  acceptance: z.boolean(),
+  ready: z.boolean(),
+  questions: z.array(
+    z.object({
+      slot: z.enum(["goal", "scope", "acceptance"]),
+      question: z.string(),
+      options: z.array(z.string()),
+    }),
+  ),
+})
+/** ADR-0035: el plan del lote tal como lo ve y lo edita el humano. */
+export const BatchPlanSchema = z.object({
+  title: z.string().min(3).max(200),
+  summary: z.string().max(10_000).default(""),
+  intents: z.array(BatchIntentSchema).min(1).max(40),
+  /** Las subtareas listas se integran solas a la rama del lote (ADR-0022 §2). */
+  auto_integrate: z.boolean().default(true),
+})
+export type BatchPlan = z.infer<typeof BatchPlanSchema>
 /**
  * ADR-0034 §6: notificación a todos los clientes humanos, sin importar su proyecto
  * activo, cuando cambia lo que espera al humano en cualquier proyecto.
@@ -916,6 +962,8 @@ export const Methods = {
       project_id: z.string().optional(),
       text: z.string().min(1).max(20_000),
       fresh: z.boolean().optional(),
+      /** ADR-0040: fuentes adjuntas a este mensaje (ids); el agente las lee con `source_read`. */
+      sources: z.array(z.string()).max(20).optional(),
       profile: z.enum(["claude", "codex"]).optional(),
       options: RunOptionsSchema.optional(),
     }),
@@ -923,6 +971,62 @@ export const Methods = {
       delivered: z.enum(["message", "continued", "started"]),
       run: RunViewSchema,
     }),
+  },
+  /** ADR-0040: adjuntar una fuente al proyecto; Keel la parte en pasajes. Sólo humanos. */
+  "sources.add": {
+    params: MutationMeta.extend({
+      title: z.string().min(1).max(300),
+      media_type: z.string().min(1).max(200),
+      /** El archivo en base64; hasta ~8 MB. */
+      content_base64: z.string().min(1).max(12_000_000),
+      project_id: z.string().optional(),
+    }),
+    result: SourceViewSchema,
+  },
+  "sources.list": {
+    params: z.object({ project_id: z.string().optional() }),
+    result: z.object({ sources: z.array(SourceViewSchema) }),
+  },
+  /** Una fuente con sus pasajes, por id o por clave (`S-2`). */
+  "sources.get": {
+    params: z.object({ source: z.string(), project_id: z.string().optional() }),
+    result: z.object({ source: SourceViewSchema, passages: z.array(PassageSchema) }),
+  },
+  /** ADR-0042: el primer corte determinista de un mensaje en intents. */
+  "intake.draft": {
+    params: z.object({ text: z.string().min(1).max(50_000) }),
+    result: z.object({ intents: z.array(DraftIntentSchema) }),
+  },
+  /** ADR-0042: rutas del repo que coinciden con un texto (`git ls-files`, sin tokens). */
+  "repo.anchor": {
+    params: z.object({
+      query: z.string().min(1).max(500),
+      limit: z.number().int().max(50).optional(),
+    }),
+    result: z.object({ matches: z.array(z.string()) }),
+  },
+  /** ADR-0042: objetivo, alcance y criterio de un intent; preguntas para lo que falta. */
+  "intake.ready_check": {
+    params: z.object({ intent: BatchIntentSchema }),
+    result: ReadyCheckSchema,
+  },
+  /**
+   * ADR-0035: el orquestador propone el lote. Keel valida el esquema, corre el check de
+   * listo sobre cada intent y abre el gate del plan en la conversación. No arranca nada.
+   */
+  "batch.propose": {
+    params: MutationMeta.extend(BatchPlanSchema.shape),
+    result: z.object({
+      approval_id: z.string(),
+      ready: z.array(z.string()),
+      not_ready: z.array(z.object({ key: z.string(), questions: z.array(z.string()) })),
+      lanes: z.array(z.array(z.string())),
+    }),
+  },
+  /** ADR-0038 §4: el reporte del lote, desde sus subtareas e intents, no desde diffs. */
+  "batch.report": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({ markdown: z.string() }),
   },
   "tasks.flow": {
     params: z.object({ work_item_id: z.string() }),
@@ -1046,6 +1150,11 @@ export const Methods = {
        * nombre de la conexión, como ADR-0026.
        */
       confirm: z.string().max(200).optional(),
+      /**
+       * ADR-0035 §2: el plan del lote como lo dejó el humano en la tarjeta: nombres,
+       * perfiles, diferidos. Sólo puede quitar o cambiar intents, no inventar otros.
+       */
+      batch: BatchPlanSchema.optional(),
       /** ADR-0025 §6: lo que el humano dejó listo para una petición `setup.request`. */
       setup_result: z
         .object({ connection_id: z.string().optional(), note: z.string().max(500).optional() })
@@ -1720,6 +1829,13 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "verify.run",
   "projects.profile_get",
   "setup.request",
+  "sources.list",
+  "sources.get",
+  "intake.draft",
+  "repo.anchor",
+  "intake.ready_check",
+  "batch.propose",
+  "batch.report",
 ]
 
 /** El scope que exige cada método de agente; los demás no necesitan scope. */
@@ -1746,6 +1862,13 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "verify.run": "tasks:write",
   "projects.profile_get": "tasks:read",
   "setup.request": "resources:use",
+  "sources.list": "tasks:read",
+  "sources.get": "tasks:read",
+  "intake.draft": "tasks:read",
+  "repo.anchor": "tasks:read",
+  "intake.ready_check": "tasks:read",
+  "batch.propose": "tasks:write",
+  "batch.report": "tasks:read",
 }
 
 /**

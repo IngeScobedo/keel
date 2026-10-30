@@ -17,7 +17,7 @@ export type Pending = ReturnType<
   (typeof Methods)["approvals.list"]["result"]["parse"]
 >["approvals"][number]
 
-const NEEDS_CONTEXT = new Set(["git.plan", "stage.gate", "setup.request"])
+const NEEDS_CONTEXT = new Set(["git.plan", "stage.gate", "setup.request", "batch.plan"])
 
 /** Qué se le puede contestar desde el aviso: aprobar/negar, una opción o sólo «Ver». */
 export function quickReply(
@@ -47,6 +47,7 @@ function summary(a: Pending): string {
   const tool = op.tool ?? "?"
   if (tool === "git.plan") return "Propone un plan de git"
   if (tool === "stage.gate") return "Espera tu gate del método"
+  if (tool === "batch.plan") return "El orquestador propone un lote: revísalo antes de arrancar"
   if (tool === "AskUserQuestion")
     return questionsOf(op.input)[0]?.question ?? "Te hace una pregunta"
   const cmd = shellCommand(op.input)
@@ -177,8 +178,13 @@ export function Attention({
           if (seen.current.has(a.id)) continue
           seen.current.add(a.id)
           const p = here.current
-          // Si ya estás mirando esa tarea, el aviso sobra.
+          // Si ya estás mirando esa tarea (o la conversación donde está el plan), sobra.
           if (p.page === "task" && p.task === a.work_item_id) continue
+          if (
+            p.page === "conversation" &&
+            (a.operation as { tool?: string } | null)?.tool === "batch.plan"
+          )
+            continue
           const toastId = toasts.add({
             title: `${a.project_name} · ${a.work_item_display_id}`,
             description: a.work_item_title,

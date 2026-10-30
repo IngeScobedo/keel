@@ -6,10 +6,11 @@ import {
   ChevronDown,
   Eye,
   FilePen,
+  Paperclip,
   Shield,
   ShieldOff,
 } from "lucide-react"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react"
 import { EFFORT_LABEL, modelLabel } from "./chat-model.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -274,6 +275,21 @@ export function ModePill({
  * El compositor: la sugerencia de Claude como texto fantasma que → o Tab
  * aceptan (ADR-0020 §6), modelo y modo a la vista, ⇧⇥ cambia de modo.
  */
+/**
+ * Lo que la conversación del proyecto le suma al composer (ADR-0035, ADR-0040): adjuntar
+ * archivos, los adjuntos pendientes que viajan con el mensaje y los chips en vivo.
+ */
+export type ComposerExtras = {
+  /** Lo que se agrega al texto al enviar: la referencia a las fuentes adjuntas. */
+  suffix: () => string
+  onSent: () => void
+  /** Debajo del texto, mientras escribes. */
+  preview: (draft: string) => ReactNode
+  attach: (files: File[]) => void
+  pending: ReactNode
+}
+export const ComposerExtrasContext = createContext<ComposerExtras | null>(null)
+
 export function Composer({
   running,
   disabled,
@@ -294,6 +310,8 @@ export function Composer({
   onMode: (mode: PermissionMode) => void
 }) {
   const [draft, setDraft] = useState("")
+  const extras = useContext(ComposerExtrasContext)
+  const fileInput = useRef<HTMLInputElement>(null)
   const ghost = !draft && suggestion ? suggestion : null
   async function send() {
     const text = draft.trim()
@@ -337,6 +355,7 @@ export function Composer({
                 : "El run terminó: escribe para continuar la conversación")
           }
         />
+        {extras && draft.trim() && <div className="rc-preview">{extras.preview(draft)}</div>}
         {ghost && (
           <span className="rc-ghost-hint" aria-hidden="true">
             <kbd>
@@ -346,7 +365,33 @@ export function Composer({
           </span>
         )}
       </div>
+      {extras?.pending}
       <div className="rc-composer-bar">
+        {extras && (
+          <>
+            <button
+              type="button"
+              className="ui-icon-button"
+              aria-label="Adjuntar archivo"
+              title="Adjuntar archivo (.md, .txt, .docx)"
+              onClick={() => fileInput.current?.click()}
+            >
+              <Paperclip size={15} aria-hidden />
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              hidden
+              multiple
+              accept=".md,.markdown,.txt,.csv,.json,.docx"
+              aria-label="Archivo a adjuntar"
+              onChange={(e) => {
+                extras.attach([...(e.target.files ?? [])])
+                e.target.value = ""
+              }}
+            />
+          </>
+        )}
         {pills}
         <span className="muted rc-keys">
           Enter envía{running ? " al turno en curso" : ""} · ⇧Enter salto · ⇧⇥ modo

@@ -222,6 +222,33 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         })
         break
       }
+      // ADR-0035: aprobar el plan crea el lote; la línea lleva a él.
+      case "batch.started": {
+        const b = p.batch as { id?: string; display_id?: string } | null
+        const started = Array.isArray(p.started) ? p.started.length : 0
+        const parked = Array.isArray(p.backlog) ? p.backlog.length : 0
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "done",
+          subtask_id: typeof b?.id === "string" ? b.id : null,
+          text: b
+            ? `Nació el lote ${b.display_id ?? ""} · ${started} subtarea${started === 1 ? "" : "s"} arranca${started === 1 ? "" : "n"}${parked ? ` · ${parked} al backlog` : ""}`
+            : `Nada estaba listo para arrancar · ${parked} al backlog`,
+        })
+        break
+      }
+      case "batch.declined":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "warn",
+          subtask_id: null,
+          text: `Rechazaste el plan del lote${typeof p.reason === "string" && p.reason ? `: ${p.reason}` : ""}`,
+        })
+        break
       case "feature.subtask_started":
         items.push({
           kind: "method",

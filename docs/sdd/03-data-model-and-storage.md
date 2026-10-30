@@ -1383,3 +1383,28 @@ ALTER TABLE connections ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'
     CHECK (json_valid(tags_json));
 ALTER TABLE permission_grants ADD COLUMN risk_accepted_at TEXT;
 ```
+
+### 0016 · Fuentes del proyecto (ADR-0040)
+
+Lo que el humano adjunta a la conversación (una minuta, una lista de tareas) queda
+en el proyecto, partido en pasajes citables.
+
+- **`sources`.** El archivo original va como artefacto (`artifact_ref`); `key_n`
+  numera las fuentes del proyecto (`S-1`, `S-2`…). `passages_json` son los
+  pasajes con su ancla estable (`§1`…), su encabezado y su texto.
+
+```sql
+-- migración: 0016-fuentes
+CREATE TABLE sources (
+    id TEXT PRIMARY KEY NOT NULL,
+    project_id TEXT NOT NULL REFERENCES projects(id),
+    key_n INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    artifact_ref TEXT NOT NULL,
+    passages_json TEXT NOT NULL CHECK (json_valid(passages_json)),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    UNIQUE (project_id, key_n)
+);
+```

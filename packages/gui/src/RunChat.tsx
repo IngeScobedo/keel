@@ -1,8 +1,8 @@
 import type { Effort, EventNotification, PermissionMode } from "@keel/core"
 import { Check, CircleAlert, X } from "lucide-react"
-import { type ReactNode, useLayoutEffect, useRef, useState } from "react"
+import { type ReactNode, useContext, useLayoutEffect, useRef, useState } from "react"
 import { ApprovalCard, PlanCard, QuestionCard } from "./ApprovalCard.js"
-import { Composer, ModelPill, ModePill } from "./Composer.js"
+import { Composer, ComposerExtrasContext, ModelPill, ModePill } from "./Composer.js"
 import {
   type Approval,
   buildChat,
@@ -16,6 +16,7 @@ import { InfraCard } from "./InfraCard.js"
 import { Markdown } from "./Markdown.js"
 import { GateCard, MethodRow } from "./MethodCards.js"
 import type { Run } from "./model.js"
+import { BatchPlanCard } from "./Orchestrator.js"
 import { RunLedger } from "./RunLedger.js"
 import { SetupCard } from "./SetupCard.js"
 import { type Density, ExploreGroup, isExplore, StoryLine, ToolCard } from "./ToolCards.js"
@@ -82,8 +83,11 @@ export function RunChat({
       return false
     }
   }
-  async function send(text: string): Promise<boolean> {
+  const extras = useContext(ComposerExtrasContext)
+  async function send(raw: string): Promise<boolean> {
     if (!call) return false
+    // ADR-0040: en la conversación, las fuentes adjuntas viajan con el mensaje.
+    const text = `${raw}${extras?.suffix() ?? ""}`
     setSending(true)
     const ok = await attempt(async () => {
       if (running) await call("runs.message", { ...mutationMeta(), run_id: run.id, text })
@@ -98,7 +102,10 @@ export function RunChat({
       }
     })
     setSending(false)
-    if (ok) pinned.current = true
+    if (ok) {
+      pinned.current = true
+      extras?.onSent()
+    }
     return ok
   }
   const setMode = (permission_mode: PermissionMode) =>
@@ -386,6 +393,7 @@ function Pending({
   const active = a.decision === null && a.approval_id === firstPending
   const c = call ? { call } : {}
   if (a.tool === "stage.gate") return <GateCard a={a} active={active} {...c} />
+  if (a.tool === "batch.plan") return <BatchPlanCard a={a} active={active} {...c} />
   if (a.tool === "setup.request") return <SetupCard a={a} active={active} {...c} />
   if (a.tool === "AskUserQuestion")
     return <QuestionCard a={a} active={active} agent={agent} {...c} />
