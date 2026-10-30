@@ -31,6 +31,7 @@ import { CloseTask } from "./CloseTask.js"
 import { ControlPlane } from "./ControlPlane.js"
 import { hasNativeShell, mutationMeta } from "./client.js"
 import { demoDetails } from "./fixtures.js"
+import { GithubSettings } from "./GitHub.js"
 import { Inbox } from "./Inbox.js"
 import { Inspector } from "./Inspector.js"
 import { LiveConnections, type SetupPrefill } from "./LiveConnections.js"
@@ -662,6 +663,7 @@ export function App() {
                   <div className="padded">
                     <LiveProfile call={workspace.call} />
                     <LiveProviders call={workspace.call} />
+                    <GithubSettings call={workspace.call} />
                     <LivePlugins call={workspace.call} />
                   </div>
                 )}

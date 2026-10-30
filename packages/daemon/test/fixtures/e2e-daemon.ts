@@ -16,12 +16,14 @@ import { Daemon, IpcClient } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
 import { writeFakeAnsible } from "./fake-ansible.ts"
 import { isConversationKey } from "../../src/store/repo.ts"
+import { writeFakeGh } from "./fake-gh.ts"
 import { memoryKeyStore } from "../../src/vault/keystore.ts"
 import {
   chatQuery,
   conversationQuery,
   featureQuery,
   firstPrompt,
+  githubQuery,
   methodQuery,
   replayQuery,
   setupQuery,
@@ -52,6 +54,8 @@ const daemon: Daemon = new Daemon({
         return featureQuery(daemon)(a)
       // «desplegar…» pide una conexión con setup_request (ADR-0025 §6).
       if (task?.title.startsWith("desplegar")) return setupQuery(daemon)(a)
+      // «github…» abre una PR y promueve a stage (ADR-0043).
+      if (task?.title.startsWith("github")) return githubQuery(daemon)(a)
       // La conversación del proyecto (ADR-0024) la contesta su propio guion.
       if (isConversationKey(task?.dedupe_key)) return conversationQuery(daemon)(a)
       return firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a)
@@ -59,6 +63,8 @@ const daemon: Daemon = new Daemon({
     binary: "/fake/claude",
   },
   mcpBridge: false,
+  // ADR-0043: un gh doble; con KEEL_E2E_GH_LOGGED_OUT=1 arranca sin sesión.
+  gh: writeFakeGh(join(dir, "bin"), { loggedIn: process.env.KEEL_E2E_GH_LOGGED_OUT !== "1" }),
   // El vault con un llavero en memoria: las pruebas no tocan el llavero del sistema.
   keystore: memoryKeyStore(),
   // Con KEEL_E2E_CODEX_OFF=1 arranca sin el flag: la suscripción se enciende desde la GUI.

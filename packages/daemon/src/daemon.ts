@@ -119,7 +119,14 @@ import {
   workPrompt,
 } from "./flows.js"
 import { buildPlan, DIFF_INLINE_MAX, executePlan, type GitPlansDeps } from "./git-plans.js"
-import { GithubService, prView, runDetailView, runView, typicalMs } from "./github.js"
+import {
+  GithubService,
+  openInBrowser,
+  prView,
+  runDetailView,
+  runView,
+  typicalMs,
+} from "./github.js"
 import { canonicalJson, nowIso, sha256Hex, ulid } from "./ids.js"
 import { agentDoorPath, isNamedPipe } from "./ipc/endpoint.js"
 import {
@@ -2497,6 +2504,10 @@ export class Daemon {
       "github.login_state": (_params, ctx) => {
         requireHuman(ctx, "ver el inicio de sesión de GitHub")
         return this.github.loginState()
+      },
+      "github.open": (params, ctx) => {
+        requireHuman(ctx, "abrir GitHub en el navegador")
+        return openInBrowser((params as Params<"github.open">).url)
       },
       "github.login_cancel": (_params, ctx) => {
         requireHuman(ctx, "cancelar el inicio de sesión de GitHub")

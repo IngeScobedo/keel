@@ -862,3 +862,63 @@ export function setupQuery(daemon: Daemon): QueryFn {
     }) as never
   }
 }
+
+/**
+ * ADR-0043: el agente abrió la PR #51 (el plan de git la crea con `gh`) y luego se
+ * promovió development → stage. Los eventos son los que emite Keel; GitHub es el doble.
+ */
+export function githubQuery(daemon: Daemon): QueryFn {
+  return ({ options }) => {
+    const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
+    const session = `s-gh-${runId}`
+    const emit = (kind: string, payload: unknown) =>
+      (daemon as unknown as { emitSystem(k: string, r: string, p: unknown): void }).emitSystem(
+        kind,
+        runId,
+        payload,
+      )
+    const say = (text: string, n: number) =>
+      ({
+        type: "assistant",
+        uuid: `u-gh-${runId}-${n}`,
+        session_id: session,
+        parent_tool_use_id: null,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }) as unknown as SDKMessage
+    const run = (async function* () {
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: session,
+        model: "claude-opus-5-5",
+        uuid: `u-gh-init-${runId}`,
+      } as unknown as SDKMessage
+      yield say("Empujé la rama y abrí la PR hacia development; el merge es tuyo.", 1)
+      emit("git.pull_request.created", {
+        url: "https://github.com/inprodiwebstudio/zero-reports-mono/pull/51",
+        number: 51,
+        plan_id: "p-gh",
+      })
+      emit("git.promotion.completed", {
+        from: "development",
+        to: "stage",
+        sha: "c2db8f7a0ed6148e93fd151c7da237ecaab99f4b",
+      })
+      yield {
+        type: "result",
+        subtype: "success",
+        uuid: `u-gh-res-${runId}`,
+        session_id: session,
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.002,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      } as unknown as SDKMessage
+    })()
+    return Object.assign(run, {
+      setPermissionMode: async () => {},
+      setModel: async () => {},
+      applyFlagSettings: async () => {},
+    }) as never
+  }
+}

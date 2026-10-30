@@ -129,6 +129,9 @@ describe.skipIf(process.platform === "win32")("ADR-0043: GitHub por el gh del hu
     }
     expect(st.gh.ready).toBe(true)
     expect(st.gh.accounts[0]?.login).toBe("IngeScobedo")
+    // Sólo páginas de GitHub: la ventana no abre otra cosa por esta vía.
+    await expect(human.call("github.open", { url: "https://evil.example/x" })).rejects.toThrow()
+    await expect(human.call("github.open", { url: "file:///etc/passwd" })).rejects.toThrow()
     expect(st.repo).toMatchObject({
       name_with_owner: "o/r",
       default_branch: "main",

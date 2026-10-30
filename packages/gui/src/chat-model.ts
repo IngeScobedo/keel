@@ -101,6 +101,10 @@ export type ChatItem =
   | ToolCall
   | Approval
   | InfraRun
+  /** ADR-0043 §3: la PR que abrió el plan de git, viva en el chat. */
+  | { kind: "github_pr"; key: string; number: number; url: string }
+  /** ADR-0043 §5: los workflows que disparó un push o una promoción. */
+  | { kind: "github_runs"; key: string; sha: string; label: string }
   | {
       kind: "auto"
       key: string
@@ -239,6 +243,27 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
         })
         break
       }
+      case "git.pull_request.created":
+        if (typeof p.number === "number")
+          items.push({ kind: "github_pr", key, number: p.number, url: String(p.url ?? "") })
+        break
+      case "git.pull_request.pending":
+        items.push({
+          kind: "status",
+          key,
+          tone: "warn",
+          text: `La PR quedó pendiente: ${String(p.reason ?? "gh no pudo crearla")}. El commit y el push sí se hicieron.`,
+        })
+        break
+      case "git.promotion.completed":
+        if (typeof p.sha === "string")
+          items.push({
+            kind: "github_runs",
+            key,
+            sha: p.sha,
+            label: `Promoviste ${String(p.from)} → ${String(p.to)}`,
+          })
+        break
       case "batch.declined":
         items.push({
           kind: "method",

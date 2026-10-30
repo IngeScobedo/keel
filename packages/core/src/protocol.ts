@@ -1674,6 +1674,14 @@ export const Methods = {
     result: GithubLoginStateSchema,
   },
   "github.login_state": { params: z.object({}), result: GithubLoginStateSchema },
+  /**
+   * Abre en el navegador del humano una página de GitHub (la PR, el run, el login de
+   * dispositivo). Sólo `https://github.com/…`; la ventana no abre URLs por su cuenta.
+   */
+  "github.open": {
+    params: z.object({ url: z.string().regex(/^https:\/\/github\.com\//) }),
+    result: z.object({ opened: z.boolean(), how: z.string().nullable() }),
+  },
   "github.login_cancel": { params: MutationMeta, result: GithubLoginStateSchema },
   /** Una PR del repo del proyecto por número o por rama. */
   "github.pr": {

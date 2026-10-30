@@ -12,6 +12,7 @@ import {
   type ToolCall,
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
+import { CommitRuns, PrCard } from "./GitHub.js"
 import { InfraCard } from "./InfraCard.js"
 import { Markdown } from "./Markdown.js"
 import { GateCard, MethodRow } from "./MethodCards.js"
@@ -297,6 +298,15 @@ function Row({
   switch (item.kind) {
     case "infra":
       return <InfraCard r={item} {...c} />
+    case "github_pr":
+      return call ? <PrCard call={call} number={item.number} /> : null
+    case "github_runs":
+      return call ? (
+        <div className="gh-runs">
+          <p className="muted gh-note">{item.label}</p>
+          <CommitRuns call={call} sha={item.sha} />
+        </div>
+      ) : null
     case "prompt":
     case "human":
       return (

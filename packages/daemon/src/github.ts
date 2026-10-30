@@ -8,7 +8,8 @@
  * el token queda en el almacén de `gh`. El código no va al store de eventos: la GUI lo
  * consulta mientras el diálogo está abierto.
  */
-import { type ChildProcess, spawn } from "node:child_process"
+import { type ChildProcess, spawn, spawnSync } from "node:child_process"
+import { existsSync, readFileSync } from "node:fs"
 import type { GithubPr, GithubRun, GithubRunDetail } from "@keel/core"
 import {
   type GhStatus,
@@ -133,6 +134,34 @@ export class GithubService {
   close(): void {
     this.login?.proc.kill()
   }
+}
+
+/**
+ * Abre una URL de GitHub en el navegador del humano con lo que su sistema ya tiene:
+ * `open` en macOS, `start` en Windows y en WSL (por cmd.exe), `xdg-open` en Linux.
+ */
+export function openInBrowser(url: string): { opened: boolean; how: string | null } {
+  if (!/^https:\/\/github\.com\//.test(url)) return { opened: false, how: null }
+  const wsl =
+    process.platform === "linux" &&
+    existsSync("/proc/version") &&
+    /microsoft/i.test(readFileSync("/proc/version", "utf8"))
+  const tries: [string, string[]][] =
+    process.platform === "darwin"
+      ? [["open", [url]]]
+      : process.platform === "win32"
+        ? [["cmd", ["/c", "start", "", url]]]
+        : wsl
+          ? [
+              ["/mnt/c/Windows/System32/cmd.exe", ["/c", "start", "", url.replace(/&/g, "^&")]],
+              ["wslview", [url]],
+            ]
+          : [["xdg-open", [url]]]
+  for (const [cmd, args] of tries) {
+    const r = spawnSync(cmd, args, { stdio: "ignore", timeout: 10_000, windowsHide: true })
+    if (!r.error && r.status === 0) return { opened: true, how: cmd.split("/").at(-1) ?? cmd }
+  }
+  return { opened: false, how: null }
 }
 
 // --- vistas del protocolo -------------------------------------------------------------
