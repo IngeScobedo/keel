@@ -333,6 +333,38 @@ export async function failedLogTail(opts: GhOptions, id: number, lines = 60): Pr
     .join("\n")
 }
 
+/**
+ * El log de un job como texto, una línea por evento con su hora al frente. GitHub lo da
+ * al terminar el job; mientras corre puede no estar (y entonces rechaza con `not_found`).
+ */
+export function jobLog(opts: GhOptions, jobId: number): Promise<string> {
+  return gh(["api", `repos/{owner}/{repo}/actions/jobs/${jobId}/logs`], opts)
+}
+
+/**
+ * El log de un job ya terminado, con cada línea marcada con su paso: `gh run view --log`
+ * lo arma del archivo por paso que da GitHub. Devuelve las líneas del paso pedido.
+ */
+export async function finishedStepLog(
+  opts: GhOptions,
+  runId: number,
+  jobId: number,
+  stepName: string,
+): Promise<string> {
+  const out = await gh(["run", "view", String(runId), "--job", String(jobId), "--log"], opts)
+  return out
+    .split("\n")
+    .map((l) => l.split("\t"))
+    .filter((cols) => cols[1] === stepName)
+    .map((cols) => cols.slice(2).join("\t"))
+    .join("\n")
+}
+
+/** `gh` serializa una fecha vacía como «0001-01-01T00:00:00Z»: eso no es una fecha. */
+export function realDate(v: string | null | undefined): string | null {
+  return v && !v.startsWith("0001-") ? v : null
+}
+
 export async function rerunWorkflow(
   opts: GhOptions,
   id: number,

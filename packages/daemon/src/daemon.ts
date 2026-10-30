@@ -75,11 +75,14 @@ import {
 } from "@keel/git"
 import {
   failedLogTail,
+  finishedStepLog,
   GhError,
   type GhOptions,
+  jobLog,
   mergePullRequest,
   pullRequest,
   pullRequests,
+  realDate,
   repoSettings,
   rerunWorkflow,
   workflowRun,
@@ -125,10 +128,12 @@ import {
 import { fetchOrigin, headOf, PromotionError, pendingCommits, promote } from "./git-flow.js"
 import { buildPlan, DIFF_INLINE_MAX, executePlan, type GitPlansDeps } from "./git-plans.js"
 import {
+  cleanLogLine,
   GithubService,
   openInBrowser,
   prView,
   runDetailView,
+  runningStepSlice,
   runView,
   typicalMs,
 } from "./github.js"
@@ -263,6 +268,10 @@ export class Daemon {
    * El fetch del remoto por proyecto: Entregas no lo repite en cada vistazo ni lo espera.
    * Puede tardar (la llave pide su frase por askpass); corre aparte y se usa al terminar.
    */
+  private readonly deliveryCache = new Map<
+    string,
+    { at: number; value: DeliveryStatus; refreshing: Promise<DeliveryStatus> | null }
+  >()
   private readonly fetches = new Map<
     string,
     { at: number; running: Promise<void> | null; error: string | null }
@@ -1591,6 +1600,8 @@ export class Daemon {
           requireHuman(ctx, "confirmar el perfil del proyecto")
           const projectId = this.scopeOf(ctx, p.project_id)
           const row = repo.setProfile(projectId, p.profile, uow.actorId)
+          // El flujo pudo cambiar: Entregas no debe servir el de antes.
+          this.deliveryCache.delete(projectId)
           uow.emit("project.profile_set", null, { project_id: projectId, profile: p.profile })
           const detected = this.detectedProfiles.get(projectId) ?? p.profile
           return {
@@ -2505,7 +2516,7 @@ export class Daemon {
       "delivery.status": (params, ctx) => {
         const p = params as Params<"delivery.status">
         const pid = this.scopeOf(ctx, p.project_id)
-        return this.deliveryStatus(pid)
+        return this.deliveryStatus(pid, p.fresh === true)
       },
       "delivery.promote": (params, ctx) => {
         requireHuman(ctx, "promover entre ramas")
@@ -2534,7 +2545,7 @@ export class Daemon {
           )
         const runId = ctx.actor.run_id
         const pid = (repo.getRun(runId) as RunRow).project_id
-        return this.deliveryStatus(pid).then(async (st) => {
+        return this.deliveryStatus(pid, true).then(async (st) => {
           const promo = st.promotions.find((x) => x.from === p.from && x.to === p.to)
           if (!promo)
             throw rpcError(
@@ -2736,6 +2747,53 @@ export class Daemon {
             this.typicalRun.set(key, typical)
           }
           return runDetailView(run, typical.ms === null ? null : Math.round(typical.ms))
+        })
+      },
+      "github.step_log": (params, ctx) => {
+        const p = params as Params<"github.step_log">
+        const opts = this.ghOpts(ctx, p.project_id)
+        return ghCall(workflowRun(opts, p.run_id)).then(async (run) => {
+          const job = run.jobs.find((j) => j.databaseId === p.job_id)
+          const step = job?.steps.find((st) => st.number === p.step)
+          if (!job || !step) throw rpcError(ErrorCode.notFound, "ese paso no está en el run")
+          const started = realDate(step.startedAt)
+          if (!started)
+            return {
+              available: false,
+              reason: "el paso todavía no empieza",
+              text: "",
+              truncated: false,
+            }
+          let text: string
+          try {
+            text =
+              step.status === "completed"
+                ? (await finishedStepLog(opts, p.run_id, p.job_id, step.name))
+                    .split("\n")
+                    .map(cleanLogLine)
+                    .join("\n")
+                : runningStepSlice(await jobLog(opts, p.job_id), started)
+          } catch (e) {
+            if (e instanceof GhError && (e.kind === "not_found" || e.kind === "failed"))
+              return {
+                available: false,
+                reason:
+                  step.status === "completed"
+                    ? "GitHub todavía no publica el log de este job: aparece cuando el job termina."
+                    : "GitHub no entrega el log del job mientras corre: el paso avanza con su reloj y el log aparece al terminar.",
+                text: "",
+                truncated: false,
+              }
+            throw e
+          }
+          text = redactKnownPatterns(text)
+          const MAX = 200_000
+          return {
+            available: true,
+            reason: null,
+            text: text.length > MAX ? text.slice(-MAX) : text,
+            truncated: text.length > MAX,
+          }
         })
       },
       "github.run_log": (params, ctx) => {
@@ -5276,7 +5334,27 @@ export class Daemon {
    * Entregas (ADR-0043 §6): el flujo confirmado (o el detectado), cada rama con su cabeza
    * y sus últimos runs, lo que falta promover y por qué no se puede todavía.
    */
-  private async deliveryStatus(pid: string): Promise<DeliveryStatus> {
+  /**
+   * Entregas con caché corta: responde al instante con lo último y, si tiene más de 8 s,
+   * lo actualiza por detrás. Promover pide `fresh`: el gate se evalúa con lo de ahora.
+   */
+  private deliveryStatus(pid: string, fresh = false): Promise<DeliveryStatus> {
+    const hit = this.deliveryCache.get(pid)
+    const age = hit ? Date.now() - hit.at : Number.POSITIVE_INFINITY
+    const compute = () => {
+      const work = this.computeDelivery(pid).then((value) => {
+        this.deliveryCache.set(pid, { at: Date.now(), value, refreshing: null })
+        return value
+      })
+      if (hit) hit.refreshing = work.catch(() => hit.value)
+      return work
+    }
+    if (fresh || !hit || age > 60_000) return compute()
+    if (age > 8_000 && !hit.refreshing) void compute().catch(() => {})
+    return Promise.resolve(hit.value)
+  }
+
+  private async computeDelivery(pid: string): Promise<DeliveryStatus> {
     const root = this.repo.projectRoot(pid) ?? this.rootPath
     const confirmed = this.repo.getProfile(pid) ? this.profileOf(pid) : null
     const detected = this.detectedProfiles.get(pid) ?? (await this.detectedProfile(pid))
@@ -5326,7 +5404,12 @@ export class Daemon {
       : gh.installed
         ? "gh no tiene sesión"
         : "gh no está instalado"
-    const branches = await Promise.all(
+    // Todo a la vez: ramas, promociones y PR abiertas (cada consulta a gh tarda ~1.5 s).
+    const openPrsP = ghOk
+      ? pullRequests(opts, { state: "open", base: flow.work_base, limit: 20 })
+      : Promise.resolve([])
+    openPrsP.catch(() => {})
+    const branchesP = Promise.all(
       names.map(async (name) => {
         const sha = await headOf(root, name)
         const info = sha
@@ -5350,7 +5433,7 @@ export class Daemon {
         }
       }),
     )
-    const promotions = await Promise.all(
+    const promotionsP = Promise.all(
       flow.promotions.map(async (x) => {
         const [from_sha, to_sha] = [await headOf(root, x.from), await headOf(root, x.to)]
         const pending = from_sha && to_sha ? await pendingCommits(root, x.from, x.to) : []
@@ -5374,12 +5457,11 @@ export class Daemon {
         return { ...x, from_sha, to_sha, pending, blocked_by }
       }),
     )
+    const [branches, promotions] = await Promise.all([branchesP, promotionsP])
     let open_prs: GithubPr[] | null = null
     if (ghOk)
       try {
-        open_prs = (
-          await pullRequests(opts, { state: "open", base: flow.work_base, limit: 20 })
-        ).map(prView)
+        open_prs = (await openPrsP).map(prView)
       } catch (e) {
         gh_error = e instanceof Error ? e.message : String(e)
       }
@@ -5444,7 +5526,7 @@ export class Daemon {
     actor: unknown
     runId: string | null
   }): Promise<{ sha: string; from: string; to: string }> {
-    const st = await this.deliveryStatus(o.projectId)
+    const st = await this.deliveryStatus(o.projectId, true)
     const promo = st.promotions.find((x) => x.from === o.from && x.to === o.to)
     if (!promo)
       throw rpcError(ErrorCode.invalidParams, `${o.from} → ${o.to} no es una promoción del flujo`)
@@ -5467,6 +5549,7 @@ export class Daemon {
         message: promo.message,
       })
       this.fetches.delete(o.projectId)
+      this.deliveryCache.delete(o.projectId)
       runUnitOfWork(this.uowDeps(), this.systemScope(o.projectId), (uow) =>
         uow.emit("git.promotion.completed", o.runId, {
           project_id: o.projectId,

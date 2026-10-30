@@ -620,6 +620,7 @@ export const GithubRunSchema = z.object({
 })
 export type GithubRun = z.infer<typeof GithubRunSchema>
 const GithubStepSchema = z.object({
+  number: z.number().int().nullable(),
   name: z.string(),
   status: z.string(),
   conclusion: z.string().nullable(),
@@ -629,6 +630,7 @@ const GithubStepSchema = z.object({
 export const GithubRunDetailSchema = GithubRunSchema.extend({
   jobs: z.array(
     z.object({
+      id: z.number().int().nullable(),
       name: z.string(),
       status: z.string(),
       conclusion: z.string().nullable(),
@@ -1885,6 +1887,24 @@ export const Methods = {
     params: z.object({ project_id: z.string().optional(), id: z.number().int() }),
     result: GithubRunDetailSchema,
   },
+  /**
+   * El log de un paso: las líneas del log del job entre su inicio y su fin. GitHub da el
+   * log del job al terminar; si aún no lo da, `available` es false y dice por qué.
+   */
+  "github.step_log": {
+    params: z.object({
+      project_id: z.string().optional(),
+      run_id: z.number().int(),
+      job_id: z.number().int(),
+      step: z.number().int(),
+    }),
+    result: z.object({
+      available: z.boolean(),
+      reason: z.string().nullable(),
+      text: z.string(),
+      truncated: z.boolean(),
+    }),
+  },
   /** Las últimas líneas del log de los pasos fallidos (llegan al terminar el paso). */
   "github.run_log": {
     params: z.object({ project_id: z.string().optional(), id: z.number().int() }),
@@ -1900,7 +1920,11 @@ export const Methods = {
   },
   /** ADR-0043 §6: Entregas — cada rama del flujo, lo que falta promover y su gate. */
   "delivery.status": {
-    params: z.object({ project_id: z.string().optional() }),
+    params: z.object({
+      project_id: z.string().optional(),
+      /** Sin caché: lo que hay ahora en el remoto y en GitHub. */
+      fresh: z.boolean().optional(),
+    }),
     result: DeliveryStatusSchema,
   },
   /**

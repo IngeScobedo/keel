@@ -16,6 +16,7 @@ import {
   ghStatus,
   type PullRequest,
   type RunDetail,
+  realDate,
   type WorkflowRun,
 } from "@keel/git/github"
 
@@ -194,8 +195,8 @@ export function prView(pr: PullRequest): GithubPr {
       workflow: c.workflowName ?? null,
       status: lower(c.status) ?? (c.state && c.state !== "PENDING" ? "completed" : "in_progress"),
       conclusion: lower(c.conclusion) || (c.state && c.state !== "PENDING" ? lower(c.state) : null),
-      started_at: c.startedAt ?? null,
-      completed_at: c.completedAt ?? null,
+      started_at: realDate(c.startedAt),
+      completed_at: realDate(c.completedAt),
       url: c.detailsUrl ?? c.targetUrl ?? null,
     })),
     files: pr.files ?? [],
@@ -223,18 +224,20 @@ export function runDetailView(r: RunDetail, typical_ms: number | null): GithubRu
   return {
     ...runView(r),
     jobs: r.jobs.map((j) => ({
+      id: j.databaseId ?? null,
       name: j.name,
       status: j.status,
       conclusion: j.conclusion || null,
-      started_at: j.startedAt ?? null,
-      completed_at: j.completedAt ?? null,
+      started_at: realDate(j.startedAt),
+      completed_at: realDate(j.completedAt),
       url: j.url ?? null,
-      steps: j.steps.map((s) => ({
-        name: s.name,
-        status: s.status,
-        conclusion: s.conclusion || null,
-        started_at: s.startedAt ?? null,
-        completed_at: s.completedAt ?? null,
+      steps: j.steps.map((st) => ({
+        number: st.number ?? null,
+        name: st.name,
+        status: st.status,
+        conclusion: st.conclusion || null,
+        started_at: realDate(st.startedAt),
+        completed_at: realDate(st.completedAt),
       })),
     })),
     typical_ms,
@@ -249,4 +252,34 @@ export function typicalMs(runs: WorkflowRun[]): number | null {
     .filter((x) => x > 0)
     .sort((a, b) => a - b)
   return ms.length ? (ms[Math.floor(ms.length / 2)] ?? null) : null
+}
+
+/** Una línea de log sin su hora, sin colores ANSI ni BOM; los grupos de Actions, legibles. */
+export function cleanLogLine(line: string): string {
+  return (
+    line
+      .replace(/^\uFEFF/, "")
+      .replace(/^\uFEFF?\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ?/, "")
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: colores ANSI del log
+      .replace(/\u001b\[[0-9;]*m/g, "")
+      // `gh` escribe el ESC como «^[».
+      .replace(/\^\[\[[0-9;]*m/g, "")
+      .replace(/^##\[group\]/, "▸ ")
+      .replace(/^##\[endgroup\]/, "")
+  )
+}
+
+/**
+ * El paso que corre, dentro del log del job en curso: desde su inicio, empezando en su
+ * encabezado `##[group]Run …` si lo hay (al mismo segundo suele quedar la cola del
+ * anterior). Sólo para un paso sin terminar: uno terminado sale exacto de `gh`.
+ */
+export function runningStepSlice(log: string, startedAt: string): string {
+  const from = Date.parse(startedAt)
+  const lines = log.split("\n").filter((raw) => {
+    const m = /^\uFEFF?(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)/.exec(raw)
+    return m ? Date.parse(m[1] as string) >= from : false
+  })
+  const head = lines.findIndex((l) => /##\[group\]Run /.test(l))
+  return (head >= 0 ? lines.slice(head) : lines).map(cleanLogLine).join("\n")
 }

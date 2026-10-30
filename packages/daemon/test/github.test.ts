@@ -9,6 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { CiWatcher } from "../src/ci-watch.ts"
 import { conventionalPlan } from "../src/daemon.ts"
+import { cleanLogLine, runningStepSlice } from "../src/github.ts"
 import { Daemon, IpcClient } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
 import { replayQuery } from "./replay.ts"
@@ -92,10 +93,12 @@ else if (a === "repo") out({ nameWithOwner: "o/r", url: "https://github.com/o/r"
 else if (a === "pr" && b === "view") out(pr())
 else if (a === "pr" && b === "list") out([pr()])
 else if (a === "pr" && b === "merge") { if (args[args.indexOf("--match-head-commit") + 1] !== "abc1234") { process.stderr.write("Head branch was modified. Review and try the merge again."); process.exit(1) } fs.writeFileSync(${JSON.stringify(state)}, "MERGED") }
-else if (a === "api") out("")
+else if (a === "api" && !String(args[1]).endsWith("/logs")) out("")
 else if (a === "run" && b === "list") out(args.includes("--workflow") ? [{ ...${JSON.stringify(RUN)}, databaseId: 1, status: "completed", conclusion: "success", createdAt: "2026-10-29T10:00:00Z", updatedAt: "2026-10-29T10:09:00Z" }, { ...${JSON.stringify(RUN)}, databaseId: 2, status: "completed", conclusion: "success", createdAt: "2026-10-28T10:00:00Z", updatedAt: "2026-10-28T10:08:00Z" }, { ...${JSON.stringify(RUN)}, databaseId: 3, status: "completed", conclusion: "failure", createdAt: "2026-10-27T10:00:00Z", updatedAt: "2026-10-27T10:01:00Z" }] : [${JSON.stringify(RUN)}])
+else if (a === "run" && b === "view" && args.includes("--log") && args.includes("--job")) out("deploy\\tBuild + push\\t2026-10-30T10:00:11.0Z ^[[36;1mdocker build^[[0m\\ndeploy\\tRollout de stage\\t\\uFEFF2026-10-30T10:02:00.1Z ##[group]Run doctl apps create-deployment\\ndeploy\\tRollout de stage\\t2026-10-30T10:02:30.5Z Deployment created\\n")
+else if (a === "api" && String(args[1]).endsWith("/logs")) { process.stderr.write("HTTP 404: Not Found"); process.exit(1) }
 else if (a === "run" && b === "view" && args.includes("--log-failed")) out("deploy\\tRollout\\t2026-10-30T10:01:00.1Z Error: token=ghp_abcdefghijklmnopqrstuvwxyz0123456789 rechazado\\n")
-else if (a === "run" && b === "view") out({ ...${JSON.stringify(RUN)}, jobs: [{ name: "deploy", status: "in_progress", conclusion: "", startedAt: "2026-10-30T10:00:05Z", steps: [{ name: "Build + push", status: "completed", conclusion: "success", startedAt: "2026-10-30T10:00:10Z", completedAt: "2026-10-30T10:02:00Z" }, { name: "Rollout de stage", status: "in_progress", conclusion: "", startedAt: "2026-10-30T10:02:00Z", completedAt: null }] }] })
+else if (a === "run" && b === "view") out({ ...${JSON.stringify(RUN)}, jobs: [{ databaseId: 77, name: "deploy", status: "in_progress", conclusion: "", startedAt: "2026-10-30T10:00:05Z", steps: [{ number: 1, name: "Build + push", status: "completed", conclusion: "success", startedAt: "2026-10-30T10:00:10Z", completedAt: "2026-10-30T10:02:00Z" }, { number: 2, name: "Rollout de stage", status: "in_progress", conclusion: "", startedAt: "2026-10-30T10:02:00Z", completedAt: "0001-01-01T00:00:00Z" }] }] })
 else if (a === "run" && b === "rerun") out("")
 else { process.stderr.write("no sé " + args.join(" ")); process.exit(1) }
 `,
@@ -236,6 +239,25 @@ describe.skipIf(process.platform === "win32")("ADR-0043: GitHub por el gh del hu
     ])
     // Mediana de las verdes (9 y 8 min): la fallida no cuenta.
     expect(run.typical_ms).toBe(9 * 60_000)
+    // Un paso sin terminar no tiene fin: gh lo manda como «0001-01-01», que no es una fecha.
+    const rollout = run.jobs[0]?.steps[1] as unknown as {
+      completed_at: string | null
+      number: number
+    }
+    expect(rollout.completed_at).toBeNull()
+    // El log de un paso terminado sale exacto, sin hora ni colores.
+    const done = (await human.call("github.step_log", { run_id: 7, job_id: 77, step: 1 })) as {
+      available: boolean
+      text: string
+    }
+    expect(done).toMatchObject({ available: true, text: "docker build" })
+    // Mientras corre, GitHub no da el log del job: se dice por qué.
+    const live = (await human.call("github.step_log", { run_id: 7, job_id: 77, step: 2 })) as {
+      available: boolean
+      reason: string
+    }
+    expect(live.available).toBe(false)
+    expect(live.reason).toContain("mientras corre")
     const log = (await human.call("github.run_log", { id: 7 })) as { tail: string }
     expect(log.tail).toContain("rechazado")
     expect(log.tail).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789")
@@ -395,4 +417,18 @@ else out({ ...run, jobs: [{ name: "deploy", status: st.status, conclusion: run.c
     })
     expect(daemon.ci.following()).toContain("fe1234567890abcdef1234567890abcdef123456")
   })
+})
+
+test("el paso que corre empieza en su encabezado y sale sin hora ni colores", () => {
+  const log = [
+    "\uFEFF2026-10-30T10:02:00.0Z cola del paso anterior",
+    "2026-10-30T10:02:00.4Z ##[group]Run doctl apps create-deployment",
+    "2026-10-30T10:02:00.5Z \u001b[36;1mdoctl apps create-deployment\u001b[0m",
+    "2026-10-30T10:02:00.6Z ##[endgroup]",
+    "2026-10-30T10:03:10.0Z Deployment created",
+  ].join("\n")
+  expect(runningStepSlice(log, "2026-10-30T10:02:00Z")).toBe(
+    "▸ Run doctl apps create-deployment\ndoctl apps create-deployment\n\nDeployment created",
+  )
+  expect(cleanLogLine("2026-10-30T10:00:11.0Z ^[[36;1mdocker build^[[0m")).toBe("docker build")
 })

@@ -369,3 +369,75 @@
     font-size: 13px;
   }
 }
+@layer components {
+  .gh-steps li {
+    display: grid;
+    gap: var(--space-2);
+    padding: 0;
+  }
+  .gh-step {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-width: 0;
+    padding: 3px var(--space-3);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .gh-step:hover:not(:disabled) {
+    background: var(--color-surface-hover);
+  }
+  .gh-step:disabled {
+    cursor: default;
+  }
+  .gh-step:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: -2px;
+  }
+  .gh-steps li[data-tone="running"] > .gh-step {
+    background: var(--color-status-running-bg);
+    font-weight: 500;
+  }
+  .gh-steps li[data-chore] > .gh-step {
+    color: var(--color-text-tertiary);
+  }
+  .gh-step-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .gh-step-chevron {
+    flex: none;
+    color: var(--color-text-tertiary);
+    transition: transform 120ms ease;
+  }
+  .gh-steps li[data-open] .gh-step-chevron {
+    transform: rotate(90deg);
+  }
+  .gh-step-log {
+    margin: 0 0 var(--space-2) var(--space-8);
+    padding: var(--space-3) var(--space-4);
+    max-height: 320px;
+    overflow: auto;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-sunken);
+    color: var(--color-text-secondary);
+    font-family: var(--font-mono), monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .gh-step-log-note {
+    margin: 0 0 var(--space-2) var(--space-8);
+    font-size: 11px;
+  }
+}

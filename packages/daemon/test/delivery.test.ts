@@ -148,7 +148,7 @@ type Status = {
 describe("ADR-0043: Entregas y promociones", () => {
   test("detecta el flujo; promueve atado a las cabezas; a prod confirma y espera el deploy", async () => {
     const { human, daemon, sh, origin, setRuns, commit } = await boot()
-    const st = (await human.call("delivery.status", {})) as Status
+    const st = (await human.call("delivery.status", { fresh: true })) as Status
     expect(st.flow_source).toBe("detected")
     expect(st.flow).toMatchObject({
       work_base: "development",
@@ -184,7 +184,7 @@ describe("ADR-0043: Entregas y promociones", () => {
     ).rejects.toThrow("caducó")
 
     // Con las cabezas de ahora, se promueve: merge con el mensaje del proyecto, sin checkout.
-    const fresh = (await human.call("delivery.status", {})) as Status
+    const fresh = (await human.call("delivery.status", { fresh: true })) as Status
     const p = fresh.promotions[0] as Status["promotions"][number]
     const done = (await human.call("delivery.promote", {
       ...meta(),
@@ -219,7 +219,7 @@ describe("ADR-0043: Entregas y promociones", () => {
     })
 
     // A producción: sin el deploy de stage verde no se puede, y pide confirmar.
-    const prod = ((await human.call("delivery.status", {})) as Status)
+    const prod = ((await human.call("delivery.status", { fresh: true })) as Status)
       .promotions[1] as Status["promotions"][number]
     expect(prod.blocked_by).toEqual([`Deploy · stage no corrió para ${done.sha.slice(0, 7)}`])
     setRuns([
@@ -236,7 +236,7 @@ describe("ADR-0043: Entregas y promociones", () => {
         updatedAt: "2026-10-30T10:01:00Z",
       },
     ])
-    const running = ((await human.call("delivery.status", {})) as Status)
+    const running = ((await human.call("delivery.status", { fresh: true })) as Status)
       .promotions[1] as Status["promotions"][number]
     expect(running.blocked_by[0]).toContain("sigue corriendo")
     setRuns([
@@ -253,7 +253,7 @@ describe("ADR-0043: Entregas y promociones", () => {
         updatedAt: "2026-10-30T10:09:00Z",
       },
     ])
-    const green = ((await human.call("delivery.status", {})) as Status)
+    const green = ((await human.call("delivery.status", { fresh: true })) as Status)
       .promotions[1] as Status["promotions"][number]
     expect(green.blocked_by).toEqual([])
     const args = {
@@ -287,7 +287,7 @@ describe("ADR-0043: Entregas y promociones", () => {
       cwd: origin,
       encoding: "utf8",
     }).trim()
-    const p = ((await human.call("delivery.status", {})) as Status)
+    const p = ((await human.call("delivery.status", { fresh: true })) as Status)
       .promotions[0] as Status["promotions"][number]
     const err = await human
       .call("delivery.promote", {
@@ -322,7 +322,7 @@ describe("ADR-0043: Entregas y promociones", () => {
     clients.push(agent)
     await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
     // Ve lo que falta y no puede promover por su cuenta.
-    const st = (await agent.call("delivery.status", {})) as Status
+    const st = (await agent.call("delivery.status", { fresh: true })) as Status
     expect(st.promotions[0]?.pending.map((c) => c.pr)).toEqual([3])
     await expect(
       agent.call("delivery.promote", {

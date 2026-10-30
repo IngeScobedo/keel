@@ -6,6 +6,7 @@
 import type { GithubPr, GithubRun, GithubRunDetail, GithubStatus } from "@keel/core"
 import {
   Check,
+  ChevronRight,
   Copy,
   ExternalLink,
   GitBranch,
@@ -18,7 +19,7 @@ import {
   RotateCcw,
   Workflow,
 } from "lucide-react"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { mutationMeta } from "./client.js"
 import { Checkbox, Segmented } from "./ui/index.js"
 import { Button, Hint, Modal } from "./ui.js"
@@ -632,11 +633,20 @@ export function CommitRuns({
 }
 
 /** Un run de Actions, paso a paso (ADR-0043 §5). El log llega al terminar el paso. */
+/** Lo último que se vio de cada run: al volver a la pantalla se pinta sin esperar. */
+const runCache = new Map<number, GithubRunDetail>()
+
 export function PipelineCard({ call, runId }: { call: Call; runId: number }) {
-  const [run, setRun] = useState<GithubRunDetail | null>(null)
+  const [run, setRunState] = useState<GithubRunDetail | null>(runCache.get(runId) ?? null)
+  const setRun = (r: GithubRunDetail) => {
+    runCache.set(runId, r)
+    setRunState(r)
+  }
+  const [openStep, setOpenStep] = useState<string | null>(null)
   const [tail, setTail] = useState<string | null>(null)
   const [error, setError] = useState("")
   const done = run?.status === "completed"
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setRun sólo escribe la caché y el estado.
   const load = useCallback(async () => {
     try {
       setRun(await call("github.run", { id: runId }))
@@ -690,32 +700,55 @@ export function PipelineCard({ call, runId }: { call: Call; runId: number }) {
               <GitBranch size={12} /> {j.name}
             </li>
           )}
-          {j.steps
-            .filter(
-              (s) => !/^(Set up job|Complete job|Post )/.test(s.name) || s.conclusion === "failure",
-            )
-            .map((s) => {
-              const st =
-                s.status !== "completed"
-                  ? s.status === "in_progress"
-                    ? "running"
-                    : "queued"
-                  : s.conclusion === "success" || s.conclusion === "skipped"
-                    ? "succeeded"
-                    : "failed"
-              return (
-                <li key={s.name} data-tone={st}>
+          {j.steps.map((s) => {
+            const st =
+              s.status !== "completed"
+                ? s.status === "in_progress"
+                  ? "running"
+                  : "queued"
+                : s.conclusion === "success" || s.conclusion === "skipped"
+                  ? "succeeded"
+                  : "failed"
+            const key = `${j.id ?? j.name}/${s.number ?? s.name}`
+            const open = openStep === key
+            // Preparación y cierre del runner: se ven, más tenues.
+            const chore = /^(Set up job|Complete job|Post )/.test(s.name)
+            return (
+              <li
+                key={key}
+                data-tone={st}
+                data-chore={chore || undefined}
+                data-open={open || undefined}
+              >
+                <button
+                  type="button"
+                  className="gh-step"
+                  aria-expanded={open}
+                  disabled={st === "queued"}
+                  onClick={() => setOpenStep(open ? null : key)}
+                >
+                  <ChevronRight size={12} className="gh-step-chevron" aria-hidden />
                   <span className={`gh-dot ${st}`} />
-                  <span>{s.name}</span>
+                  <span className="gh-step-name">{s.name}</span>
                   <span className="gh-spacer" />
                   <StepClock
                     started={s.started_at}
                     completed={s.completed_at}
                     live={st === "running"}
                   />
-                </li>
-              )
-            })}
+                </button>
+                {open && j.id !== null && s.number !== null && (
+                  <StepLog
+                    call={call}
+                    runId={run.id}
+                    jobId={j.id}
+                    step={s.number}
+                    live={st === "running"}
+                  />
+                )}
+              </li>
+            )
+          })}
         </ol>
       ))}
       {tail && (
@@ -729,7 +762,7 @@ export function PipelineCard({ call, runId }: { call: Call; runId: number }) {
             ? run.conclusion === "failure"
               ? "Falló: arriba, el final del log del paso."
               : "Terminó."
-            : "El log de un paso llega al terminar."}
+            : "Abre un paso para ver su salida."}
         </span>
         {done && run.conclusion === "failure" && (
           <Button
@@ -752,6 +785,50 @@ export function PipelineCard({ call, runId }: { call: Call; runId: number }) {
       </footer>
       {error && <p className="deleted">{error}</p>}
     </div>
+  )
+}
+
+/** La salida de un paso; mientras corre, se pide otra vez cada 5 s y sigue al final. */
+function StepLog({
+  call,
+  runId,
+  jobId,
+  step,
+  live,
+}: {
+  call: Call
+  runId: number
+  jobId: number
+  step: number
+  live: boolean
+}) {
+  const [log, setLog] = useState<{
+    available: boolean
+    reason: string | null
+    text: string
+  } | null>(null)
+  const pre = useRef<HTMLPreElement>(null)
+  usePoll(
+    async () => {
+      try {
+        setLog(await call("github.step_log", { run_id: runId, job_id: jobId, step }))
+      } catch (e) {
+        setLog({ available: false, reason: msg(e), text: "" })
+      }
+    },
+    5_000,
+    live,
+  )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: al llegar texto nuevo se baja al final.
+  useLayoutEffect(() => {
+    if (pre.current) pre.current.scrollTop = pre.current.scrollHeight
+  }, [log?.text])
+  if (!log) return <p className="muted gh-step-log-note">Leyendo la salida…</p>
+  if (!log.available) return <p className="muted gh-step-log-note">{log.reason}</p>
+  return (
+    <pre ref={pre} className="gh-step-log" data-testid="github-step-log">
+      {log.text || "(sin salida)"}
+    </pre>
   )
 }
 

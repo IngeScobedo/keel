@@ -129,7 +129,20 @@ test("Entregas: el flujo detectado, promover a stage con su deploy y a prod con 
   await dialog.getByRole("button", { name: "Promover a stage" }).click()
   const after = page.getByTestId("delivery-promoted")
   await expect(after).toContainText("Promoviste development → stage")
-  await expect(after.getByTestId("github-run")).toContainText("Deploy · stage")
+  const deploy = after.getByTestId("github-run")
+  await expect(deploy).toContainText("Deploy · stage")
+  // Se ven todos los pasos, también los del runner (Post Run), y cada uno abre su salida.
+  await expect(deploy).toContainText("Post Run docker/setup-buildx-action@v3")
+  await expect(deploy).toHaveAttribute("data-tone", "succeeded", { timeout: 20_000 })
+  await deploy.getByRole("button", { name: /Build \+ push/ }).click()
+  await expect(deploy.getByTestId("github-step-log")).toContainText("docker build --push")
+  await deploy.getByRole("button", { name: /Rollout de stage/ }).click()
+  await expect(deploy.getByTestId("github-step-log")).toContainText("Deployment created")
+  if (shots) await deploy.screenshot({ path: join(shots, "deploy-steps.png") })
+  // Salir y volver: Entregas se pinta al instante con lo último que vio.
+  await page.getByRole("button", { name: "Board", exact: true }).click()
+  await page.getByRole("button", { name: "Entregas", exact: true }).click()
+  await expect(page.getByTestId("delivery-development")).toBeVisible({ timeout: 1_000 })
 
   // A prod: el gate espera el deploy de stage en verde; luego pide escribir «main».
   const toMain = page.getByTestId("promote-stage-main")

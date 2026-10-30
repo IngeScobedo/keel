@@ -23,25 +23,36 @@ function runTone(r: GithubRun): "running" | "succeeded" | "failed" | "queued" {
   return r.conclusion === "success" ? "succeeded" : "failed"
 }
 
+/** Lo último que se vio de Entregas: al volver, se pinta al instante y se actualiza. */
+let lastStatus: DeliveryStatus | null = null
+
 export function Delivery({ call }: { call: Call }) {
-  const [st, setSt] = useState<DeliveryStatus | null>(null)
+  const [st, setStState] = useState<DeliveryStatus | null>(lastStatus)
+  const setSt = (v: DeliveryStatus) => {
+    lastStatus = v
+    setStState(v)
+  }
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
   const [openPr, setOpenPr] = useState<number | null>(null)
   const [openRun, setOpenRun] = useState<number | null>(null)
   const [promo, setPromo] = useState<Promotion | null>(null)
   const [promoted, setPromoted] = useState<{ sha: string; from: string; to: string } | null>(null)
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      setSt(await call("delivery.status", {}))
-      setError("")
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-    }
-  }, [call])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: setSt sólo escribe la caché y el estado.
+  const load = useCallback(
+    async (fresh = false) => {
+      setLoading(true)
+      try {
+        setSt(await call("delivery.status", fresh ? { fresh: true } : {}))
+        setError("")
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setLoading(false)
+      }
+    },
+    [call],
+  )
   useEffect(() => {
     void load()
     const t = setInterval(() => void load(), 15_000)
@@ -56,7 +67,7 @@ export function Delivery({ call }: { call: Call }) {
         ...mutationMeta(),
         profile: { ...view.profile, flow: st.flow },
       })
-      await load()
+      await load(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -92,7 +103,7 @@ export function Delivery({ call }: { call: Call }) {
           {[flow.work_base, ...flow.promotions.map((p) => p.to)].join(" → ")}
         </span>
         <div className="toolbar-spacer" />
-        <Button icon={RefreshCw} disabled={loading} onClick={() => void load()}>
+        <Button icon={RefreshCw} disabled={loading} onClick={() => void load(true)}>
           {loading ? "Actualizando…" : "Actualizar"}
         </Button>
       </div>
@@ -268,6 +279,24 @@ export function Delivery({ call }: { call: Call }) {
           )
         })}
       </div>
+      {(() => {
+        // Lo que corre en cualquier rama del flujo, del estado y no de la pantalla: sigue
+        // aquí al salir y volver.
+        const live = st.branches
+          .flatMap((b) => b.runs)
+          .filter((r) => r.status !== "completed")
+          .filter((r, i, all) => all.findIndex((x) => x.id === r.id) === i)
+          .filter((r) => !promoted || r.sha !== promoted.sha)
+        if (!live.length) return null
+        return (
+          <section className="delivery-after" data-testid="delivery-live">
+            <h3 className="delivery-section-title">En curso</h3>
+            {live.map((r) => (
+              <PipelineCard key={r.id} call={call} runId={r.id} />
+            ))}
+          </section>
+        )
+      })()}
       {promoted && (
         <section className="delivery-after" data-testid="delivery-promoted">
           <p>
