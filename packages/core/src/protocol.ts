@@ -595,6 +595,8 @@ export const GithubPrSchema = z.object({
   author: z.string().nullable(),
   merged_at: z.string().nullable(),
   merged_by: z.string().nullable(),
+  /** El commit que dejó el merge en la base: lo que disparan los workflows de la base. */
+  merge_sha: z.string().nullable(),
   body: z.string(),
   checks: z.array(GithubCheckSchema),
   files: z.array(
@@ -1488,6 +1490,42 @@ export const Methods = {
       files: z.array(GitPlanFileSchema),
     }),
   },
+  /**
+   * Los cambios de la tarea respecto a su base: commits con sus archivos, el diff y las PR
+   * que abrió. Del worktree mientras vive; si ya se liberó (la tarea se mergeó y cerró),
+   * del registro que Keel guardó antes como evidencia (ADR-0012 §3 y §7).
+   */
+  "tasks.changes": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({
+      source: z.enum(["worktree", "record", "none"]),
+      captured_at: z.string().nullable(),
+      branch: z.string().nullable(),
+      base_sha: z.string().nullable(),
+      head_sha: z.string().nullable(),
+      commits: z.array(
+        z.object({
+          sha: z.string(),
+          subject: z.string(),
+          author: z.string(),
+          date: z.string(),
+          files: z.array(
+            z.object({
+              path: z.string(),
+              additions: z.number().int(),
+              deletions: z.number().int(),
+            }),
+          ),
+        }),
+      ),
+      files: z.array(
+        z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() }),
+      ),
+      diff: z.string(),
+      truncated: z.boolean(),
+      pull_requests: z.array(z.object({ number: z.number().int(), url: z.string() })),
+    }),
+  },
   "git.diff": {
     params: z.object({ run_id: z.string().optional(), paths: z.array(z.string()).optional() }),
     result: z.object({
@@ -1790,6 +1828,19 @@ export const Methods = {
       delete_branch: z.boolean().optional(),
     }),
     result: GithubPrSchema,
+  },
+  /**
+   * ADR-0043 §3: el agente pide el merge de una PR; queda como pendiente para el humano,
+   * que lo ve con la PR viva y decide. El agente nunca mergea.
+   */
+  "github.merge_request": {
+    params: MutationMeta.extend({
+      number: z.number().int().positive(),
+      method: z.enum(["merge", "squash", "rebase"]),
+      subject: z.string().max(300).optional(),
+      why: z.string().min(1).max(2000),
+    }),
+    result: z.object({ approval_id: z.string(), head_sha: z.string() }),
   },
   "github.runs": {
     params: z.object({
@@ -2170,6 +2221,12 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "evidence.attach",
   "git.status",
   "git.diff",
+  "tasks.changes",
+  "github.pr",
+  "github.runs",
+  "github.run",
+  "github.run_log",
+  "github.merge_request",
   "context.search",
   "context.project",
   "evidence.list",
@@ -2198,6 +2255,12 @@ export const AGENT_METHODS: readonly MethodName[] = [
 
 /** El scope que exige cada método de agente; los demás no necesitan scope. */
 export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
+  "tasks.changes": "tasks:read",
+  "github.pr": "tasks:read",
+  "github.runs": "tasks:read",
+  "github.run": "tasks:read",
+  "github.run_log": "tasks:read",
+  "github.merge_request": "tasks:write",
   "work_items.list": "tasks:read",
   "work_items.get": "tasks:read",
   "work_items.create": "tasks:write",

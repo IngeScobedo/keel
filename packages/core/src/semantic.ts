@@ -171,6 +171,61 @@ export const SEMANTIC_SCHEMAS = {
     schema_version: 1,
     schema: z.object({ url: z.string().nullable(), number: z.number().int().nullable() }),
   },
+  // ADR-0043: lo que Keel hace en GitHub y en las ramas del flujo (instrumentado)…
+  "github.pr.merged": {
+    schema_version: 1,
+    schema: z.object({
+      number: z.number().int(),
+      url: z.string(),
+      base: z.string(),
+      method: z.enum(["merge", "squash", "rebase"]),
+      merge_sha: z.string().nullable(),
+    }),
+  },
+  "git.promotion.completed": {
+    schema_version: 1,
+    schema: z.object({
+      from: z.string(),
+      to: z.string(),
+      sha,
+      prev_sha: sha,
+      prs: z.array(z.number().int()),
+    }),
+  },
+  // …y lo que observa de GitHub Actions consultando a `gh` (cobertura `observed`).
+  "ci.run.started": {
+    schema_version: 1,
+    schema: z.object({
+      gh_run_id: z.number().int(),
+      workflow: z.string(),
+      sha,
+      branch: z.string(),
+      url: z.string(),
+    }),
+  },
+  "ci.run.step": {
+    schema_version: 1,
+    schema: z.object({
+      gh_run_id: z.number().int(),
+      workflow: z.string(),
+      job: z.string(),
+      step: z.string(),
+      conclusion: z.string().nullable(),
+      duration_ms: z.number().int().nullable(),
+    }),
+  },
+  "ci.run.completed": {
+    schema_version: 1,
+    schema: z.object({
+      gh_run_id: z.number().int(),
+      workflow: z.string(),
+      sha,
+      branch: z.string(),
+      conclusion: z.string().nullable(),
+      duration_ms: z.number().int().nullable(),
+      url: z.string(),
+    }),
+  },
 } as const
 
 export type SemanticKind = keyof typeof SEMANTIC_SCHEMAS

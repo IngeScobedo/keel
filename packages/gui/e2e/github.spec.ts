@@ -64,6 +64,19 @@ test("la PR vive en el chat: checks, squash and merge y el deploy paso a paso", 
   await expect(run).toHaveAttribute("data-tone", "succeeded", { timeout: 20_000 })
   await expect(run).toContainText("verde")
   if (shots) await page.screenshot({ path: join(shots, "github-merged.png") })
+
+  // La historia de la tarea: el commit del agente y su diff contra la base.
+  await page.goBack()
+  await page
+    .getByRole("navigation", { name: "Contexto" })
+    .getByRole("button", { name: "Cambios" })
+    .click()
+  const changes = page.getByTestId("task-changes")
+  await expect(changes).toHaveAttribute("data-source", "worktree")
+  await expect(changes).toContainText("fix(api): corrige la portada")
+  await expect(changes).toContainText("portada.ts")
+  await expect(changes).toContainText("PR #51")
+  if (shots) await page.screenshot({ path: join(shots, "task-changes.png") })
 })
 
 test("sin sesión: Ajustes inicia la de gh y muestra su código", async ({ page }) => {

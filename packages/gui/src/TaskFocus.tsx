@@ -27,6 +27,7 @@ import type { Approval, FileDiff } from "./chat-model.js"
 import { STAGE_LABEL } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import { EvidencePanel } from "./Evidence.js"
+import { PrCard } from "./GitHub.js"
 import { GitPlanCard } from "./GitPlanCard.js"
 import { MarkdownPreview } from "./Markdown.js"
 import { GateCard } from "./MethodCards.js"
@@ -47,7 +48,7 @@ import {
   splitUnified,
 } from "./task-model.js"
 import { Button, SidePanel, Tabs, TextArea } from "./ui/index.js"
-import { Empty, Hint, Status } from "./ui.js"
+import { Empty, Hint, Modal, Status } from "./ui.js"
 import { Trail, useOpenDetail, usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
 import "./TaskFocus.css"
@@ -326,7 +327,7 @@ export function TaskFocus({
         {section && (
           <SidePanel title={SECTION_LABEL[section]} onClose={closeDrawer}>
             {section === "decidir" && <Decide pending={pending} call={call} />}
-            {section === "diff" && <Changes run={current} call={call} />}
+            {section === "diff" && <Changes task={task} run={current} call={call} />}
             {section === "notas" && <Notes task={task} detail={detail} call={call} />}
             {section === "evidencia" && (
               <EvidencePanel call={call} workItemId={task.id} tick={touches} />
@@ -416,10 +417,10 @@ function WorkFacts({
             <dd className="mono tf-path" title={status.worktree}>
               {status.worktree.split("/").slice(-2).join("/")}
             </dd>
-            <dt>Cambios</dt>
+            <dt>Sin confirmar</dt>
             <dd>
               {status.files === 0
-                ? "sin cambios"
+                ? "nada"
                 : `${status.files} archivo${status.files === 1 ? "" : "s"}`}
             </dd>
           </>
@@ -753,28 +754,78 @@ function Decide({ pending, call }: { pending: ApprovalView[]; call: Call }) {
   )
 }
 
-/** Lo que cambió en el worktree de la tarea, archivo por archivo. */
-function Changes({ run, call }: { run: Run | undefined; call: Call }) {
-  const [files, setFiles] = useState<FileDiff[] | null>(null)
+type TaskChanges = ReturnType<(typeof Methods)["tasks.changes"]["result"]["parse"]>
+
+/**
+ * Lo que cambió la tarea contra su base: la historia de commits, las PR y el diff por
+ * archivo. Mientras vive el worktree, en vivo; después de mergear y cerrar, lo que Keel
+ * guardó antes de liberarlo.
+ */
+function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; call: Call }) {
+  const [c, setC] = useState<TaskChanges | null>(null)
   const [error, setError] = useState("")
-  const runId = run?.id
+  const [prOpen, setPrOpen] = useState<number | null>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: el estado del run sólo dispara la relectura.
   useEffect(() => {
-    if (!runId) return
     let alive = true
-    call("git.diff", { run_id: runId })
-      .then((d) => alive && setFiles(splitUnified(d.diff)))
+    call("tasks.changes", { work_item_id: task.id })
+      .then((d) => alive && setC(d))
       .catch((e: unknown) => alive && setError(e instanceof Error ? e.message : String(e)))
     return () => {
       alive = false
     }
-  }, [call, runId, run?.status])
-  if (!run) return <Empty title="Sin worktree todavía" />
+  }, [call, task.id, task.revision, run?.status])
   if (error) return <Hint>{error}</Hint>
-  if (!files) return <Hint>Leyendo el diff…</Hint>
-  if (files.length === 0) return <Empty title="Sin cambios en el worktree" />
+  if (!c) return <Hint>Leyendo los cambios…</Hint>
+  if (c.source === "none") return <Empty title="Esta tarea todavía no cambió nada" />
+  const files: FileDiff[] = splitUnified(c.diff)
+  const add = c.files.reduce((s, f) => s + f.additions, 0)
+  const del = c.files.reduce((s, f) => s + f.deletions, 0)
   return (
-    <div className="tf-drawer-list">
+    <div className="tf-drawer-list tf-changes" data-testid="task-changes" data-source={c.source}>
+      <p className="muted tf-changes-head">
+        <GitBranch size={12} aria-hidden /> <span className="mono">{c.branch ?? "—"}</span>
+        {c.base_sha && c.head_sha && (
+          <span className="mono">
+            {" "}
+            · {c.base_sha.slice(0, 7)}..{c.head_sha.slice(0, 7)}
+          </span>
+        )}
+        {" · "}
+        {c.source === "record"
+          ? `guardado ${c.captured_at ? new Date(c.captured_at).toLocaleString() : ""} (el worktree ya se liberó)`
+          : "en vivo, del worktree"}
+      </p>
+      {c.pull_requests.length > 0 && (
+        <p className="tf-changes-prs">
+          {c.pull_requests.map((p) => (
+            <Button key={p.number} variant="ghost" onClick={() => setPrOpen(p.number)}>
+              PR #{p.number}
+            </Button>
+          ))}
+        </p>
+      )}
+      <h4>
+        Historia · {c.commits.length} commit{c.commits.length === 1 ? "" : "s"}
+      </h4>
+      {c.commits.length === 0 && <Hint>Sin commits todavía: lo de abajo aún no se confirma.</Hint>}
+      <ol className="tf-commits">
+        {c.commits.map((k) => (
+          <li key={k.sha}>
+            <span className="mono muted">{k.sha.slice(0, 7)}</span>
+            <span className="tf-commit-subject">{k.subject}</span>
+            <span className="muted">
+              {k.author} · {new Date(k.date).toLocaleDateString()} · {k.files.length} archivo
+              {k.files.length === 1 ? "" : "s"}
+            </span>
+          </li>
+        ))}
+      </ol>
+      <h4>
+        Diff contra la base · {c.files.length} archivo{c.files.length === 1 ? "" : "s"} ·{" "}
+        <span className="added">+{add}</span> <span className="deleted">−{del}</span>
+      </h4>
+      {c.truncated && <Hint>El diff es muy grande: se muestra el principio.</Hint>}
       {files.map((f) => (
         <details key={f.path} className="tf-file" open={files.length <= 3}>
           <summary className="mono">
@@ -784,6 +835,11 @@ function Changes({ run, call }: { run: Run | undefined; call: Call }) {
           <DiffView diff={f} />
         </details>
       ))}
+      {prOpen !== null && (
+        <Modal title={`PR #${prOpen}`} onClose={() => setPrOpen(null)} wide>
+          <PrCard call={call} number={prOpen} />
+        </Modal>
+      )}
     </div>
   )
 }

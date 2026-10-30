@@ -750,3 +750,91 @@ function StepClock({
     </span>
   )
 }
+
+/**
+ * ADR-0043 §3: el agente pidió mergear una PR. Se decide con la PR viva a la vista:
+ * aprobar ejecuta el merge atado a la cabeza que vio el agente; si cambió, falla.
+ */
+export function MergeRequestCard({
+  call,
+  approvalId,
+  operationHash,
+  input,
+  decision,
+}: {
+  call: Call
+  approvalId: string
+  operationHash: string
+  input: unknown
+  decision: "approved" | "denied" | "expired" | null
+}) {
+  const m = (input ?? {}) as {
+    number?: number
+    method?: "merge" | "squash" | "rebase"
+    head_sha?: string
+    subject?: string
+    why?: string
+  }
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  async function resolve(d: "approve_once" | "deny") {
+    setBusy(true)
+    setError("")
+    try {
+      await call("approvals.resolve", {
+        ...mutationMeta(),
+        approval_id: approvalId,
+        operation_hash: operationHash,
+        decision: d,
+      })
+    } catch (e) {
+      setError(msg(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div
+      className="gh-merge-request"
+      data-testid="github-merge-request"
+      data-decision={decision ?? "pending"}
+    >
+      <p className="gh-merge-ask">
+        <GitMerge size={14} /> El agente pide <strong>{METHOD_LABEL[m.method ?? "merge"]}</strong>{" "}
+        de la PR #{m.number}
+        {m.head_sha ? (
+          <>
+            {" "}
+            en <span className="mono">{m.head_sha.slice(0, 7)}</span>
+          </>
+        ) : null}
+        {m.why ? `: ${m.why}` : ""}
+      </p>
+      {m.number !== undefined && <PrCard call={call} number={m.number} />}
+      {decision === null ? (
+        <div className="gh-actions">
+          <Button
+            variant="primary"
+            icon={GitMerge}
+            disabled={busy}
+            onClick={() => void resolve("approve_once")}
+          >
+            Aprobar y mergear
+          </Button>
+          <Button disabled={busy} onClick={() => void resolve("deny")}>
+            Rechazar
+          </Button>
+        </div>
+      ) : (
+        <p className="muted gh-note">
+          {decision === "approved"
+            ? "Aprobaste el merge."
+            : decision === "denied"
+              ? "Lo rechazaste."
+              : "Caducó."}
+        </p>
+      )}
+      {error && <p className="deleted">{error}</p>}
+    </div>
+  )
+}

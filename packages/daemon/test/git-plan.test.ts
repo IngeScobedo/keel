@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -30,7 +30,7 @@ const sh = (cwd: string, ...args: string[]) =>
 type Plan = {
   plan_id: string
   plan_hash: string
-  plan: { files: { path: string }[]; branch: string; operations: { op: string }[] }
+  plan: { files: { path: string }[]; branch: string; operations: { op: string; branch?: string }[] }
 }
 
 async function boot(queryFn: QueryFn = replayQuery()) {
@@ -126,7 +126,10 @@ describe("ADR-0015: git con plan aprobado", () => {
     // La tarjeta muestra los mismos archivos que el commit creado.
     expect(commit.files).toEqual(plan.plan.files.map((f) => f.path))
     expect(sh(wt, "log", "-1", "--format=%an")).toStartWith("Claude (Keel KEEL-")
-    expect(sh(remote, "rev-parse", `refs/heads/${plan.plan.branch}`)).toBe(commit.sha)
+    // ADR-0043 §7: se publica con la convención del repo (tipo + resumen), no como keel/….
+    const push = plan.plan.operations.find((o) => o.op === "push") as unknown as { branch: string }
+    expect(push.branch).toBe("chore/cambio")
+    expect(sh(remote, "rev-parse", "refs/heads/chore/cambio")).toBe(commit.sha)
     expect(s.steps.find((x) => x.op === "git.pull_request.pending")?.detail.reason).toContain(
       "gh no está configurado",
     )
@@ -143,7 +146,49 @@ describe("ADR-0015: git con plan aprobado", () => {
     const ev = (await human.call("evidence.list", { work_item_id: w.id })) as {
       evidence: { kind: string }[]
     }
-    expect(ev.evidence.map((e) => e.kind)).toEqual(["diff"])
+    // El diff aprobado y el registro de cambios de la tarea (commits y diff contra la base).
+    expect(ev.evidence.map((e) => e.kind)).toEqual(["diff", "diff"])
+  })
+
+  test("la historia de la tarea (commits y diff) sobrevive a liberar el worktree", async () => {
+    const { daemon, human, executed, approve } = await boot()
+    const { run, wt, w } = await executed()
+    writeFileSync(join(wt, "nuevo.ts"), "export const x = 1\n")
+    type Changes = {
+      source: string
+      commits: { subject: string; files: { path: string }[] }[]
+      files: { path: string; additions: number; deletions: number }[]
+      diff: string
+    }
+    // Mientras vive el worktree: en vivo, con lo que aún no está en un commit.
+    const live = (await human.call("tasks.changes", { work_item_id: w.id })) as Changes
+    expect(live.source).toBe("worktree")
+    expect(live.commits).toEqual([])
+    expect(live.files).toEqual([{ path: "nuevo.ts", additions: 1, deletions: 0 }])
+    const plan = (await human.call("git.propose", {
+      ...meta(),
+      run_id: run.id,
+      message: "feat: añade x",
+    })) as Plan
+    await approve(plan)
+    await daemon.idle()
+    writeFileSync(join(wt, "README.md"), "fixture\nsin commit\n")
+    // Se libera el worktree (como al mergear y cerrar la tarea).
+    await (daemon as unknown as { captureAndRelease(id: string): Promise<void> }).captureAndRelease(
+      run.id,
+    )
+    expect(existsSync(wt)).toBe(false)
+    const kept = (await human.call("tasks.changes", { work_item_id: w.id })) as Changes & {
+      captured_at: string
+    }
+    expect(kept.source).toBe("record")
+    expect(kept.captured_at).toBeTruthy()
+    expect(kept.commits.map((c) => [c.subject, c.files.map((f) => f.path)])).toEqual([
+      ["feat: añade x", ["nuevo.ts"]],
+    ])
+    expect(kept.files.map((f) => f.path).sort()).toEqual(["README.md", "nuevo.ts"])
+    expect(kept.diff).toContain("+export const x = 1")
+    expect(kept.diff).toContain("+sin commit")
   })
 
   test("KEEL-5: el plan sube a la rama que nombra, no vence solo y uno nuevo reemplaza al que esperaba", async () => {

@@ -255,6 +255,41 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           text: `La PR quedó pendiente: ${String(p.reason ?? "gh no pudo crearla")}. El commit y el push sí se hicieron.`,
         })
         break
+      case "github.pr.merged":
+        items.push({
+          kind: "status",
+          key,
+          tone: "info",
+          text: `PR #${String(p.number)} mergeada en ${String(p.base)} (${String(p.method)})${typeof p.merge_sha === "string" ? ` · ${p.merge_sha.slice(0, 7)}` : ""}`,
+        })
+        break
+      case "github.pr.merge_failed":
+        items.push({
+          kind: "status",
+          key,
+          tone: "error",
+          text: `No se pudo mergear la PR #${String(p.number)}: ${String(p.reason)}`,
+        })
+        break
+      case "ci.run.completed": {
+        const ok = p.conclusion === "success"
+        const ms = typeof p.duration_ms === "number" ? p.duration_ms : null
+        items.push({
+          kind: "status",
+          key,
+          tone: ok ? "info" : "error",
+          text: `${String(p.workflow)} ${ok ? "verde" : `terminó en ${String(p.conclusion ?? "?")}`} · ${String(p.branch)} · ${String(p.sha).slice(0, 7)}${ms ? ` · ${Math.round(ms / 60_000)} min` : ""}`,
+        })
+        break
+      }
+      case "ci.watch.paused":
+        items.push({
+          kind: "status",
+          key,
+          tone: "warn",
+          text: `Keel dejó de seguir el CI: ${String(p.reason)}`,
+        })
+        break
       case "git.promotion.completed":
         if (typeof p.sha === "string")
           items.push({

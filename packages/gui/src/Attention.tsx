@@ -17,7 +17,13 @@ export type Pending = ReturnType<
   (typeof Methods)["approvals.list"]["result"]["parse"]
 >["approvals"][number]
 
-const NEEDS_CONTEXT = new Set(["git.plan", "stage.gate", "setup.request", "batch.plan"])
+const NEEDS_CONTEXT = new Set([
+  "git.plan",
+  "stage.gate",
+  "setup.request",
+  "batch.plan",
+  "github.pr_merge",
+])
 
 /** Qué se le puede contestar desde el aviso: aprobar/negar, una opción o sólo «Ver». */
 export function quickReply(
@@ -48,6 +54,8 @@ function summary(a: Pending): string {
   if (tool === "git.plan") return "Propone un plan de git"
   if (tool === "stage.gate") return "Espera tu gate del método"
   if (tool === "batch.plan") return "El orquestador propone un lote: revísalo antes de arrancar"
+  if (tool === "github.pr_merge")
+    return `Pide mergear la PR #${(op.input as { number?: number } | null)?.number ?? ""}`
   if (tool === "AskUserQuestion")
     return questionsOf(op.input)[0]?.question ?? "Te hace una pregunta"
   const cmd = shellCommand(op.input)

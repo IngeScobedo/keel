@@ -7,6 +7,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { CiWatcher } from "../src/ci-watch.ts"
+import { conventionalPlan } from "../src/daemon.ts"
 import { Daemon, IpcClient } from "../src/index.ts"
 import { initRepo } from "./git-fixture.ts"
 import { replayQuery } from "./replay.ts"
@@ -81,7 +83,7 @@ const fs = require("node:fs")
 const args = process.argv.slice(2)
 fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify(args) + "\\n")
 const out = (s) => process.stdout.write(typeof s === "string" ? s : JSON.stringify(s))
-const pr = () => ({ ...${JSON.stringify(PR)}, state: fs.readFileSync(${JSON.stringify(state)}, "utf8"), mergedBy: fs.readFileSync(${JSON.stringify(state)}, "utf8") === "MERGED" ? { login: "IngeScobedo" } : null })
+const pr = () => ({ ...${JSON.stringify(PR)}, state: fs.readFileSync(${JSON.stringify(state)}, "utf8"), mergedBy: fs.readFileSync(${JSON.stringify(state)}, "utf8") === "MERGED" ? { login: "IngeScobedo" } : null, mergeCommit: fs.readFileSync(${JSON.stringify(state)}, "utf8") === "MERGED" ? { oid: "fe1234567890abcdef1234567890abcdef123456" } : null })
 const [a, b] = args
 if (a === "--version") out("gh version 2.96.0\\n")
 else if (a === "auth" && b === "status") out({ hosts: { "github.com": [{ state: "success", active: true, host: "github.com", login: "IngeScobedo", scopes: "repo, workflow", gitProtocol: "ssh" }] } })
@@ -237,5 +239,160 @@ describe.skipIf(process.platform === "win32")("ADR-0043: GitHub por el gh del hu
     const log = (await human.call("github.run_log", { id: 7 })) as { tail: string }
     expect(log.tail).toContain("rechazado")
     expect(log.tail).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789")
+  })
+})
+
+describe("ADR-0043: lo que faltaba", () => {
+  test("un plan sigue las convenciones del repo: rama, base de la PR y sin Co-Authored-By", () => {
+    const profile = {
+      branch_prefixes: { bug: "fix/", feature: "feat/" },
+      flow: { work_base: "development" },
+      conventions: { co_authored_by: false },
+    } as unknown as Parameters<typeof conventionalPlan>[2]
+    const plan = conventionalPlan(
+      {
+        message: "fix(api): corrige la portada\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+        push: {} as { branch?: string },
+        pr: { title: "fix(api): corrige la portada", body: "Qué\n\nCo-authored-by: X <x@y>" },
+      },
+      { kind: "bug", title: "fix(api): Corrige la portada de Pre Purchase" },
+      profile,
+    )
+    expect(plan.message).toBe("fix(api): corrige la portada")
+    expect(plan.push?.branch).toBe("fix/corrige-la-portada-de-pre-purchase")
+    expect(plan.pr).toMatchObject({ base: "development", body: "Qué" })
+    // Lo que el agente nombró se respeta.
+    const named = conventionalPlan(
+      {
+        message: "x",
+        push: { branch: "feat/api-otra" } as { branch?: string },
+        pr: { title: "x", base: "main" } as { title: string; base?: string },
+      },
+      { kind: "bug", title: "y" },
+      profile,
+    )
+    expect(named.push?.branch).toBe("feat/api-otra")
+    expect(named.pr?.base).toBe("main")
+  })
+
+  test("el seguidor de CI deja la historia del run y se pausa si queda poco límite", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keel-ci-"))
+    dirs.push(dir)
+    const state = join(dir, "state.json")
+    writeFileSync(state, JSON.stringify({ status: "in_progress", remaining: 4000 }))
+    const gh = join(dir, "gh")
+    writeFileSync(
+      gh,
+      `#!/usr/bin/env node
+const fs = require("node:fs")
+const st = JSON.parse(fs.readFileSync(${JSON.stringify(state)}, "utf8"))
+const args = process.argv.slice(2)
+const out = (s) => process.stdout.write(JSON.stringify(s))
+const done = st.status === "completed"
+const run = { databaseId: 9, workflowName: "Deploy · stage", status: st.status, conclusion: done ? "success" : "", event: "push", headBranch: "stage", headSha: "abc", url: "https://github.com/o/r/actions/runs/9", createdAt: "2026-10-30T10:00:00Z", updatedAt: done ? "2026-10-30T10:08:00Z" : "2026-10-30T10:01:00Z" }
+if (args[0] === "api") out({ resources: { core: { remaining: st.remaining, limit: 5000, reset: 1793400000 } } })
+else if (args[1] === "list") out([run])
+else out({ ...run, jobs: [{ name: "deploy", status: st.status, conclusion: run.conclusion, steps: [{ name: "Build + push", status: "completed", conclusion: "success", startedAt: "2026-10-30T10:00:10Z", completedAt: "2026-10-30T10:04:00Z" }, { name: "Rollout", status: st.status, conclusion: run.conclusion, startedAt: "2026-10-30T10:04:00Z", completedAt: done ? "2026-10-30T10:08:00Z" : null }] }] })
+`,
+    )
+    chmodSync(gh, 0o755)
+    const events: [string, unknown][] = []
+    let now = 0
+    const ci = new CiWatcher({
+      gh: () => gh,
+      emit: (_p, _r, kind, payload) => events.push([kind, payload]),
+      intervalMs: 3_600_000,
+      now: () => now,
+    })
+    ci.follow({ projectId: "p", runId: "r", cwd: dir, sha: "abc" })
+    await ci.tick()
+    expect(events.map(([k]) => k)).toEqual(["ci.run.started", "ci.run.step"])
+    writeFileSync(state, JSON.stringify({ status: "completed", remaining: 4000 }))
+    await ci.tick()
+    expect(events.map(([k]) => k)).toEqual([
+      "ci.run.started",
+      "ci.run.step",
+      "ci.run.step",
+      "ci.run.completed",
+    ])
+    expect(events.at(-1)?.[1]).toMatchObject({ conclusion: "success", duration_ms: 8 * 60_000 })
+    // Terminado y quieto 2 min: deja de seguirlo.
+    now = 3 * 60_000
+    await ci.tick()
+    expect(ci.following()).toEqual([])
+    // Con poco límite, no sigue y lo dice.
+    writeFileSync(state, JSON.stringify({ status: "in_progress", remaining: 120 }))
+    ci.follow({ projectId: "p", runId: "r", cwd: dir, sha: "def" })
+    now = 20 * 60_000
+    await ci.tick()
+    expect(events.at(-1)).toEqual([
+      "ci.watch.paused",
+      expect.objectContaining({ sha: "def", reason: expect.stringContaining("quedan 120") }),
+    ])
+    expect(ci.following()).toEqual([])
+    ci.stop()
+  })
+
+  test("el agente pide el merge; el humano lo aprueba y Keel mergea atado a la cabeza", async () => {
+    const { daemon, human, calls } = await boot()
+    const pid = daemon.project.project_id
+    const w = daemon.repo.createWorkItem({ project_id: pid, title: "portada", kind: "bug" })
+    const run = daemon.repo.createRun({ project_id: pid, work_item_id: w.id, purpose: "execute" })
+    daemon.repo.updateRun(run.id, { status: "running" })
+    const { file } = daemon.agentTokens.issue({
+      run_id: run.id,
+      project_id: pid,
+      work_item_id: w.id,
+    })
+    const agent = await IpcClient.connect(daemon.agentServer.path)
+    clients.push(agent)
+    await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+    // El agente lee la PR, pero no puede mergear.
+    expect(((await agent.call("github.pr", { number: 51 })) as { state: string }).state).toBe(
+      "open",
+    )
+    await expect(
+      agent.call("github.pr_merge", {
+        ...meta(),
+        number: 51,
+        method: "squash",
+        head_sha: "abc1234",
+      }),
+    ).rejects.toThrow()
+    const asked = (await agent.call("github.merge_request", {
+      ...meta(),
+      number: 51,
+      method: "squash",
+      why: "el CI pasó y la review está aprobada",
+    })) as { approval_id: string }
+    const pending = (await human.call("approvals.list", {})) as {
+      approvals: { id: string; operation_hash: string; operation: { tool: string } }[]
+    }
+    const a = pending.approvals.find((x) => x.id === asked.approval_id)
+    expect(a?.operation.tool).toBe("github.pr_merge")
+    expect(calls().some((c) => c[0] === "pr" && c[1] === "merge")).toBe(false)
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: asked.approval_id,
+      operation_hash: a?.operation_hash,
+      decision: "approve_once",
+    })
+    await daemon.idle()
+    expect(calls().find((c) => c[0] === "pr" && c[1] === "merge")).toEqual([
+      "pr",
+      "merge",
+      "51",
+      "--squash",
+      "--match-head-commit",
+      "abc1234",
+      "--subject",
+      "fix(api): corrige la portada (#51)",
+    ])
+    const merged = daemon.repo.eventsAfter(0, null, 5000).find((e) => e.kind === "github.pr.merged")
+    expect(merged?.run_id).toBe(run.id)
+    expect(JSON.parse(merged?.payload_json ?? "{}")).toMatchObject({
+      merge_sha: "fe1234567890abcdef1234567890abcdef123456",
+    })
+    expect(daemon.ci.following()).toContain("fe1234567890abcdef1234567890abcdef123456")
   })
 })

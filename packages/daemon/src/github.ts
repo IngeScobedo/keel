@@ -186,6 +186,7 @@ export function prView(pr: PullRequest): GithubPr {
     author: pr.author?.login ?? null,
     merged_at: pr.mergedAt,
     merged_by: pr.mergedBy?.login ?? null,
+    merge_sha: pr.mergeCommit?.oid ?? null,
     body: pr.body,
     // Un CheckRun trae status y conclusion; un StatusContext, sólo state.
     checks: (pr.statusCheckRollup ?? []).map((c) => ({

@@ -245,6 +245,80 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       z.object({ work_item_id: z.string() }),
       (a) => client.call("batch.report", a),
     ),
+    // --- GitHub y la historia de la tarea (ADR-0043): leer sí; mergear lo decide el humano ---
+    tool(
+      "task_changes",
+      "Los commits y archivos que cambió tu tarea contra su base, con sus PR. Sigue disponible después de mergear y liberar el worktree. El diff completo sólo si lo pides.",
+      z.object({ with_diff: z.boolean().optional() }),
+      async (a, b) => {
+        const r = (await client.call("tasks.changes", { work_item_id: linkedTask(b) })) as {
+          diff: string
+          truncated: boolean
+        } & Record<string, unknown>
+        if (a.with_diff)
+          return {
+            ...r,
+            diff: r.diff.slice(0, 60_000),
+            truncated: r.truncated || r.diff.length > 60_000,
+          }
+        const { diff: _diff, ...rest } = r
+        return rest
+      },
+    ),
+    tool(
+      "pr_status",
+      "La PR de tu tarea (o la que digas por número): estado, base y cabeza, si se puede mergear, review y checks con su conclusión. Sólo lectura.",
+      z.object({ number: z.number().int().positive().optional() }),
+      async (a, b) => {
+        let n = a.number
+        if (!n) {
+          const ch = (await client.call("tasks.changes", { work_item_id: linkedTask(b) })) as {
+            pull_requests: { number: number }[]
+          }
+          n = ch.pull_requests.at(-1)?.number
+          if (!n) throw new Error("esta tarea no abrió una PR todavía; dila por número")
+        }
+        const pr = (await client.call("github.pr", { number: n })) as {
+          checks: {
+            name: string
+            workflow: string | null
+            status: string
+            conclusion: string | null
+          }[]
+          files: unknown[]
+          body: string
+        } & Record<string, unknown>
+        const { body: _body, files, ...rest } = pr
+        return { ...rest, files: files.length }
+      },
+    ),
+    tool(
+      "ci_status",
+      "Los workflows de GitHub Actions de un commit (sha) o de una rama: estado y conclusión; del primero que falló, el final de su log.",
+      z.object({ sha: z.string().optional(), branch: z.string().optional() }),
+      async (a) => {
+        if (!a.sha && !a.branch) throw new Error("di el commit (sha) o la rama")
+        const { runs } = (await client.call("github.runs", {
+          ...(a.sha ? { commit: a.sha } : { branch: a.branch, limit: 10 }),
+        })) as { runs: { id: number; conclusion: string | null; status: string }[] }
+        const failed = runs.find((r) => r.status === "completed" && r.conclusion === "failure")
+        const log = failed
+          ? ((await client.call("github.run_log", { id: failed.id })) as { tail: string }).tail
+          : null
+        return { runs, failed_log_tail: log }
+      },
+    ),
+    tool(
+      "pr_merge_request",
+      "Pide al humano mergear una PR con un método (merge, squash o rebase) y por qué. Queda pendiente con la PR viva a la vista; tú nunca mergeas. Pídelo cuando los checks pasaron y la review está como el repo exige.",
+      z.object({
+        number: z.number().int().positive(),
+        method: z.enum(["merge", "squash", "rebase"]),
+        why: z.string().min(1),
+        subject: z.string().optional(),
+      }),
+      (a) => client.call("github.merge_request", { ...mutation(), ...a }),
+    ),
     // --- el método (ADR-0021): Keel valida y verifica; el agente recibe lo justo ---
     tool(
       "stage_current",

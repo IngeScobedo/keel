@@ -12,7 +12,7 @@ import {
   type ToolCall,
 } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
-import { CommitRuns, PrCard } from "./GitHub.js"
+import { CommitRuns, MergeRequestCard, PrCard } from "./GitHub.js"
 import { InfraCard } from "./InfraCard.js"
 import { Markdown } from "./Markdown.js"
 import { GateCard, MethodRow } from "./MethodCards.js"
@@ -404,6 +404,16 @@ function Pending({
   const c = call ? { call } : {}
   if (a.tool === "stage.gate") return <GateCard a={a} active={active} {...c} />
   if (a.tool === "batch.plan") return <BatchPlanCard a={a} active={active} {...c} />
+  if (a.tool === "github.pr_merge" && call)
+    return (
+      <MergeRequestCard
+        call={call}
+        approvalId={a.approval_id}
+        operationHash={a.operation_hash}
+        input={a.input}
+        decision={a.decision}
+      />
+    )
   if (a.tool === "setup.request") return <SetupCard a={a} active={active} {...c} />
   if (a.tool === "AskUserQuestion")
     return <QuestionCard a={a} active={active} agent={agent} {...c} />

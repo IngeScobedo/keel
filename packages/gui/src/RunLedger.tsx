@@ -239,6 +239,8 @@ function waitingLabel(a: Approval): string {
   if (a.tool === "AskUserQuestion")
     return `Pregunta: ${questionsOf(a.input)[0]?.header ?? "del agente"}`
   if (a.tool === "ExitPlanMode") return "Revisar el plan"
+  if (a.tool === "github.pr_merge")
+    return `Merge de la PR #${(a.input as { number?: number } | null)?.number ?? ""}`
   if (a.tool === "batch.plan")
     return `Plan del lote · ${(a.input as { plan?: { title?: string } } | null)?.plan?.title ?? ""}`
   const i = (a.input ?? {}) as Record<string, unknown>

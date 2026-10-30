@@ -3,6 +3,7 @@
  * spike (fixtures redactados) en el orden en que llegaron, invocando los hooks
  * registrados en `options.hooks` igual que lo haría el SDK.
  */
+import { execFileSync } from "node:child_process"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { HookCallback, Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -893,6 +894,23 @@ export function githubQuery(daemon: Daemon): QueryFn {
         model: "claude-opus-5-5",
         uuid: `u-gh-init-${runId}`,
       } as unknown as SDKMessage
+      // Un cambio real en su worktree, confirmado: la historia de la tarea lo muestra.
+      const wt = daemon.repo.runWorktrees(runId)[0]?.worktree_path
+      if (wt) {
+        writeFileSync(join(wt, "portada.ts"), "export const portada = 'nueva'\n")
+        const env = {
+          ...process.env,
+          GIT_AUTHOR_NAME: "Claude",
+          GIT_AUTHOR_EMAIL: "claude@keel",
+          GIT_COMMITTER_NAME: "Claude",
+          GIT_COMMITTER_EMAIL: "claude@keel",
+        }
+        execFileSync("git", ["add", "portada.ts"], { cwd: wt, env })
+        execFileSync("git", ["commit", "-q", "-m", "fix(api): corrige la portada"], {
+          cwd: wt,
+          env,
+        })
+      }
       yield say("Empujé la rama y abrí la PR hacia development; el merge es tuyo.", 1)
       emit("git.pull_request.created", {
         url: "https://github.com/inprodiwebstudio/zero-reports-mono/pull/51",

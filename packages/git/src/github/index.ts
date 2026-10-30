@@ -148,6 +148,7 @@ export const PullRequestSchema = z.object({
   author: z.object({ login: z.string() }).nullable(),
   mergedAt: z.string().nullable(),
   mergedBy: z.object({ login: z.string() }).nullable(),
+  mergeCommit: z.object({ oid: z.string() }).nullable().optional(),
   body: z.string(),
   statusCheckRollup: z.array(CheckSchema).nullable(),
   files: z
@@ -163,7 +164,7 @@ export const PullRequestSchema = z.object({
 export type PullRequest = z.infer<typeof PullRequestSchema>
 
 const PR_FIELDS =
-  "number,title,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,additions,deletions,author,mergedAt,mergedBy,body,statusCheckRollup,files"
+  "number,title,url,state,isDraft,baseRefName,headRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,additions,deletions,author,mergedAt,mergedBy,mergeCommit,body,statusCheckRollup,files"
 
 /** Una PR por número, URL o rama. */
 export function pullRequest(opts: GhOptions, ref: number | string): Promise<PullRequest> {
@@ -338,4 +339,26 @@ export async function rerunWorkflow(
   q: { failedOnly?: boolean } = {},
 ): Promise<void> {
   await gh(["run", "rerun", String(id), ...(q.failedOnly ? ["--failed"] : [])], opts)
+}
+
+// --- el límite de la API ----------------------------------------------------------------
+
+/** Lo que queda del límite de la API (5000 por hora autenticado) y cuándo se repone. */
+export async function rateLimit(
+  opts: GhOptions,
+): Promise<{ remaining: number; limit: number; reset_at: string }> {
+  const r = await ghJson(
+    z.object({
+      resources: z.object({
+        core: z.object({ remaining: z.number(), limit: z.number(), reset: z.number() }),
+      }),
+    }),
+    ["api", "rate_limit"],
+    opts,
+  )
+  return {
+    remaining: r.resources.core.remaining,
+    limit: r.resources.core.limit,
+    reset_at: new Date(r.resources.core.reset * 1000).toISOString(),
+  }
 }

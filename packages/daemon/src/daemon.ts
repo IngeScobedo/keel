@@ -106,6 +106,7 @@ import { ApprovalGate, type ApprovalResolution, QUESTION_TOOLS } from "./approva
 import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
 import { checkBase, deployState, git as gitRun, pullBase } from "./base-sync.js"
 import { EventBus } from "./bus.js"
+import { CiWatcher } from "./ci-watch.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
@@ -176,6 +177,7 @@ import {
   type SubtaskInfo,
   type WorkItemRow,
 } from "./store/repo.js"
+import { changesSummary, readChanges } from "./task-changes.js"
 import { CredentialService } from "./vault/credentials.js"
 import { type KeyStore, noKeyStore } from "./vault/keystore.js"
 import {
@@ -255,6 +257,8 @@ export class Daemon {
   readonly broker: ResourceBroker
   /** ADR-0043: GitHub por el `gh` del humano. */
   readonly github: GithubService
+  /** ADR-0043 §5: los runs de Actions de lo que Keel empujó, como eventos `ci.run.*`. */
+  readonly ci: CiWatcher
   /**
    * El fetch del remoto por proyecto: Entregas no lo repite en cada vistazo ni lo espera.
    * Puede tardar (la llave pide su frase por askpass); corre aparte y se usa al terminar.
@@ -360,6 +364,13 @@ export class Daemon {
     })
     // ADR-0013: el intermediario ejecuta con la credencial; el agente sólo ve el resultado.
     this.github = new GithubService(() => this.ghPath())
+    this.ci = new CiWatcher({
+      gh: () => this.ghPath(),
+      emit: (projectId, runId, kind, payload) =>
+        runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+          uow.emit(kind, runId, payload),
+        ),
+    })
     this.broker = new ResourceBroker({
       db: this.store.db,
       artifacts: this.artifacts,
@@ -518,6 +529,7 @@ export class Daemon {
     // ADR-0033: ningún túnel a una base queda abierto al apagar.
     this.broker.close()
     this.github.close()
+    this.ci.stop()
     this.plugins.stopAll()
     this.server.stop()
     this.agentServer.stop()
@@ -2088,6 +2100,81 @@ export class Daemon {
           files: await numstat(worktree, wanted),
         }
       },
+      "tasks.changes": (params, ctx) => {
+        const p = params as Params<"tasks.changes">
+        const item = this.requireWorkItem(p.work_item_id)
+        if (ctx.actor.kind === "agent") this.scopeOf(ctx, item.project_id)
+        const prs = this.store.db
+          .query<{ payload_json: string }, [string]>(
+            `SELECT payload_json FROM events WHERE kind = 'git.pull_request.created'
+               AND run_id IN (SELECT id FROM runs WHERE work_item_id = ?) ORDER BY event_seq`,
+          )
+          .all(item.id)
+          .map((r) => JSON.parse(r.payload_json) as { number?: number; url?: string })
+          .filter((x) => typeof x.number === "number")
+          .map((x) => ({ number: x.number as number, url: String(x.url ?? "") }))
+        const MAX = 2_000_000
+        return (async () => {
+          // Mientras vive el worktree, lo de ahora; si ya se liberó, lo que se guardó.
+          for (const runId of repo.runsWithWorkspaces(item.id))
+            for (const w of repo.runWorktrees(runId)) {
+              if (!existsSync(w.worktree_path)) continue
+              const r = await readChanges(w.worktree_path, w.base_sha)
+              return {
+                source: "worktree" as const,
+                captured_at: null,
+                branch: r.branch ?? w.branch_name,
+                base_sha: r.base_sha,
+                head_sha: r.head_sha,
+                commits: r.commits,
+                files: r.files,
+                diff: r.diff.slice(0, MAX),
+                truncated: r.diff.length > MAX,
+                pull_requests: prs,
+              }
+            }
+          const last = this.lastChangeRecord(item.id)
+          if (!last)
+            return {
+              source: "none" as const,
+              captured_at: null,
+              branch: null,
+              base_sha: null,
+              head_sha: null,
+              commits: [],
+              files: [],
+              diff: "",
+              truncated: false,
+              pull_requests: prs,
+            }
+          const diff = this.artifacts.readAll(last.sha256).toString("utf8")
+          const m = last.meta as {
+            branch?: string
+            base_sha?: string
+            head_sha?: string
+            commits?: {
+              sha: string
+              subject: string
+              author: string
+              date: string
+              files: { path: string; additions: number; deletions: number }[]
+            }[]
+            files?: { path: string; additions: number; deletions: number }[]
+          }
+          return {
+            source: "record" as const,
+            captured_at: last.created_at,
+            branch: m.branch ?? null,
+            base_sha: m.base_sha ?? null,
+            head_sha: m.head_sha ?? null,
+            commits: m.commits ?? [],
+            files: m.files ?? [],
+            diff: diff.slice(0, MAX),
+            truncated: diff.length > MAX,
+            pull_requests: prs,
+          }
+        })()
+      },
       "git.propose": async (params, ctx) => {
         // El plan (diff, hashes, ramas protegidas) se arma fuera de la transacción;
         // dentro sólo se registra la aprobación y sus eventos.
@@ -2101,9 +2188,13 @@ export class Daemon {
             ErrorCode.invalidParams,
             "una subtarea no hace push ni PR: su cierre es integrarse a la rama de la feature; propone sólo el commit",
           )
+        // ADR-0043 §7: lo que se publica sigue las convenciones del repo.
+        const profile =
+          this.profileOf(run.project_id) ?? (await this.detectedProfile(run.project_id))
+        const conv = conventionalPlan(p, item, profile)
         let built: Awaited<ReturnType<typeof buildPlan>>
         try {
-          built = await buildPlan(this.gitPlanDeps(), run, worktree, p)
+          built = await buildPlan(this.gitPlanDeps(), run, worktree, conv)
         } catch (e) {
           throw rpcError(ErrorCode.invalidParams, e instanceof Error ? e.message : String(e))
         }
@@ -2525,6 +2616,7 @@ export class Daemon {
               commits: promo.pending.length,
               actor: actorOf(ctx),
             })
+            this.ci.follow({ projectId: pid, runId: null, cwd: root, sha })
             return { sha, from: p.from, to: p.to }
           } catch (e) {
             if (e instanceof PromotionError)
@@ -2617,17 +2709,56 @@ export class Daemon {
           })(),
         ).then((after) => {
           const view = prView(after)
-          this.emitSystem("github.pr.merged", null, {
-            number: view.number,
-            title: view.title,
-            url: view.url,
-            base: view.base,
-            head: view.head,
-            method: p.method,
-            merged_by: view.merged_by,
-            actor: actorOf(ctx),
-          })
+          this.afterMerge(this.scopeOf(ctx, p.project_id), null, view, p.method, actorOf(ctx))
           return view
+        })
+      },
+      "github.merge_request": (params, ctx) => {
+        const p = params as Params<"github.merge_request">
+        // El humano mergea desde la tarjeta; esto es el pedido del agente desde su run.
+        if (ctx.actor.kind !== "agent" || !ctx.actor.run_id)
+          throw rpcError(
+            ErrorCode.unauthorized,
+            "el merge lo pide el agente de un run; el humano mergea desde la tarjeta de la PR",
+          )
+        const runId = ctx.actor.run_id
+        const pid = (repo.getRun(runId) as RunRow).project_id
+        const opts = this.ghOpts(ctx, pid)
+        return ghCall(pullRequest(opts, p.number)).then(async (pr) => {
+          if (pr.state !== "OPEN")
+            throw rpcError(ErrorCode.invalidTransition, `la PR #${p.number} no está abierta`)
+          const input = {
+            number: pr.number,
+            title: pr.title,
+            url: pr.url,
+            base: pr.baseRefName,
+            head: pr.headRefName,
+            head_sha: pr.headRefOid,
+            method: p.method,
+            subject: p.subject ?? `${pr.title} (#${pr.number})`,
+            why: p.why,
+          }
+          const hash = await sha256Hex(canonicalJson({ tool: "github.pr_merge", input }))
+          return this.mutation<Params<"github.merge_request">>(
+            "github.merge_request",
+            (_q, uow) => {
+              const id = repo.createApproval({
+                project_id: pid,
+                run_id: runId,
+                operation_hash: hash,
+                operation: { tool: "github.pr_merge", input, run_id: runId },
+                expires_at: null,
+              })
+              uow.emit("approval.requested", runId, {
+                approval_id: id,
+                operation_hash: hash,
+                tool: "github.pr_merge",
+                input,
+                expires_at: null,
+              })
+              return { approval_id: id, head_sha: pr.headRefOid }
+            },
+          )(params, ctx)
         })
       },
       "github.runs": (params, ctx) => {
@@ -3179,6 +3310,11 @@ export class Daemon {
           // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
           const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
           if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
+          // ADR-0043 §3: el merge que pidió el agente lo decide el humano.
+          if (op.tool === "github.pr_merge") {
+            requireHuman(ctx, "decidir el merge de una PR")
+            return this.resolvePrMerge(uow, a, op.input, p.decision)
+          }
           // ADR-0021: un gate del método mueve la etapa; no es un permiso de herramienta.
           if (op.tool === "stage.gate") {
             requireHuman(ctx, "decidir un gate del método")
@@ -5017,6 +5153,10 @@ export class Daemon {
   private async captureAndRelease(runId: string): Promise<void> {
     await this.orphanSweep
     await this.captureChanges(runId)
+    // La historia de la tarea (commits y diff) queda guardada antes de quitar el worktree.
+    await this.recordTaskChanges(runId, "release").catch((e) =>
+      console.error(`keel: no pude guardar los cambios del run ${runId}`, e),
+    )
     for (const driver of this.drivers)
       for (const e of await driver.release(runId)) this.emitSystem(e.kind, runId, e.payload)
   }
@@ -5331,6 +5471,95 @@ export class Daemon {
     return { runId: id, worktree: wt.worktree_path }
   }
 
+  /** Después de un merge: su evento y, si dejó commit en la base, seguir su CI. */
+  private afterMerge(
+    projectId: string,
+    runId: string | null,
+    view: GithubPr,
+    method: "merge" | "squash" | "rebase",
+    actor: unknown,
+  ): void {
+    runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
+      uow.emit("github.pr.merged", runId, {
+        number: view.number,
+        title: view.title,
+        url: view.url,
+        base: view.base,
+        head: view.head,
+        method,
+        merge_sha: view.merge_sha,
+        merged_by: view.merged_by,
+        actor,
+      }),
+    )
+    if (view.merge_sha)
+      this.ci.follow({
+        projectId,
+        runId,
+        cwd: this.repo.projectRoot(projectId) ?? this.rootPath,
+        sha: view.merge_sha,
+      })
+  }
+
+  /** ADR-0043 §3: el humano decide el merge que pidió el agente; lo ejecuta el daemon. */
+  private resolvePrMerge(
+    uow: UnitOfWork,
+    a: NonNullable<ReturnType<Repo["getApproval"]>>,
+    input: unknown,
+    decision: Params<"approvals.resolve">["decision"],
+  ) {
+    if (decision === "deny") {
+      this.repo.setApproval(a.id, "denied", uow.actorId)
+      uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "denied" })
+      return { approval_id: a.id, state: "denied" as const }
+    }
+    if (decision !== "approve_once")
+      throw rpcError(ErrorCode.invalidParams, "un merge se aprueba una vez o se deniega")
+    const m = input as {
+      number: number
+      method: "merge" | "squash" | "rebase"
+      head_sha: string
+      subject: string
+    }
+    this.repo.setApproval(a.id, "approved", uow.actorId)
+    uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "approved" })
+    const projectId = a.project_id
+    const actor = { id: uow.actorId, kind: "human" }
+    uow.afterCommit(() =>
+      this.track(
+        (async () => {
+          const bin = this.ghPath()
+          const opts = { cwd: this.repo.projectRoot(projectId) ?? this.rootPath, gh: bin ?? "gh" }
+          try {
+            if (!bin) throw new Error("gh no está instalado")
+            await mergePullRequest(opts, m.number, {
+              method: m.method,
+              headSha: m.head_sha,
+              ...(m.method !== "rebase" ? { subject: m.subject } : {}),
+            })
+            this.repo.setApproval(a.id, "consumed", null)
+            this.afterMerge(
+              projectId,
+              a.run_id,
+              prView(await pullRequest(opts, m.number)),
+              m.method,
+              actor,
+            )
+          } catch (e) {
+            this.repo.setApproval(a.id, "expired", null)
+            runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (u) =>
+              u.emit("github.pr.merge_failed", a.run_id, {
+                number: m.number,
+                reason: e instanceof Error ? e.message : String(e),
+              }),
+            )
+          }
+        })(),
+      ),
+    )
+    return { approval_id: a.id, state: "approved" as const }
+  }
+
   private resolveGitPlan(
     uow: UnitOfWork,
     a: NonNullable<ReturnType<Repo["getApproval"]>>,
@@ -5357,6 +5586,84 @@ export class Daemon {
     return { approval_id: a.id, state: "approved" as const }
   }
 
+  /**
+   * Guarda los cambios de la tarea del run (commits y diff contra la base) como evidencia
+   * `diff` (ADR-0012 §3): sobrevive a liberar el worktree. Si no cambió nada desde el
+   * último registro, no repite.
+   */
+  private async recordTaskChanges(runId: string, reason: "plan" | "release"): Promise<void> {
+    const run = this.repo.getRun(runId)
+    const item = run ? this.repo.getWorkItem(run.work_item_id) : null
+    if (!run || !item) return
+    for (const w of this.repo.runWorktrees(runId)) {
+      if (!existsSync(w.worktree_path)) continue
+      const r = await readChanges(w.worktree_path, w.base_sha)
+      if (r.commits.length === 0 && r.files.length === 0) continue
+      const last = this.lastChangeRecord(item.id)
+      const stored = this.artifacts.put(r.diff, "text/x-diff")
+      if (last && last.sha256 === stored.sha256 && last.head_sha === r.head_sha) continue
+      runUnitOfWork(this.uowDeps(), this.systemScope(run.project_id), (uow) => {
+        const ev = this.repo.addEvidence({
+          project_id: run.project_id,
+          work_item_id: item.id,
+          run_id: run.id,
+          kind: "diff",
+          title: `Cambios de ${item.display_id} · ${changesSummary(r)}`,
+          artifact_ref: stored.ref,
+          sha256: stored.sha256,
+          metadata: {
+            record: "task_changes",
+            reason,
+            summary: changesSummary(r),
+            branch: r.branch ?? w.branch_name,
+            base_sha: r.base_sha,
+            head_sha: r.head_sha,
+            commits: r.commits,
+            files: r.files,
+          },
+          provenance: {
+            actor: { id: "system:daemon", kind: "system" },
+            captured_at: nowIso(),
+            source: { worktree: w.worktree_path, branch: w.branch_name, base: w.base_sha },
+          },
+          created_by: "system:daemon",
+          supersedes_id: last?.id ?? null,
+        })
+        uow.emit("evidence.attached", run.id, this.evidenceView(ev))
+        uow.emit("task.changes.recorded", run.id, {
+          work_item_id: item.id,
+          evidence_id: ev.id,
+          reason,
+          commits: r.commits.length,
+          files: r.files.length,
+        })
+      })
+    }
+  }
+
+  /** El último registro de cambios de la tarea, si hay. */
+  private lastChangeRecord(workItemId: string): {
+    id: string
+    sha256: string
+    head_sha: string | null
+    created_at: string
+    meta: Record<string, unknown>
+  } | null {
+    for (const e of this.repo.listEvidence({ work_item_id: workItemId })) {
+      if (e.kind !== "diff") continue
+      const meta = JSON.parse(e.metadata_json) as Record<string, unknown>
+      if (meta.record !== "task_changes") continue
+      return {
+        id: e.id,
+        sha256: e.sha256,
+        head_sha: typeof meta.head_sha === "string" ? meta.head_sha : null,
+        created_at: e.created_at,
+        meta,
+      }
+    }
+    return null
+  }
+
   private async runGitPlan(planId: string, plan: GitPlan): Promise<void> {
     const run = this.repo.getRun(plan.run_id)
     const item = run ? this.repo.getWorkItem(run.work_item_id) : null
@@ -5366,6 +5673,22 @@ export class Daemon {
     const approver = this.repo.getApproval(planId)?.decision_actor ?? null
     const r = await executePlan(this.gitPlanDeps(), planId, plan, env)
     this.repo.setApproval(planId, r.ok ? "consumed" : "expired", null)
+    // ADR-0043 §5: lo que se empujó dispara CI; Keel lo sigue aunque nadie mire.
+    for (const step of r.steps)
+      if (step.op === "push" && step.state === "done") {
+        const sha = (step.detail as { new_sha?: string } | null)?.new_sha
+        if (sha)
+          this.ci.follow({
+            projectId: run.project_id,
+            runId: run.id,
+            cwd: plan.repo_root,
+            sha,
+          })
+      }
+    if (r.ok)
+      await this.recordTaskChanges(run.id, "plan").catch((e) =>
+        console.error(`keel: no pude guardar los cambios del plan ${planId}`, e),
+      )
     // ADR-0022 §2: el cierre de una subtarea es integrarla a la feature; si choca, vuelve.
     if (r.ok && item.parent_work_item_id && this.repo.getFlow(item.id)?.stage === "close") {
       const integrated = await this.integrateSubtask(item, plan)
@@ -5842,6 +6165,51 @@ export function featureHeader(own: FeatureInfo | null, parent: FeatureInfo | nul
  * mecánico lo hace con las tools de Keel; nada arranca sin el gate del humano.
  */
 const DEFAULT_CONVERSATION_TITLE = "Conversación del proyecto"
+
+/**
+ * ADR-0043 §7: un plan de git con las convenciones del repo. La rama que se empuja lleva
+ * el prefijo del tipo de tarea y un resumen del título (`fix/portada-pre-purchase`) en
+ * lugar de `keel/…`; la PR va a la base del flujo; sin `Co-Authored-By` si el repo lo
+ * prohíbe. Lo que el agente nombró explícitamente se respeta.
+ */
+export function conventionalPlan<
+  P extends {
+    message: string
+    push?: { remote?: string | undefined; branch?: string | undefined } | undefined
+    pr?: { base?: string | undefined; title: string; body?: string | undefined } | undefined
+  },
+>(p: P, item: { kind?: string | undefined; title: string } | null, profile: ProjectProfile): P {
+  const noCoAuthor = (t: string) =>
+    profile.conventions.co_authored_by
+      ? t
+      : t
+          .split("\n")
+          .filter((l) => !/^\s*co-authored-by:/i.test(l))
+          .join("\n")
+          .replace(/\n{3,}$/, "\n")
+          .trimEnd()
+  const out: P = { ...p, message: noCoAuthor(p.message) }
+  if ((p.push || p.pr) && !p.push?.branch && item) {
+    const prefix = profile.branch_prefixes[item.kind ?? "feature"] ?? "feat/"
+    const slug = item.title
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .replace(/^(feat|fix|chore|docs|refactor|test)(\([^)]*\))?:\s*/, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48)
+      .replace(/-+$/, "")
+    if (slug) out.push = { ...p.push, branch: `${prefix}${slug}` }
+  }
+  if (p.pr)
+    out.pr = {
+      ...p.pr,
+      ...(p.pr.body !== undefined ? { body: noCoAuthor(p.pr.body) } : {}),
+      ...(!p.pr.base && profile.flow ? { base: profile.flow.work_base } : {}),
+    }
+  return out
+}
 
 /** Un error de `gh` como error del protocolo: la GUI distingue sin sesión de rechazado. */
 function ghCall<T>(work: Promise<T>): Promise<T> {

@@ -54,7 +54,8 @@ export class KeelIdentity implements Interpreter {
       {
         key: e.id,
         kind: e.kind,
-        coverage: "instrumented",
+        // Lo de GitHub Actions no lo ejecuta Keel: lo observa consultando a `gh` (ADR-0043).
+        coverage: e.kind.startsWith("ci.") ? "observed" : "instrumented",
         payload: e.payload,
         source_event_ids: [e.id],
         tool_use_id: str(e.payload.tool_use_id),
