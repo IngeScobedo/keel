@@ -746,6 +746,18 @@ export class Repo {
     return this.db.query<EventRow, [number]>("SELECT * FROM events WHERE event_seq = ?").get(seq)
   }
   /** Una página de eventos con `seq < event_seq <= upTo`, en orden. */
+  /** Lo de una tarea antes de `before`, del más nuevo al más viejo (sin la proyección interna). */
+  taskEventsBefore(workItemId: string, before: number, limit: number): EventRow[] {
+    return this.db
+      .query<EventRow, [number, string, string, string, number]>(
+        `SELECT * FROM events WHERE event_seq < ? AND kind != 'projection.updated' AND (
+           run_id IN (SELECT id FROM runs WHERE work_item_id = ?)
+           OR json_extract(payload_json, '$.work_item_id') = ?
+           OR json_extract(payload_json, '$.id') = ?)
+         ORDER BY event_seq DESC LIMIT ?`,
+      )
+      .all(before, workItemId, workItemId, workItemId, limit)
+  }
   eventsAfter(
     seq: number,
     projectId: string | null,

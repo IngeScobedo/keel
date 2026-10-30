@@ -2220,6 +2220,22 @@ export const Methods = {
       snapshot: z.object({ work_items: z.array(WorkItemViewSchema), runs: z.array(RunViewSchema) }),
     }),
   },
+  /**
+   * La historia de una tarea anterior a `before_event_seq`: sus runs y lo que habla de
+   * ella. La GUI guarda sólo los últimos eventos del proyecto; una tarea vieja se lee
+   * de aquí al abrirla.
+   */
+  "events.history": {
+    params: z.object({
+      work_item_id: z.string(),
+      before_event_seq: z.number().int().positive(),
+      limit: z.number().int().min(1).max(5000).default(2000),
+    }),
+    result: z.object({
+      events: z.lazy(() => z.array(EventNotification)),
+      more: z.boolean(),
+    }),
+  },
   "events.unsubscribe": {
     params: z.object({ subscription_id: z.string() }),
     result: z.object({ ok: z.literal(true) }),

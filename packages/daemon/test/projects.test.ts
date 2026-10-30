@@ -203,6 +203,57 @@ describe("ADR-0019 §2: proyectos", () => {
       refiled_from: expect.any(Number),
     })
   })
+
+  test("events.history da la historia de una tarea antes de un cursor, por páginas", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keel-proj-"))
+    dirs.push(dir)
+    const daemon = start(dir, initRepo(join(dir, "alpha")))
+    const c = await connect(daemon)
+    const pid = daemon.project.project_id
+    const mineTask = daemon.repo.createWorkItem({ project_id: pid, title: "vieja", kind: "chore" })
+    const other = daemon.repo.createWorkItem({ project_id: pid, title: "otra", kind: "chore" })
+    const run = daemon.repo.createRun({
+      project_id: pid,
+      work_item_id: mineTask.id,
+      purpose: "execute",
+    })
+    const add = (runId: string | null, kind: string, payload: unknown) =>
+      daemon.repo.appendEvent({
+        project_id: pid,
+        run_id: runId,
+        source: "daemon",
+        source_event_key: `${kind}:${Math.random()}`,
+        fidelity: "full",
+        adapter_version: "daemon/0",
+        kind,
+        occurred_at: null,
+        payload_json: JSON.stringify(payload),
+      })
+    add(run.id, "sdk.assistant", { text: "consulta SQL" })
+    add(null, "note.added", { work_item_id: mineTask.id })
+    add(null, "note.added", { work_item_id: other.id })
+    add(run.id, "projection.updated", {})
+    const last = add(run.id, "sdk.result", { ok: true })?.event_seq ?? 0
+
+    const all = (await c.call("events.history", {
+      work_item_id: mineTask.id,
+      before_event_seq: last + 1,
+    })) as { events: { kind: string; event_seq: number }[]; more: boolean }
+    const own = all.events.filter((e) =>
+      ["sdk.assistant", "note.added", "sdk.result"].includes(e.kind),
+    )
+    expect(own.map((e) => e.kind)).toEqual(["sdk.assistant", "note.added", "sdk.result"])
+    expect(all.events.some((e) => e.kind === "projection.updated")).toBe(false)
+    expect(all.more).toBe(false)
+
+    const page = (await c.call("events.history", {
+      work_item_id: mineTask.id,
+      before_event_seq: last,
+      limit: 1,
+    })) as { events: { kind: string }[]; more: boolean }
+    expect(page.events.map((e) => e.kind)).toEqual(["note.added"])
+    expect(page.more).toBe(true)
+  })
 })
 
 describe("ADR-0034 §6: avisos entre proyectos", () => {

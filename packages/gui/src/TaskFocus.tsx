@@ -37,6 +37,7 @@ import { RunChat } from "./RunChat.js"
 import { workspaceOf } from "./RunView.js"
 import { TaskWork } from "./TaskWork.js"
 import { DiffView } from "./ToolCards.js"
+import { useTaskHistory } from "./task-history.js"
 import {
   attentionKey,
   checklistOf,
@@ -89,7 +90,7 @@ const dismissed = new Set<string>()
 export function TaskFocus({
   task,
   runs,
-  events,
+  events: liveEvents,
   call,
   tasks,
   onRun,
@@ -109,6 +110,8 @@ export function TaskFocus({
 }) {
   // Los ids son ULID: ordenados, el primero es el más reciente. El orden de `runs` mezcla
   // el snapshot y lo que llegó después.
+  const history = useTaskHistory(call, task.id, liveEvents)
+  const events = history.events
   const taskRuns = runs
     .filter((r) => r.work_item_id === task.id)
     .sort((a, b) => (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
@@ -286,6 +289,17 @@ export function TaskFocus({
             }}
           />
           <div className="tf-panel" data-tab={active}>
+            {active === "Conversación" && history.more && (
+              <Button
+                size="sm"
+                variant="ghost"
+                data-testid="history-more"
+                disabled={history.loading}
+                onClick={history.loadOlder}
+              >
+                Cargar lo anterior
+              </Button>
+            )}
             {active === "Conversación" &&
               (current ? (
                 <Thread

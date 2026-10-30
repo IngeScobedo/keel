@@ -9,6 +9,7 @@ import { formatCost, type Run, type WorkItem } from "./model.js"
 import { Operations } from "./Operations.js"
 import { RunChat } from "./RunChat.js"
 import type { Density } from "./ToolCards.js"
+import { useTaskHistory } from "./task-history.js"
 import { Button, Empty, Hint, Status, Tabs } from "./ui.js"
 import { usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -131,7 +132,7 @@ function initialDensity(): Density {
 function LiveRunView({
   run,
   task,
-  events,
+  events: liveEvents,
   onBack,
   onTask,
   call,
@@ -140,6 +141,7 @@ function LiveRunView({
   onFollow,
   onOpenTask,
 }: RunViewProps) {
+  const { events } = useTaskHistory(call, run.work_item_id, liveEvents)
   const [tab, setTab] = usePlaceState<(typeof liveTabs)[number]>("tab", "Chat")
   const [density, setDensity] = useState<Density>(initialDensity)
   const [stopError, setStopError] = useState("")

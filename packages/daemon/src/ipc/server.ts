@@ -253,6 +253,17 @@ export class IpcServer {
     const ctx: HandlerContext = { actor: state.actor ?? this.actor, client: state }
     if (method === "events.subscribe")
       return this.subscribe(params as { project_id?: string; after_event_seq: number }, state)
+    if (method === "events.history") {
+      const p = params as { work_item_id: string; before_event_seq: number; limit: number }
+      const rows = this.opts.repo.taskEventsBefore(p.work_item_id, p.before_event_seq, p.limit + 1)
+      return {
+        events: rows
+          .slice(0, p.limit)
+          .reverse()
+          .map((e) => this.toNotification(e)),
+        more: rows.length > p.limit,
+      }
+    }
     if (method === "events.unsubscribe") {
       const { subscription_id } = params as { subscription_id: string }
       state.subscriptions.get(subscription_id)?.unsubscribe()
