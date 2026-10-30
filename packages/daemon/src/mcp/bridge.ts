@@ -139,6 +139,12 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       (a) => client.call("handoffs.request", { ...mutation(), ...a }),
     ),
     tool(
+      "design_request",
+      "Encarga trabajo de diseño visual en Claude Design (maquetas, pantallas, propuestas visuales). Keel abre una sesión interactiva de Claude Code para tu tarea, que el humano ve en vivo, y le pega tu encargo: qué diseñar, para quién, con qué contenido y restricciones. No escribas HTML a mano para eso. Termina tu turno con un resumen: cuando la sesión acabe, Keel te manda su respuesta y los links de los diseños.",
+      z.object({ brief: z.string().min(1).max(20_000) }),
+      (a) => client.call("design.request", a),
+    ),
+    tool(
       "evidence_attach",
       "Adjunta como evidencia de tu tarea un archivo de tu worktree (resultado de pruebas, captura, diff, log). Queda con su hash y su procedencia.",
       z.object({

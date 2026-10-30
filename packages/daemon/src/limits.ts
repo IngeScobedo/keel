@@ -49,8 +49,10 @@ export function checkRunStart(
   limits: Limits,
   item: WorkItemRow,
   now: Date = new Date(),
+  /** Lo que ocupa lugar sin ser un run: las sesiones de diseño (ADR-0044 §1). */
+  others = 0,
 ): LimitCheck {
-  const live = repo.liveRuns().length
+  const live = repo.liveRuns().length + others
   if (live >= limits.max_concurrent_runs)
     return {
       ok: false,

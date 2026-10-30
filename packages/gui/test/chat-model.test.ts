@@ -360,3 +360,33 @@ describe("una conversación por turnos", () => {
     })
   })
 })
+
+describe("ADR-0044: la sesión de Claude Design en el chat", () => {
+  test("encargo, diálogo y diseño publicado; una actualización del mismo diseño no repite", () => {
+    const items = buildChat([
+      at("design.requested", {
+        work_item_id: "w",
+        from: "agent",
+        brief: "Tarjeta con descuento\nmás",
+      }),
+      at("design.session.waiting_human", { work_item_id: "w", prompt: "trust" }),
+      at("design.published", {
+        work_item_id: "w",
+        url: "https://claude.ai/artifact/X",
+        title: "Tarjeta",
+        updated: false,
+      }),
+      at("design.published", {
+        work_item_id: "w",
+        url: "https://claude.ai/artifact/X",
+        title: "Tarjeta",
+        updated: true,
+      }),
+    ])
+    expect(items.map((i) => ("text" in i ? i.text : ""))).toEqual([
+      "El agente encargó a Claude Design: Tarjeta con descuento",
+      "Claude Design espera que confíes en la carpeta: contéstalo en su terminal",
+      "Claude Design publicó «Tarjeta»: https://claude.ai/artifact/X",
+    ])
+  })
+})

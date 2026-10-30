@@ -95,6 +95,7 @@ import {
   type ClaudeAdapterDeps,
   type ClaudeProfile,
   DEFAULT_PROFILE,
+  detectClaudeBinary,
   SOURCE,
 } from "./adapters/claude.js"
 import {
@@ -113,6 +114,7 @@ import { EventBus } from "./bus.js"
 import { CiWatcher } from "./ci-watch.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
+import { DESIGN_COLS, DESIGN_ROWS, type DesignSession, DesignSessions } from "./design-session.js"
 import { DirectFsDriver, defaultSnapshotsDir } from "./direct-fs.js"
 import { createFeatureBranch, featureBranchName, integrateInto } from "./features.js"
 import {
@@ -224,6 +226,12 @@ export type DaemonOptions = {
   /** Perfil de Codex (ADR-0008); el modo suscripción necesita `subscription_enabled`. */
   codex?: Partial<CodexProfile>
   codexDeps?: CodexAdapterDeps
+  /**
+   * ADR-0044: la sesión interactiva de Claude Code para Claude Design. `claude` null: no
+   * hay binario; `socket`: un servidor de tmux propio (pruebas); `transcripts`: dónde
+   * escribe Claude Code sus transcripts.
+   */
+  design?: { claude?: string | null; socket?: string; transcripts?: string; intervalMs?: number }
   /** Raíz de los worktrees de runs; por defecto `$XDG_STATE_HOME/keel/worktrees`. */
   worktreesDir?: string
   /** Snapshots del modo sin VCS (ADR-0010); por defecto `$XDG_STATE_HOME/keel/snapshots`. */
@@ -265,6 +273,9 @@ export class Daemon {
   readonly github: GithubService
   /** ADR-0043 §5: los runs de Actions de lo que Keel empujó, como eventos `ci.run.*`. */
   readonly ci: CiWatcher
+  readonly design: DesignSessions
+  /** Quién mandó el último encargo a la sesión de diseño de cada tarea. */
+  private readonly designFrom = new Map<string, "agent" | "human">()
   /**
    * El fetch del remoto por proyecto: Entregas no lo repite en cada vistazo ni lo espera.
    * Puede tardar (la llave pide su frase por askpass); corre aparte y se usa al terminar.
@@ -376,6 +387,19 @@ export class Daemon {
     })
     // ADR-0013: el intermediario ejecuta con la credencial; el agente sólo ve el resultado.
     this.github = new GithubService(() => this.ghPath())
+    this.design = new DesignSessions({
+      claude: () => (opts.design?.claude === undefined ? detectClaudeBinary() : opts.design.claude),
+      // En el último run de la tarea, para que el chat los muestre en su hilo.
+      emit: (s, kind, payload) =>
+        this.emitSystem(kind, this.repo.lastRunFor(s.work_item_id)?.id ?? null, {
+          work_item_id: s.work_item_id,
+          ...payload,
+        }),
+      onIdle: (s, reply) => this.designIdle(s, reply),
+      ...(opts.design?.socket ? { socket: opts.design.socket } : {}),
+      ...(opts.design?.transcripts ? { transcripts: opts.design.transcripts } : {}),
+      ...(opts.design?.intervalMs ? { intervalMs: opts.design.intervalMs } : {}),
+    })
     this.ci = new CiWatcher({
       gh: () => this.ghPath(),
       emit: (projectId, runId, kind, payload) =>
@@ -518,6 +542,8 @@ export class Daemon {
     // ADR-0039: lo que esperaba lugar antes de reiniciar vuelve a la fila.
     queueMicrotask(() => {
       this.refileMisplacedEvents()
+      // ADR-0044 §1: las sesiones de diseño sobreviven al daemon en tmux.
+      for (const s of this.repo.openDesignSessions()) this.design.restore(s)
       this.scheduleAllFeatures()
     })
     let last = performance.now()
@@ -547,6 +573,7 @@ export class Daemon {
     this.broker.close()
     this.github.close()
     this.ci.stop()
+    this.design.stop()
     this.plugins.stopAll()
     this.server.stop()
     this.agentServer.stop()
@@ -793,6 +820,8 @@ export class Daemon {
       const parentId = w.parent_work_item_id
       uow.afterCommit(() => this.scheduleFeature(parentId))
     }
+    // ADR-0044 §1: la sesión de diseño vive mientras la tarea.
+    if (to === "done") uow.afterCommit(() => this.design.close(w.id, "la tarea se cerró"))
     if (!updated)
       throw rpcError(ErrorCode.conflict, "otro escritor cambió la tarea; vuelve a leerla", {
         current_revision: this.repo.getWorkItem(w.id)?.revision ?? null,
@@ -2642,6 +2671,73 @@ export class Daemon {
         requireHuman(ctx, "ver el inicio de sesión de GitHub")
         return this.github.loginState()
       },
+      "design.request": (params, ctx) => {
+        const actor = ctx.actor
+        if (actor.kind !== "agent" || !actor.run_id)
+          throw rpcError(
+            ErrorCode.unauthorized,
+            "design.request es para agentes; un humano usa design.start",
+          )
+        const run = repo.getRun(actor.run_id)
+        const w = run ? repo.getWorkItem(run.work_item_id) : null
+        if (!w) throw rpcError(ErrorCode.notFound, "tu run no tiene tarea")
+        return this.designSend(w, (params as Params<"design.request">).brief, "agent")
+      },
+      "design.start": (params, ctx) => {
+        requireHuman(ctx, "abrir la sesión de diseño")
+        const p = params as Params<"design.start">
+        return this.designSend(this.workItemIn(ctx, p.work_item_id), p.brief ?? null, "human")
+      },
+      "design.status": (params, ctx) => {
+        requireHuman(ctx, "ver la sesión de diseño")
+        const w = this.workItemIn(ctx, (params as Params<"design.status">).work_item_id)
+        const reason = !this.design.available()
+          ? "las sesiones de diseño necesitan tmux"
+          : this.design.claudePath() === null
+            ? "no encontré el binario de Claude Code (`claude`)"
+            : null
+        return {
+          available: reason === null,
+          reason,
+          session: this.designView(w.id),
+          worktrees_dir: this.opts.worktreesDir ?? defaultWorktreesDir(),
+        }
+      },
+      "design.screen": (params, ctx) => {
+        requireHuman(ctx, "ver la sesión de diseño")
+        const w = this.workItemIn(ctx, (params as Params<"design.screen">).work_item_id)
+        return {
+          text: this.design.screen(w.id),
+          cols: DESIGN_COLS,
+          rows: DESIGN_ROWS,
+          waiting: this.design.get(w.id)?.waiting ?? null,
+        }
+      },
+      "design.keys": (params, ctx) => {
+        requireHuman(ctx, "escribir en la sesión de diseño")
+        const p = params as Params<"design.keys">
+        const w = this.workItemIn(ctx, p.work_item_id)
+        try {
+          this.design.keys(w.id, {
+            ...(p.keys ? { keys: p.keys } : {}),
+            ...(p.text ? { text: p.text } : {}),
+          })
+        } catch (e) {
+          throw rpcError(ErrorCode.notFound, e instanceof Error ? e.message : String(e))
+        }
+        return { ok: true as const }
+      },
+      "design.close": (params, ctx) => {
+        requireHuman(ctx, "cerrar la sesión de diseño")
+        const w = this.workItemIn(ctx, (params as Params<"design.close">).work_item_id)
+        this.design.close(w.id, "la cerró el humano")
+        return { ok: true as const }
+      },
+      "design.open": (params, ctx) => {
+        requireHuman(ctx, "abrir el diseño en el navegador")
+        openInBrowser((params as Params<"design.open">).url)
+        return { ok: true as const }
+      },
       "github.open": (params, ctx) => {
         requireHuman(ctx, "abrir GitHub en el navegador")
         return openInBrowser((params as Params<"github.open">).url)
@@ -3730,7 +3826,7 @@ export class Daemon {
         blocks,
       })
     // ADR-0002 regla 3: concurrencia y presupuesto antes de crear nada.
-    const lim = checkRunStart(repo, this.limits, w)
+    const lim = checkRunStart(repo, this.limits, w, new Date(), this.design.count())
     if (!lim.ok)
       throw rpcError(
         ErrorCode.limitExceeded,
@@ -4850,7 +4946,7 @@ export class Daemon {
         repo.liveRunFor(c.id) !== null ||
         ["running", "waiting_human", "needs_review", "failed"].includes(c.lifecycle),
     )
-    const live = repo.liveRuns().length
+    const live = repo.liveRuns().length + this.design.count()
     const limit = this.limits.max_concurrent_runs
     return {
       max_concurrent_runs: limit,
@@ -6363,6 +6459,84 @@ export class Daemon {
     runUnitOfWork(this.uowDeps(), this.systemScope(projectId), (uow) =>
       uow.emit(kind, null, payload),
     )
+  }
+
+  private designView(workItemId: string) {
+    const s = this.design.get(workItemId)
+    return s
+      ? {
+          name: s.name,
+          session_id: s.session_id,
+          started_at: s.started_at,
+          waiting: s.waiting,
+          busy: s.busy,
+          attach: `tmux attach -t ${s.name}`,
+        }
+      : null
+  }
+
+  /**
+   * ADR-0044 §1 y §2: abre la sesión de diseño de la tarea si no existe (cuenta contra
+   * el límite de runs) y le encarga `brief`, enmarcado con la tarea y su frontera.
+   */
+  private designSend(w: WorkItemRow, brief: string | null, from: "agent" | "human") {
+    if (!this.design.get(w.id)) {
+      // ADR-0044 §1: la que pide el run vivo de la tarea usa el lugar de ese run.
+      const own = from === "agent" && this.repo.liveRunFor(w.id) ? 1 : 0
+      const lim = checkRunStart(this.repo, this.limits, w, new Date(), this.design.count() - own)
+      if (!lim.ok)
+        throw rpcError(
+          ErrorCode.limitExceeded,
+          `${lim.message}: la sesión de diseño cuenta como un run`,
+          { limit: lim.limit, ...lim.details },
+          lim.retryable,
+        )
+      try {
+        this.design.open(w, this.taskCwd(w))
+      } catch (e) {
+        throw rpcError(ErrorCode.internal, e instanceof Error ? e.message : String(e))
+      }
+    }
+    let delivery: "sent" | "queued" | "waiting_human" | "none" = "none"
+    if (brief) {
+      const frontier = this.subtaskOf(w.id)?.frontier ?? []
+      const text = [
+        `Encargo de Keel para ${w.display_id} · ${w.title}.`,
+        "",
+        brief,
+        "",
+        "Trabaja en Claude Design con la tool Artifact (quickstart con intent design).",
+        frontier.length
+          ? `No edites archivos del repo fuera de: ${frontier.join(", ")}.`
+          : "No edites archivos del repo.",
+        "Al terminar responde con el link del diseño y un resumen breve.",
+      ].join("\n")
+      delivery = this.design.send(w.id, text)
+      this.designFrom.set(w.id, from)
+      this.emitSystem("design.requested", this.repo.lastRunFor(w.id)?.id ?? null, {
+        work_item_id: w.id,
+        from,
+        brief: brief.slice(0, 2000),
+        delivery,
+      })
+    }
+    return {
+      session: this.designView(w.id) as NonNullable<ReturnType<Daemon["designView"]>>,
+      delivery,
+    }
+  }
+
+  /** La sesión terminó su turno: el agente que lo pidió recibe la respuesta y los links. */
+  private designIdle(s: DesignSession, reply: { text: string; urls: string[] }): void {
+    if (this.designFrom.get(s.work_item_id) !== "agent") return
+    const links = reply.urls.length ? ` Diseños: ${reply.urls.join(", ")}.` : ""
+    const text = `La sesión de Claude Design terminó el encargo.${links} Respondió: «${reply.text.slice(0, 1500)}»`
+    if (this.repo.getFlow(s.work_item_id)) this.continueFlow(s.work_item_id, text)
+    else {
+      const live = this.repo.liveRunFor(s.work_item_id)
+      if (live && this.providerOf(live).sendMessage(live.id, text))
+        this.emitSystem("run.keel_message", live.id, { text })
+    }
   }
 
   /**

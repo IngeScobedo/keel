@@ -899,6 +899,39 @@ export const SettingsViewSchema = z.object({
 })
 export type SettingsView = z.infer<typeof SettingsViewSchema>
 
+export const DesignWaitingSchema = z.enum(["trust", "permission"]).nullable()
+export const DesignKeySchema = z.enum([
+  "Enter",
+  "Escape",
+  "Up",
+  "Down",
+  "Left",
+  "Right",
+  "Tab",
+  "BTab",
+  "BSpace",
+  "1",
+  "2",
+  "3",
+  "4",
+  "y",
+  "n",
+])
+export const DesignSessionViewSchema = z.object({
+  name: z.string(),
+  session_id: z.string(),
+  started_at: z.string(),
+  waiting: DesignWaitingSchema,
+  busy: z.boolean(),
+  /** Para abrirla en la terminal del humano. */
+  attach: z.string(),
+})
+export const DesignSendResultSchema = z.object({
+  session: DesignSessionViewSchema,
+  /** `sent`: pegado en el prompt; `queued`: tras el turno en curso; `waiting_human`: tras un diálogo. */
+  delivery: z.enum(["sent", "queued", "waiting_human", "none"]),
+})
+
 export const Methods = {
   "work_items.create": {
     params: MutationMeta.extend({
@@ -2221,6 +2254,58 @@ export const Methods = {
     }),
   },
   /**
+   * ADR-0044: el agente le encarga algo a la sesión interactiva de Claude Code de su
+   * tarea (Claude Design). Keel la abre si no existe y le pega el encargo en su prompt.
+   */
+  "design.request": {
+    params: z.object({ brief: z.string().min(1).max(20_000) }),
+    result: DesignSendResultSchema,
+  },
+  /** El humano abre la sesión de diseño de una tarea y, si quiere, le manda un encargo. */
+  "design.start": {
+    params: z.object({ work_item_id: z.string(), brief: z.string().min(1).max(20_000).optional() }),
+    result: DesignSendResultSchema,
+  },
+  "design.status": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({
+      /** Hay tmux y `claude`: se puede abrir una sesión. */
+      available: z.boolean(),
+      reason: z.string().nullable(),
+      session: DesignSessionViewSchema.nullable(),
+      /** Confiar en esta carpeta en Claude Code cubre los worktrees de todas las tareas. */
+      worktrees_dir: z.string(),
+    }),
+  },
+  /** La pantalla de la sesión con sus colores (SGR), para mostrarla en la GUI. */
+  "design.screen": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({
+      text: z.string().nullable(),
+      cols: z.number().int(),
+      rows: z.number().int(),
+      waiting: DesignWaitingSchema,
+    }),
+  },
+  /** Teclas o texto del humano para la sesión: contestar la confianza o un permiso. */
+  "design.keys": {
+    params: z.object({
+      work_item_id: z.string(),
+      keys: z.array(DesignKeySchema).max(20).optional(),
+      text: z.string().max(4000).optional(),
+    }),
+    result: z.object({ ok: z.literal(true) }),
+  },
+  "design.close": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({ ok: z.literal(true) }),
+  },
+  /** Abre un diseño en el navegador del humano; sólo links de claude.ai. */
+  "design.open": {
+    params: z.object({ url: z.string().regex(/^https:\/\/claude\.ai\//) }),
+    result: z.object({ ok: z.literal(true) }),
+  },
+  /**
    * La historia de una tarea anterior a `before_event_seq`: sus runs y lo que habla de
    * ella. La GUI guarda sólo los últimos eventos del proyecto; una tarea vieja se lee
    * de aquí al abrirla.
@@ -2312,6 +2397,7 @@ export type MethodName = keyof typeof Methods
  */
 export const AGENT_METHODS: readonly MethodName[] = [
   "daemon.health",
+  "design.request",
   "session.bind_agent",
   "work_items.list",
   "work_items.get",

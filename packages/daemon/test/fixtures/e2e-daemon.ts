@@ -16,6 +16,7 @@ import { Daemon, IpcClient } from "../../src/index.ts"
 import { initRepo } from "../git-fixture.ts"
 import { writeFakeAnsible } from "./fake-ansible.ts"
 import { isConversationKey } from "../../src/store/repo.ts"
+import { writeFakeClaudeDesign } from "./fake-claude-design.ts"
 import { writeFakeGh } from "./fake-gh.ts"
 import { makeFlowRepo } from "./flow-repo.ts"
 import { memoryKeyStore } from "../../src/vault/keystore.ts"
@@ -37,6 +38,11 @@ initRepo(join(dir, "repo"))
 if (process.env.KEEL_E2E_DELIVERY === "1") makeFlowRepo(join(dir, "repo"), join(dir, "origin.git"))
 // Un segundo repo para abrirlo desde la GUI (ADR-0019 §2).
 const otherRepo = initRepo(join(dir, "otro"))
+const designSocket = `keel-e2e-design-${process.pid}`
+const mkdirP = (p: string) => {
+  mkdirSync(p, { recursive: true })
+  return p
+}
 const daemon: Daemon = new Daemon({
   dbPath: join(dir, "keel.sqlite"),
   socketPath: join(dir, "keel.sock"),
@@ -71,6 +77,13 @@ const daemon: Daemon = new Daemon({
   },
   mcpBridge: false,
   // ADR-0043: un gh doble; con KEEL_E2E_GH_LOGGED_OUT=1 arranca sin sesión.
+  // ADR-0044: la sesión de diseño con un `claude` falso, en un servidor de tmux propio.
+  design: {
+    claude: writeFakeClaudeDesign(mkdirP(join(dir, "design")), join(dir, "transcripts")),
+    socket: designSocket,
+    transcripts: join(dir, "transcripts"),
+    intervalMs: 200,
+  },
   gh: writeFakeGh(join(dir, "bin"), { loggedIn: process.env.KEEL_E2E_GH_LOGGED_OUT !== "1" }),
   // El vault con un llavero en memoria: las pruebas no tocan el llavero del sistema.
   keystore: memoryKeyStore(),
@@ -160,6 +173,11 @@ async function stop() {
   stopping = true
   await daemon.idle()
   daemon.stop()
+  try {
+    execFileSync("tmux", ["-L", designSocket, "kill-server"], { stdio: "ignore" })
+  } catch {
+    // Sin sesión de diseño no hubo servidor de tmux.
+  }
   rmSync(dir, { recursive: true, force: true })
   process.exit(0)
 }

@@ -777,6 +777,26 @@ export class Repo {
           .all(seq, upTo, limit)
   }
   /** Eventos de un tipo que nombran una tarea en su payload, en orden. */
+  /** ADR-0044: las sesiones de diseño abiertas que no se cerraron. */
+  openDesignSessions(): {
+    name: string
+    session_id: string
+    work_item_id: string
+    project_id: string
+    cwd: string
+    started_at: string
+  }[] {
+    return this.db
+      .query<{ payload_json: string }, []>(
+        `SELECT payload_json FROM events e WHERE kind = 'design.session_started'
+           AND NOT EXISTS (SELECT 1 FROM events c WHERE c.kind = 'design.session_closed'
+             AND c.event_seq > e.event_seq
+             AND json_extract(c.payload_json, '$.name') = json_extract(e.payload_json, '$.name'))
+         ORDER BY event_seq`,
+      )
+      .all()
+      .map((r) => JSON.parse(r.payload_json))
+  }
   /** Eventos de sistema cuyo proyecto no es el de la tarea de la que hablan, sin copia aún. */
   misplacedEvents(): (EventRow & { target_project_id: string })[] {
     return this.db

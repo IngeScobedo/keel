@@ -26,6 +26,7 @@ import { ApprovalCard } from "./ApprovalCard.js"
 import type { Approval, FileDiff } from "./chat-model.js"
 import { STAGE_LABEL } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
+import { DesignSessionCard, DesignStart } from "./DesignSession.js"
 import { EvidencePanel } from "./Evidence.js"
 import { PrCard } from "./GitHub.js"
 import { GitPlanCard } from "./GitPlanCard.js"
@@ -265,6 +266,7 @@ export function TaskFocus({
               feature={task.feature}
             />
           )}
+          {task.lifecycle !== "done" && <DesignStart task={task} events={events} call={call} />}
           {onCloseTask && task.lifecycle !== "done" && task.lifecycle !== "running" && (
             <section className="tf-section">
               <h3>Revisión humana</h3>
@@ -289,6 +291,8 @@ export function TaskFocus({
             }}
           />
           <div className="tf-panel" data-tab={active}>
+            {/* ADR-0044: una sesión que espera al humano no depende de la pestaña. */}
+            <DesignSessionCard task={task} events={events} call={call} />
             {active === "Conversación" && history.more && (
               <Button
                 size="sm"

@@ -52,8 +52,11 @@ Lo medido en el spike (Claude Code 2.1.314):
   la lanza.
 - **Identidad:** `--session-id` lo fija Keel, y `-n` le da un nombre con la
   clave de la tarea.
-- **Límite:** cuenta como un run vivo contra `max_concurrent_runs` (regla 5). Si
-  no hay lugar, el agente recibe el error y la GUI lo dice.
+- **Límite:** cuenta como un run vivo contra `max_concurrent_runs` (regla 5).
+  - Si la pide el run vivo de la misma tarea, usa el lugar de ese run: el agente
+    termina su turno al pedirla. Con el default de un run, ésa es la única forma
+    de que funcione.
+  - Si no hay lugar, el que la pidió recibe el error y la GUI lo dice.
 - **Cierre:** se cierra al cerrar la tarea o cuando el humano la cierra. Tras
   reiniciar el daemon se recupera de sus eventos y de `tmux has-session`.
 
@@ -106,7 +109,8 @@ las tareas.
    escriba nada si su Claude Code no pide permisos. Medido en el spike: 24 s.
 2. La GUI muestra la pantalla de la sesión en vivo y deja contestar el diálogo
    de confianza con teclas.
-3. Con `max_concurrent_runs` lleno, `design_request` falla con el motivo.
+3. Con `max_concurrent_runs` lleno por otras tareas, la sesión no se abre y el
+   error dice el motivo. La que pide el run de la propia tarea sí se abre.
 4. El link aparece en la tarea con «Abrir» y queda en su historia.
 
 ## Consecuencias

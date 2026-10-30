@@ -349,6 +349,41 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           text: `Se integró ${p.key ?? ""} · ${String(p.title)} a ${String(p.branch)}`,
         })
         break
+      // ADR-0044: la sesión de Claude Design de la tarea; su detalle vive en su tarjeta.
+      case "design.requested":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "info",
+          subtask_id: null,
+          text: `${p.from === "agent" ? "El agente encargó" : "Encargaste"} a Claude Design: ${String(p.brief).split("\n")[0]?.slice(0, 160)}`,
+        })
+        break
+      case "design.session.waiting_human":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "warn",
+          subtask_id: null,
+          text:
+            p.prompt === "trust"
+              ? "Claude Design espera que confíes en la carpeta: contéstalo en su terminal"
+              : "Claude Design pide un permiso: contéstalo en su terminal",
+        })
+        break
+      case "design.published":
+        if (p.updated !== true)
+          items.push({
+            kind: "method",
+            key,
+            event: "feature",
+            tone: "done",
+            subtask_id: null,
+            text: `Claude Design publicó «${String(p.title ?? "un diseño")}»: ${String(p.url)}`,
+          })
+        break
       case "feature.subtask_returned":
         items.push({
           kind: "method",
