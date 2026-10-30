@@ -213,7 +213,7 @@ export async function fetchOrigin(
   root: string,
   env: Record<string, string>,
 ): Promise<string | null> {
-  const r = await git(root, ["fetch", "--quiet", "--prune", "origin"], env, 120_000)
+  const r = await git(root, ["fetch", "--quiet", "--prune", "origin"], env, 90_000)
   return r.code === 0 ? null : r.err.split("\n").slice(-2).join(" · ") || "git fetch falló"
 }
 

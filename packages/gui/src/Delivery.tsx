@@ -107,6 +107,12 @@ export function Delivery({ call }: { call: Call }) {
           </Button>
         </div>
       )}
+      {st.fetching && (
+        <Hint>
+          Trayendo el remoto (git fetch)… Lo que ves son las ramas de la última vez; si tu llave
+          pide su frase, Keel te la pregunta.
+        </Hint>
+      )}
       {(st.fetch_error || st.gh_error || error) && (
         <p className="error-banner" role="alert">
           {[

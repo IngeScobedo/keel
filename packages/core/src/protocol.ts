@@ -667,6 +667,8 @@ export const DeliveryStatusSchema = z.object({
   /** `confirmed` en el perfil, o sólo `detected` por Keel. */
   flow_source: z.enum(["confirmed", "detected"]).nullable(),
   fetch_error: z.string().nullable(),
+  /** El `git fetch` sigue en curso: lo que se ve son las refs locales de antes. */
+  fetching: z.boolean(),
   branches: z.array(
     z.object({
       name: z.string(),

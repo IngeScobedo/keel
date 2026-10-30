@@ -255,8 +255,14 @@ export class Daemon {
   readonly broker: ResourceBroker
   /** ADR-0043: GitHub por el `gh` del humano. */
   readonly github: GithubService
-  /** El último fetch del remoto por proyecto: Entregas no lo repite en cada vistazo. */
-  private readonly fetchedAt = new Map<string, number>()
+  /**
+   * El fetch del remoto por proyecto: Entregas no lo repite en cada vistazo ni lo espera.
+   * Puede tardar (la llave pide su frase por askpass); corre aparte y se usa al terminar.
+   */
+  private readonly fetches = new Map<
+    string,
+    { at: number; running: Promise<void> | null; error: string | null }
+  >()
   /** «Suele tardar» por workflow y repo, refrescado cada 10 min. */
   private readonly typicalRun = new Map<string, { at: number; ms: number | null }>()
   /** ADR-0025: el vault y las credenciales de las conexiones. */
@@ -2508,7 +2514,7 @@ export class Daemon {
               toSha: p.to_sha,
               message: promo.message,
             })
-            this.fetchedAt.delete(pid)
+            this.fetches.delete(pid)
             this.emitSystem("git.promotion.completed", null, {
               project_id: pid,
               from: p.from,
@@ -5186,21 +5192,30 @@ export class Daemon {
         flow: null,
         flow_source: null,
         fetch_error: null,
+        fetching: false,
         branches: [],
         promotions: [],
         open_prs: null,
         gh_error: null,
       }
-    let fetch_error: string | null = null
-    if (Date.now() - (this.fetchedAt.get(pid) ?? 0) > 60_000) {
+    const fetch = this.fetches.get(pid) ?? { at: 0, running: null, error: null }
+    this.fetches.set(pid, fetch)
+    if (!fetch.running && Date.now() - fetch.at > 60_000) {
       const g = this.credentials.gitEnv(pid, this.noAskpassPath())
-      try {
-        fetch_error = await fetchOrigin(root, g.env)
-      } finally {
-        g.done()
-      }
-      if (!fetch_error) this.fetchedAt.set(pid, Date.now())
+      fetch.running = fetchOrigin(root, g.env)
+        .then((error) => {
+          fetch.error = error
+        })
+        .finally(() => {
+          g.done()
+          fetch.at = Date.now()
+          fetch.running = null
+        })
+      // Un fetch rápido se espera un momento; uno lento sigue aparte.
+      await Promise.race([fetch.running, Bun.sleep(2_500)])
     }
+    const fetch_error = fetch.error
+    const fetching = fetch.running !== null
     const names = [flow.work_base, ...flow.promotions.map((x) => x.to)]
     const envOf = (b: string) => flow.promotions.find((x) => x.to === b)?.environment ?? null
     const bin = this.ghPath()
@@ -5269,7 +5284,7 @@ export class Daemon {
       } catch (e) {
         gh_error = e instanceof Error ? e.message : String(e)
       }
-    return { flow, flow_source, fetch_error, branches, promotions, open_prs, gh_error }
+    return { flow, flow_source, fetch_error, fetching, branches, promotions, open_prs, gh_error }
   }
 
   /** El `gh` del humano: el de las opciones o el del PATH (ADR-0015 §5, ADR-0043 §1). */
