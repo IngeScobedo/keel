@@ -7,7 +7,8 @@
   - ADR-0015 (plan de git aprobado; la PR con el `gh` del usuario; «el merge a
     la rama principal es una decisión humana»): este ADR le da superficie a esa
     decisión y la extiende a las promociones.
-  - ADR-0002 (Keel no implementa login ni guarda credenciales de terceros).
+  - ADR-0002 (Keel no implementa login ni guarda credenciales de terceros; §1
+    abre la terminal del CLI para su login), ADR-0003 (panes en tmux).
   - ADR-0038 (gates como objetos; `deploy-approval`), ADR-0026 (producción
     pregunta), ADR-0031 §5 (la ejecución se ve en vivo como tarjeta).
   - ADR-0021 §5 (el perfil del proyecto: ramas protegidas y prefijos), ADR-0011
@@ -53,17 +54,47 @@ que dice «creó la PR #n». Lo demás pasa en GitHub:
 
 ## Decisión
 
-### 1. GitHub a través del `gh` del humano
+### 1. GitHub es una integración de primer nivel en `@keel/git`, sobre el `gh` del humano
 
-- Keel habla con GitHub sólo por el `gh` instalado y autenticado del humano
-  (`gh api`, `gh pr`, `gh run`, con salida JSON). No hay OAuth, token propio ni
-  GitHub App (ADR-0002).
-- Si `gh` falta o no tiene sesión, la GUI lo dice con el comando para
-  arreglarlo. Lo de git local sigue funcionando.
-- El adaptador vive en el daemon (`github/`), con APIs de Node, hasta que tenga
-  un segundo consumidor (ADR-0007).
-- Cada lectura cuesta de 1 a 1.6 s (spike). Keel sigue lo que está vivo y no
+El humano, al revisar este ADR:
+
+> si hace falta, integrar GitHub como integración de primer nivel en
+> `@keel/git`, que soporte `gh`, y pongamos inicio de sesión.
+
+- **Dónde vive.** `@keel/git/github` es un módulo propio del paquete, con su
+  export y APIs de Node (ADR-0007):
+  - detección de `gh` y su sesión;
+  - PRs, merges, runs y sus pasos.
+
+  El núcleo de git (worktrees, commit, push, merge de promociones) no lo
+  importa: sigue sin saber de GitHub, como pide ADR-0015. El daemon y otros
+  harness lo usan igual.
+
+- **Cómo habla con GitHub.** Sólo por el `gh` instalado del humano (`gh api`,
+  `gh pr`, `gh run`, con salida JSON). Keel no tiene OAuth, token propio ni
+  GitHub App, y nunca lee el almacén de `gh` (ADR-0002, reglas 1 y 2).
+- **Cada lectura cuesta de 1 a 1.6 s** (spike). Keel sigue lo que está vivo y no
   barre el repo.
+
+#### Inicio de sesión: el de `gh`, desde Keel
+
+Es el mismo criterio que con `claude` (ADR-0002 §1) y `codex`: Keel abre el
+login del CLI del humano y no lo conduce.
+
+- **Ajustes → Integraciones → GitHub** muestra el estado:
+  - si `gh` está instalado y su versión;
+  - la cuenta y el host con sesión;
+  - el protocolo de git (`ssh` o `https`).
+- **«Iniciar sesión en GitHub»** abre un pane de terminal de Keel (tmux,
+  ADR-0003) con `gh auth login --hostname github.com --web`.
+  - `gh` conduce el flujo en el navegador y guarda el token en su almacén.
+  - Keel sólo ve terminar el comando y vuelve a leer `gh auth status`.
+- **«Cambiar de cuenta»** abre `gh auth switch` de la misma forma. Keel no
+  ofrece «cerrar sesión»: eso es del humano en su terminal.
+- **Sin `gh` instalado**, la pantalla dice cómo instalarlo para su sistema. Keel
+  no lo instala ni lo empaqueta (ADR-0002, regla 3).
+- **Sin sesión**, cada tarjeta de PR o de pipeline lleva al mismo botón. Lo de
+  git local sigue funcionando.
 
 ### 2. El flujo de ramas es del proyecto, detectado y confirmado
 
@@ -188,8 +219,11 @@ co_authored_by = false            # Keel no agrega Co-Authored-By a sus commits
 
 ## Criterios de aceptación
 
-- Sin `gh` autenticado, la tarjeta de PR explica cómo arreglarlo y el commit y
-  el push siguen funcionando.
+- Sin `gh` autenticado, la tarjeta de PR lleva a «Iniciar sesión en GitHub»; al
+  terminar `gh auth login` en el pane, la tarjeta se actualiza sola. El commit y
+  el push siguen funcionando mientras tanto.
+- El grep de CI de ADR-0002 sigue pasando: Keel no lee el almacén de `gh` y no
+  aparece ningún flujo OAuth propio.
 - **Mergear:** se hace desde la tarjeta con _squash and merge_, con el título
   editado. Si alguien empujó a la PR después de verla, el merge se rechaza y la
   tarjeta muestra la nueva cabeza.
@@ -207,6 +241,7 @@ co_authored_by = false            # Keel no agrega Co-Authored-By a sus commits
 
 ## Consecuencias
 
+- `@keel/git` gana el export `./github`. Su núcleo no cambia de dependencias.
 - El perfil del proyecto gana `flow` y `conventions`.
 - **Seguir runs consume llamadas:** a 5 s, 720 por hora por run activo, contra
   5000 por hora del límite autenticado.
@@ -222,6 +257,12 @@ co_authored_by = false            # Keel no agrega Co-Authored-By a sus commits
 
 - **Abrir GitHub en el navegador.** Es lo de hoy: el hilo se pierde y Keel no
   sabe qué pasó después.
+- **Un login propio de Keel (OAuth o device flow con `client_id` de Keel).** Es
+  lo que ADR-0002 prohíbe. `gh auth login` da la misma experiencia, con el token
+  fuera de Keel.
+- **GitHub dentro del núcleo de `@keel/git`.** Mezcla un host con las
+  operaciones de git y obliga a que todo consumidor cargue GitHub. Como módulo
+  del paquete queda de primer nivel sin ese acople.
 - **Un token propio o una GitHub App.** Keel tendría que guardar credenciales e
   implementar login (ADR-0002).
 - **Promover con PR (`development → stage`).** El repo no lo hace así: sus
