@@ -18,7 +18,7 @@ jobs:
       - run: bun run typecheck
       - run: bun run test
       - name: Las librerías cargan en Node (ADR-0007 §4)
-        run: node --input-type=module -e "await import('./packages/git/dist/index.js')"
+        run: node --input-type=module -e "await import('./packages/git/dist/index.js'); await import('./packages/git/dist/github/index.js')"
       - name: Renderer GUI
         run: bun run gui:build
       - name: Librerías de sistema para Tauri (Linux)
@@ -41,7 +41,7 @@ jobs:
       - run: bun run docs:validate-ddl
       - name: Keel no toca archivos de credenciales (ADR-0002)
         run: |
-          ! grep -rnE '\.claude\.json|\.codex/auth\.json|credentials\.json' packages spikes scripts --include='*.ts' --exclude-dir=node_modules --exclude-dir=__fixtures__ \
+          ! grep -rnE '\.claude\.json|\.codex/auth\.json|credentials\.json|gh/hosts\.yml' packages spikes scripts --include='*.ts' --exclude-dir=node_modules --exclude-dir=__fixtures__ \
             | grep -v 'ADR-0002\|no lee\|nunca\|probe' || { echo "ruta de credenciales en código"; exit 1; }
 
   # Windows nativo: lo que POSIX tapa (archivos abiertos, rutas C:/, CRLF, AF_UNIX con

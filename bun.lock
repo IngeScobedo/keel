@@ -36,6 +36,9 @@
     "packages/git": {
       "name": "@keel/git",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "^4.4.3",
+      },
       "devDependencies": {
         "@types/node": "^26.6.4",
       },
@@ -82,6 +85,10 @@
       "dependencies": {
         "@openai/codex-sdk": "^0.162.0",
       },
+    },
+    "spikes/github-flow": {
+      "name": "@keel/spike-github-flow",
+      "version": "0.0.0",
     },
     "spikes/pdf-text": {
       "name": "@keel/spike-pdf-text",
@@ -194,6 +201,8 @@
     "@keel/spike-browser-live": ["@keel/spike-browser-live@workspace:spikes/browser-live"],
 
     "@keel/spike-codex-app-server": ["@keel/spike-codex-app-server@workspace:spikes/codex-app-server"],
+
+    "@keel/spike-github-flow": ["@keel/spike-github-flow@workspace:spikes/github-flow"],
 
     "@keel/spike-pdf-text": ["@keel/spike-pdf-text@workspace:spikes/pdf-text"],
 

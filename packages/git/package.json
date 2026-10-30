@@ -2,13 +2,17 @@
   "name": "@keel/git",
   "version": "0.0.0",
   "private": true,
-  "description": "Worktrees aislados por run, captura y rescate de cambios, reconciliación desde git. Librería de Keel sin decisiones de producto (ADR-0007); corre en Node.",
+  "description": "Worktrees aislados por run, captura y rescate de cambios, reconciliación desde git; GitHub por el gh del humano en ./github (ADR-0043). Librería de Keel sin decisiones de producto (ADR-0007); corre en Node.",
   "type": "module",
   "license": "MIT",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./github": {
+      "types": "./dist/github/index.d.ts",
+      "default": "./dist/github/index.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -24,6 +28,9 @@
     "typecheck": "tsc -b",
     "test": "bun test",
     "dev": "tsc -b --watch"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.6.4"
