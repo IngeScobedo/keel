@@ -130,6 +130,7 @@ import { detectProfile } from "./project-profile.js"
 import { Research, ResearchError } from "./research.js"
 import { describePlaybook, discoverPlaybooks } from "./resources/ansible-discover.js"
 import { BrokerError, ResourceBroker } from "./resources/broker.js"
+import { describeTerraform, discoverTerraform } from "./resources/terraform-discover.js"
 import { createRunContext } from "./run-context.js"
 import { bwrapPath, type SandboxSpec } from "./sandbox.js"
 import { SemanticProjector } from "./semantic.js"
@@ -343,6 +344,7 @@ export class Daemon {
         password: (c, x) => this.credentials.password(c, x),
         ansible: (c, h, x, d) => this.credentials.ansible(c, h, x, d),
       },
+      projectRoot: (projectId) => this.repo.projectRoot(projectId) ?? this.rootPath,
       // ADR-0031 §3: se despliega desde el checkout del proyecto, al día y limpio.
       deployBase: async (projectId, dir) => {
         const root = this.repo.projectRoot(projectId) ?? this.rootPath
@@ -2398,6 +2400,24 @@ export class Daemon {
             p.connection_id,
           ),
         )
+      },
+      "terraform.discover": (params, ctx) => {
+        requireHuman(ctx, "buscar carpetas de Terraform")
+        const p = params as Params<"terraform.discover">
+        const root = repo.projectRoot(this.scopeOf(ctx, p.project_id)) ?? this.rootPath
+        let dirs: ReturnType<typeof discoverTerraform>
+        if (p.path) {
+          const dir = resolve(root, p.path)
+          if (relative(root, dir).startsWith(".."))
+            throw rpcError(
+              ErrorCode.invalidParams,
+              "la carpeta de Terraform tiene que estar dentro del proyecto",
+            )
+          const one = describeTerraform(root, dir)
+          if (!one) throw rpcError(ErrorCode.invalidParams, "esa carpeta no tiene archivos .tf")
+          dirs = [one]
+        } else dirs = discoverTerraform(root)
+        return terraformVersion().then((terraform) => ({ root, terraform, dirs }))
       },
       "ansible.discover": (params, ctx) => {
         requireHuman(ctx, "buscar playbooks")
@@ -5423,6 +5443,26 @@ export function featureHeader(own: FeatureInfo | null, parent: FeatureInfo | nul
  * ADR-0024 y ADR-0042: el encabezado del orquestador. Conversa, entiende y propone; lo
  * mecánico lo hace con las tools de Keel; nada arranca sin el gate del humano.
  */
+/** El `terraform` del PATH del daemon, sin colgar el alta si no contesta. */
+async function terraformVersion(): Promise<{ version: string | null; error: string | null }> {
+  try {
+    const proc = Bun.spawn(["terraform", "version", "-json"], { stdout: "pipe", stderr: "pipe" })
+    const timer = setTimeout(() => proc.kill(), 5000)
+    const out = await new Response(proc.stdout).text()
+    clearTimeout(timer)
+    if ((await proc.exited) !== 0) return { version: null, error: "terraform version falló" }
+    return {
+      version: String((JSON.parse(out) as { terraform_version?: string }).terraform_version ?? ""),
+      error: null,
+    }
+  } catch {
+    return {
+      version: null,
+      error: "no encontré terraform en el PATH del daemon: instálalo para planear y aplicar",
+    }
+  }
+}
+
 export function conversationHeader(): string {
   return [
     "[Keel] Eres el orquestador del proyecto. Conversas con el humano como en Claude Code, en sólo lectura: no editas archivos.",

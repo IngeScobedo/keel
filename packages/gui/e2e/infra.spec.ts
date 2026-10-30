@@ -87,6 +87,34 @@ test("Ansible: el destino se elige, no se escribe: playbook detectado, conexión
   await expect(conn.getByTestId("deploy").getByRole("button", { name: "Check" })).toBeVisible()
 })
 
+test("Terraform: la carpeta se elige, no se escribe; un entorno por carpeta", async ({ page }) => {
+  test.setTimeout(45_000)
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Connections", exact: true }).click()
+  await page.getByRole("button", { name: "Nueva conexión" }).click()
+  const form = page.getByTestId("new-connection")
+  await pick(page, form.getByLabel("Tipo", { exact: true }), "Terraform")
+  const picker = form.getByTestId("terraform-picker")
+  // Keel encontró los dos entornos y el módulo, que no se aplica solo.
+  const production = picker.getByRole("radio", { name: /terraform\/environments\/production/ })
+  await expect(production).toBeChecked()
+  await expect(picker.getByRole("radio", { name: /terraform\/modules\/vpc/ })).toBeDisabled()
+  await expect(form.getByLabel("Nombre de la conexión")).toHaveValue("terraform-production")
+  await expect(form.getByLabel("Entorno", { exact: true })).toContainText("prod")
+  // Otro entorno: nombre y entorno lo siguen.
+  await picker.getByRole("radio", { name: /terraform\/environments\/stage/ }).check()
+  await expect(form.getByLabel("Nombre de la conexión")).toHaveValue("terraform-stage")
+  await expect(form.getByLabel("Entorno", { exact: true })).toContainText("staging")
+  await expect(picker).toContainText("aws · estado s3 · 2 variables")
+  // La variable sensible se llena con una referencia, nunca con el valor.
+  await picker.getByLabel("Referencia de db_password").fill("env:STAGE_DB_PASSWORD")
+  if (shots) await page.screenshot({ path: join(shots, "terraform-new.png") })
+  await form.getByRole("button", { name: "Añadir", exact: true }).click()
+  await expect(page.getByTestId("connection")).toContainText("terraform/environments/stage")
+})
+
 test("una base por túnel SSH: con una conexión existente o creada ahí mismo", async ({ page }) => {
   test.setTimeout(45_000)
   await nativeShell(page, daemon)

@@ -1,0 +1,12 @@
+/* Conexiones del proyecto: una ruta con su botón para elegirla en el diálogo. */
+@layer components {
+  .conn-path {
+    display: flex;
+    gap: var(--space-3);
+    align-items: center;
+  }
+  .conn-path input {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}

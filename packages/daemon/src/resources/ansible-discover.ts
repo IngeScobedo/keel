@@ -28,7 +28,7 @@ export type DiscoveredPlaybook = {
   inventories: string[]
 }
 
-const SKIP = new Set([
+export const SKIP = new Set([
   ".git",
   "node_modules",
   "dist",
@@ -42,8 +42,8 @@ const SKIP = new Set([
   ".turbo",
   "coverage",
 ])
-const MAX_DEPTH = 6
-const MAX_DIRS = 4000
+export const MAX_DEPTH = 6
+export const MAX_DIRS = 4000
 
 type Loose = Record<string, unknown>
 

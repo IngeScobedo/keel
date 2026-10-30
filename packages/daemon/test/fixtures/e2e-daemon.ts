@@ -94,6 +94,21 @@ if (process.env.KEEL_E2E_ANSIBLE === "1") {
     join(infra, "roles", "app", "tasks", "main.yml"),
     "- name: rota logs\n  ansible.builtin.command: logrotate -f /etc/logrotate.conf\n  tags: [logrotate]\n",
   )
+  // Terraform con un entorno por carpeta y un módulo compartido, como en Casa Matte.
+  for (const env of ["stage", "production"]) {
+    const d = join(repo, "terraform", "environments", env)
+    mkdirSync(d, { recursive: true })
+    writeFileSync(
+      join(d, "main.tf"),
+      'terraform {\n  backend "s3" {}\n  required_providers {\n    aws = { source = "hashicorp/aws" }\n  }\n}\nmodule "red" {\n  source = "../../modules/vpc"\n}\n',
+    )
+    writeFileSync(
+      join(d, "variables.tf"),
+      'variable "db_password" {\n  type      = string\n  sensitive = true\n}\nvariable "region" {\n  default = "us-east-1"\n}\n',
+    )
+  }
+  mkdirSync(join(repo, "terraform", "modules", "vpc"), { recursive: true })
+  writeFileSync(join(repo, "terraform", "modules", "vpc", "main.tf"), 'variable "cidr" {}\n')
   execFileSync("git", ["add", "."], { cwd: repo })
   execFileSync("git", ["commit", "-q", "-m", "playbook"], { cwd: repo })
   const playbook = writeFakeAnsible(join(dir, "bin"), 0.4)

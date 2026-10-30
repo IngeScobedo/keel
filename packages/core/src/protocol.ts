@@ -1471,6 +1471,40 @@ export const Methods = {
     }),
   },
   /**
+   * Las carpetas de Terraform del proyecto (o la que eligió el humano en `path`) y si hay
+   * un `terraform` que Keel pueda correr: el alta no pide escribir rutas.
+   */
+  "terraform.discover": {
+    params: z.object({ project_id: z.string().optional(), path: z.string().optional() }),
+    result: z.object({
+      root: z.string(),
+      /** `terraform version`: null si no está en el PATH del daemon. */
+      terraform: z.object({ version: z.string().nullable(), error: z.string().nullable() }),
+      dirs: z.array(
+        z.object({
+          dir: z.string(),
+          files: z.number().int(),
+          providers: z.array(z.string()),
+          backend: z.string().nullable(),
+          variables: z.array(
+            z.object({ name: z.string(), sensitive: z.boolean(), has_default: z.boolean() }),
+          ),
+          tfvars: z.array(
+            z.object({
+              file: z.string(),
+              environment: z.enum(["prod", "staging", "dev"]).nullable(),
+            }),
+          ),
+          workspaces: z.array(z.string()),
+          initialized: z.boolean(),
+          module: z.boolean(),
+          suggested_environment: z.enum(["prod", "staging", "dev"]).nullable(),
+          suggested_name: z.string(),
+        }),
+      ),
+    }),
+  },
+  /**
    * ADR-0033 §3: «Probar conexión» de una base, por el mismo camino que una consulta
    * (túnel incluido), en sólo lectura y con la credencial con que lee el agente.
    */

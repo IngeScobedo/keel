@@ -1,0 +1,30 @@
+/* El alta de Terraform: carpetas encontradas, su entorno y sus variables sensibles. */
+@layer components {
+  .tf-binary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    font-size: 12px;
+  }
+  .tf-binary.warn {
+    color: var(--color-status-waiting-human);
+  }
+  .tf-picker .ansible-playbook[data-module] {
+    opacity: 0.6;
+  }
+  .tf-env {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: var(--space-4);
+  }
+  .tf-env label,
+  .tf-secret {
+    display: grid;
+    gap: var(--space-2);
+  }
+  .tf-secret {
+    grid-template-columns: minmax(100px, auto) 1fr;
+    align-items: center;
+  }
+}

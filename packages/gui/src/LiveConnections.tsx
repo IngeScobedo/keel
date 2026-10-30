@@ -31,6 +31,8 @@ import { buildChat } from "./chat-model.js"
 import { hasNativeShell, mutationMeta } from "./client.js"
 import { InfraCard } from "./InfraCard.js"
 import type { InfraRun } from "./infra-model.js"
+import { TerraformPicker, type TerraformTarget } from "./TerraformPicker.js"
+import "./LiveConnections.css"
 import { Select } from "./ui/index.js"
 import { Button, Empty, Hint, Modal } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -99,7 +101,11 @@ const ENVS: Env[] = ["prod", "staging", "dev"]
 function target(c: Connection): string {
   const cfg = c.config
   if (c.type === "sqlite") return String(cfg.path ?? "")
-  if (c.type === "terraform") return String(cfg.dir ?? "")
+  if (c.type === "terraform")
+    return [cfg.dir, cfg.var_file, cfg.workspace && `workspace ${cfg.workspace}`]
+      .filter(Boolean)
+      .map(String)
+      .join(" · ")
   if (c.type === "ansible") return `${String(cfg.dir ?? "")}/${String(cfg.playbook ?? "")}`
   const host = String(cfg.host ?? "")
   const user = cfg.user ? `${cfg.user}@` : ""
@@ -912,6 +918,14 @@ function NewConnection({
   const [busy, setBusy] = useState(false)
   const methods = METHODS[type]
   const [target, setTarget] = useState<AnsibleTarget | null>(null)
+  const [tf, setTf] = useState<TerraformTarget | null>(null)
+  // El nombre propuesto se sigue mientras el humano no escriba el suyo.
+  const [nameTouched, setNameTouched] = useState(Boolean(str("name")))
+  useEffect(() => {
+    if (type !== "terraform" || !tf) return
+    if (!nameTouched) setName(tf.name)
+    if (tf.environment) setEnv(tf.environment)
+  }, [type, tf, nameTouched])
   // ADR-0031 §1: el destino es tan sensible como la más sensible de sus conexiones.
   const derivedEnv = useMemo(() => {
     // ADR-0033 §1: la base no es menos sensible que el servidor por el que pasa.
@@ -935,6 +949,7 @@ function NewConnection({
     const first = Object.values(target.hosts)[0]
     if (first) setName(first.replace(/^(prod|staging|dev)[-_]/, ""))
   }, [type, target, name])
+  const terraformReady = type !== "terraform" || tf !== null
   const ansibleReady =
     type !== "ansible" ||
     (target !== null &&
@@ -942,7 +957,7 @@ function NewConnection({
       Object.values(target.hosts).every(Boolean))
   async function submit(e: FormEvent) {
     e.preventDefault()
-    if (!ansibleReady) return
+    if (!ansibleReady || !terraformReady) return
     setBusy(true)
     setError("")
     const cfg: Record<string, unknown> = {}
@@ -951,6 +966,7 @@ function NewConnection({
       if (v) cfg[f.key] = f.key === "port" ? Number(v) : v
     }
     if (type === "postgres" && via) cfg.via = via
+    if (type === "terraform" && tf) Object.assign(cfg, tf.config)
     if (type === "ansible" && target) {
       cfg.dir = target.dir
       cfg.playbook = target.playbook
@@ -1007,7 +1023,10 @@ function NewConnection({
                 required
                 data-autofocus
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  setName(e.target.value)
+                  setNameTouched(true)
+                }}
               />
             </label>
             <label>
@@ -1059,6 +1078,13 @@ function NewConnection({
               connections={connections}
               projectRoot={projectRoot}
               onChange={setTarget}
+            />
+          ) : type === "terraform" ? (
+            <TerraformPicker
+              call={call}
+              projectRoot={projectRoot}
+              initialDir={str("dir")}
+              onChange={setTf}
             />
           ) : (
             <>
@@ -1114,12 +1140,30 @@ function NewConnection({
                 {FIELDS[type].map((f) => (
                   <label key={f.key}>
                     {f.label}
-                    <input
-                      aria-label={f.label}
-                      className="mono"
-                      value={config[f.key] ?? ""}
-                      onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
-                    />
+                    <span className="conn-path">
+                      <input
+                        aria-label={f.label}
+                        className="mono"
+                        value={config[f.key] ?? ""}
+                        onChange={(e) => setConfig((o) => ({ ...o, [f.key]: e.target.value }))}
+                      />
+                      {type === "sqlite" && f.key === "path" && hasNativeShell() && (
+                        <Button
+                          icon={FolderOpen}
+                          onClick={() =>
+                            void pickFile({
+                              title: "Elegir la base SQLite",
+                              defaultPath: projectRoot,
+                              filters: [
+                                { name: "SQLite", extensions: ["sqlite", "sqlite3", "db", "db3"] },
+                              ],
+                            }).then((p) => p && setConfig((o) => ({ ...o, path: p })))
+                          }
+                        >
+                          Elegir…
+                        </Button>
+                      )}
+                    </span>
                   </label>
                 ))}
               </div>
@@ -1145,13 +1189,29 @@ function NewConnection({
               </fieldset>
               <Hint>{METHOD_HINT[method]}</Hint>
               {method === "file" && (
-                <input
-                  aria-label="Ruta de la llave"
-                  className="mono"
-                  placeholder="~/.ssh/id_ed25519"
-                  value={identity}
-                  onChange={(e) => setIdentity(e.target.value)}
-                />
+                <span className="conn-path">
+                  <input
+                    aria-label="Ruta de la llave"
+                    className="mono"
+                    placeholder="~/.ssh/id_ed25519"
+                    value={identity}
+                    onChange={(e) => setIdentity(e.target.value)}
+                  />
+                  {hasNativeShell() && (
+                    <Button
+                      icon={FolderOpen}
+                      onClick={() =>
+                        void sshDir()
+                          .then((dir) =>
+                            pickFile({ title: "Elegir la llave SSH", defaultPath: dir }),
+                          )
+                          .then((p) => p && setIdentity(p))
+                      }
+                    >
+                      Elegir…
+                    </Button>
+                  )}
+                </span>
               )}
               {(method === "password" || method === "file") && (
                 <input
@@ -1163,7 +1223,7 @@ function NewConnection({
                 />
               )}
             </>
-          ) : (
+          ) : type === "terraform" ? null : (
             <label>
               Referencia del secreto (opcional)
               <input
@@ -1180,6 +1240,11 @@ function NewConnection({
               {error}
             </p>
           )}
+          {!terraformReady && (
+            <p className="muted" data-testid="terraform-missing">
+              Para añadirlo falta elegir la carpeta de Terraform.
+            </p>
+          )}
           {!ansibleReady && (
             <p className="muted" data-testid="ansible-missing">
               Para añadirlo falta{" "}
@@ -1191,7 +1256,7 @@ function NewConnection({
             <button
               type="submit"
               className="button primary"
-              disabled={!name.trim() || busy || !ansibleReady}
+              disabled={!name.trim() || busy || !ansibleReady || !terraformReady}
             >
               {prefill ? "Guardar y avisar al agente" : "Añadir"}
             </button>
@@ -1555,6 +1620,33 @@ function Deploy({ c, call, events }: { c: Connection; call: Call; events: EventN
 }
 
 /** Un daemon anterior no sabe buscar playbooks: se dice qué hacer, no «método desconocido». */
+/** El diálogo de archivos de la ventana; null si se cerró sin elegir. */
+async function pickFile(opts: {
+  title: string
+  defaultPath?: string | undefined
+  filters?: { name: string; extensions: string[] }[]
+}): Promise<string | null> {
+  const { open } = await import("@tauri-apps/plugin-dialog")
+  const chosen = await open({
+    multiple: false,
+    directory: false,
+    title: opts.title,
+    ...(opts.defaultPath ? { defaultPath: opts.defaultPath } : {}),
+    ...(opts.filters ? { filters: opts.filters } : {}),
+  })
+  return typeof chosen === "string" ? chosen : null
+}
+
+/** `~/.ssh` del humano: el diálogo abre ahí; la llave la lee ssh, no Keel. */
+async function sshDir(): Promise<string | undefined> {
+  try {
+    const { homeDir, join } = await import("@tauri-apps/api/path")
+    return await join(await homeDir(), ".ssh")
+  } catch {
+    return undefined
+  }
+}
+
 function discoverError(e: unknown): string {
   if ((e as { rpc?: { code?: number } }).rpc?.code === -32601)
     return "El daemon corre una versión anterior de Keel y no sabe buscar playbooks: reinícialo con «Daemon desactualizado», arriba."

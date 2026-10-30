@@ -17,7 +17,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs"
-import { join } from "node:path"
+import { isAbsolute, join, relative, resolve } from "node:path"
 import {
   CONNECTION_OPERATIONS,
   type ConnectionType,
@@ -168,6 +168,8 @@ export type BrokerDeps = {
   credentials?: Credentials
   /** ADR-0031 §3: el checkout del proyecto y si está al día; `dir` relativo a él. */
   deployBase?: (projectId: string, dir: string) => Promise<DeployBase>
+  /** La carpeta del proyecto: una carpeta de Terraform relativa se resuelve contra ella. */
+  projectRoot?: (projectId: string) => string
 }
 
 /** Cómo se nombra cada clase de comando ante el agente y el humano (ADR-0032 §3). */
@@ -1152,11 +1154,34 @@ export class ResourceBroker {
     secrets: string[],
     vars: Record<string, string>,
   ): Promise<RawResult> {
-    const dir = String(config.dir ?? "")
+    const raw = String(config.dir ?? "")
+    // Las que eligió el alta son relativas al proyecto; las de antes, absolutas.
+    const dir =
+      raw && !isAbsolute(raw) && this.deps.projectRoot
+        ? resolve(this.deps.projectRoot(ctx.projectId), raw)
+        : raw
     if (!dir || !existsSync(dir))
-      throw new BrokerError("invalid", "la conexión terraform necesita config.dir")
+      throw new BrokerError(
+        "invalid",
+        raw
+          ? `la carpeta de Terraform ${raw} no existe`
+          : "la conexión terraform necesita config.dir",
+      )
     const bin = String(config.terraform_path ?? "terraform")
-    const env = { ...(process.env as Record<string, string>), ...vars, TF_IN_AUTOMATION: "1" }
+    // Un entorno por workspace o por archivo de variables, dentro de la misma carpeta.
+    const workspace = config.workspace ? String(config.workspace) : null
+    const varFile = config.var_file ? String(config.var_file) : null
+    if (varFile) {
+      const rel = relative(dir, resolve(dir, varFile))
+      if (rel.startsWith("..") || isAbsolute(rel) || !existsSync(join(dir, rel)))
+        throw new BrokerError("invalid", `el archivo de variables ${varFile} no está en ${raw}`)
+    }
+    const env = {
+      ...(process.env as Record<string, string>),
+      ...vars,
+      TF_IN_AUTOMATION: "1",
+      ...(workspace ? { TF_WORKSPACE: workspace } : {}),
+    }
     const redact = (v: string) => redactKnownPatterns(redactSecrets(v, secrets))
     const mode = operation === "iac.plan" ? "plan" : "apply"
     const runKey = ulid()
@@ -1205,7 +1230,16 @@ export class ResourceBroker {
       // artefacto; vive en la carpeta privada de Keel y la aprobación se ata a su hash.
       mkdirSync(this.deps.plansDir, { recursive: true, mode: 0o700 })
       const tmp = join(this.deps.plansDir, `${ulid()}.tfplan`)
-      const plan = await tf(["plan", "-input=false", "-json", `-out=${tmp}`], onJson)
+      const plan = await tf(
+        [
+          "plan",
+          "-input=false",
+          "-json",
+          ...(varFile ? [`-var-file=${varFile}`] : []),
+          `-out=${tmp}`,
+        ],
+        onJson,
+      )
       if (plan.status !== 0) {
         rmSync(tmp, { force: true })
         throw fail("plan", plan.out)

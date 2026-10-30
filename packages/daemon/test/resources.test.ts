@@ -336,6 +336,67 @@ describe("ADR-0013: intermediario de recursos", () => {
     },
   )
 
+  // El alta elige la carpeta del proyecto: relativa, con su tfvars y su workspace.
+  test.skipIf(!Bun.which("terraform"))(
+    "terraform: carpeta relativa al proyecto, un entorno por tfvars y por workspace",
+    async () => {
+      const { dir, human, agent, exec } = await boot()
+      const tf = join(dir, "repo", "terraform")
+      mkdirSync(tf)
+      writeFileSync(
+        join(tf, "main.tf"),
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: es interpolación de HCL, no de JS
+        'variable "stage_name" {\n  default = "nada"\n}\nresource "terraform_data" "demo" {\n  input = "${terraform.workspace}-${var.stage_name}"\n}\n',
+      )
+      writeFileSync(join(tf, "stage.tfvars"), 'stage_name = "stage"\n')
+      const found = (await human.call("terraform.discover", {})) as {
+        terraform: { version: string | null }
+        dirs: { dir: string; tfvars: { file: string; environment: string | null }[] }[]
+      }
+      expect(found.terraform.version).toMatch(/^\d+\.\d+/)
+      expect(found.dirs).toMatchObject([
+        { dir: "terraform", tfvars: [{ file: "stage.tfvars", environment: "staging" }] },
+      ])
+      await expect(human.call("terraform.discover", { path: "../" })).rejects.toThrow(
+        "dentro del proyecto",
+      )
+      const c = await addConn(human, {
+        name: "terraform-stage",
+        type: "terraform",
+        environment: "staging",
+        config: { dir: "terraform", var_file: "stage.tfvars", workspace: "stage" },
+      })
+      await human.call("grants.set", {
+        ...meta(),
+        connection_id: c.id,
+        operation: "iac.plan",
+        policy: "auto",
+      })
+      const plan = (await exec(agent, "terraform-stage", "iac.plan", {})) as Awaited<
+        ReturnType<typeof exec>
+      > & { summary: string }
+      expect(plan.summary).toBe("Plan: +1 crear")
+      // El workspace lo creó init y el plan lo usó.
+      expect(existsSync(join(tf, "terraform.tfstate.d", "stage"))).toBe(true)
+      const bad = await addConn(human, {
+        name: "terraform-mal",
+        type: "terraform",
+        environment: "dev",
+        config: { dir: "terraform", var_file: "../../fuera.tfvars" },
+      })
+      await human.call("grants.set", {
+        ...meta(),
+        connection_id: bad.id,
+        operation: "iac.plan",
+        policy: "auto",
+      })
+      await expect(exec(agent, "terraform-mal", "iac.plan", {})).rejects.toThrow(
+        "no está en terraform",
+      )
+    },
+    120_000,
+  )
+
   // Terraform real (sin red: terraform_data). Donde no está instalado, se salta.
   test.skipIf(!Bun.which("terraform"))(
     "terraform: el apply sólo corre el plan aprobado; el secreto centinela no sale en nada",
