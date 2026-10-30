@@ -940,3 +940,71 @@ export function githubQuery(daemon: Daemon): QueryFn {
     }) as never
   }
 }
+
+/**
+ * ADR-0043 §4: en la conversación, «promueve development a stage». El agente mira
+ * Entregas y pide la promoción; la aprueba el humano en la tarjeta del chat.
+ */
+export function promotionQuery(daemon: Daemon): QueryFn {
+  return ({ options }) => {
+    const runId = String((options.env as Record<string, string>).KEEL_RUN_ID)
+    const session = `s-promo-${runId}`
+    const say = (text: string, n: number) =>
+      ({
+        type: "assistant",
+        uuid: `u-promo-${runId}-${n}`,
+        session_id: session,
+        parent_tool_use_id: null,
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      }) as unknown as SDKMessage
+    const run = (async function* () {
+      const row = daemon.repo.getRun(runId)
+      if (!row) return
+      yield {
+        type: "system",
+        subtype: "init",
+        session_id: session,
+        model: "claude-opus-5-5",
+        uuid: `u-promo-init-${runId}`,
+      } as unknown as SDKMessage
+      const { file } = daemon.agentTokens.issue({
+        run_id: runId,
+        project_id: row.project_id,
+        work_item_id: row.work_item_id,
+      })
+      const agent = await IpcClient.connect(daemon.agentServer.path)
+      await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+      const st = (await agent.call("delivery.status", {})) as {
+        promotions: { from: string; to: string; pending: { pr: number | null }[] }[]
+      }
+      const promo = st.promotions[0]
+      await agent.call("delivery.promote_request", {
+        request_id: "r",
+        idempotency_key: `promo-${runId}`,
+        from: promo?.from ?? "development",
+        to: promo?.to ?? "stage",
+        why: "lo pediste en la conversación",
+      })
+      agent.close()
+      yield say(
+        `Entran ${promo?.pending.map((c) => `#${c.pr}`).join(" y ")} a ${promo?.to}. Te dejé la promoción para que la apruebes.`,
+        1,
+      )
+      yield {
+        type: "result",
+        subtype: "success",
+        uuid: `u-promo-res-${runId}`,
+        session_id: session,
+        is_error: false,
+        result: "ok",
+        total_cost_usd: 0.002,
+        usage: { input_tokens: 10, output_tokens: 10 },
+      } as unknown as SDKMessage
+    })()
+    return Object.assign(run, {
+      setPermissionMode: async () => {},
+      setModel: async () => {},
+      applyFlagSettings: async () => {},
+    }) as never
+  }
+}

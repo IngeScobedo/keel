@@ -133,6 +133,8 @@ describe("ADR-0009: puente keel mcp", () => {
       "pr_status",
       "ci_status",
       "pr_merge_request",
+      "delivery_status",
+      "promote_request",
       "stage_current",
       "stage_advance",
       "task_doc_put",

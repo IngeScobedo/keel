@@ -146,3 +146,31 @@ test("Entregas: el flujo detectado, promover a stage con su deploy y a prod con 
   await expect(page.getByTestId("delivery-promoted")).toContainText("Promoviste stage → main")
   if (shots) await page.screenshot({ path: join(shots, "delivery-promoted.png") })
 })
+
+test("desde una conversación nueva: «promueve development a stage» y se aprueba en el chat", async ({
+  page,
+}) => {
+  test.setTimeout(90_000)
+  daemon = await bootDaemon({ KEEL_E2E_DELIVERY: "1" })
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Conversación", exact: true }).click()
+  const conv = page.getByTestId("project-conversation")
+  await conv.getByLabel("Pregunta al proyecto").fill("promueve development a stage")
+  await conv.getByRole("button", { name: /Preguntar/ }).click()
+
+  const card = page.getByTestId("promotion-request")
+  await expect(card).toContainText("Promover development → stage")
+  await expect(card).toContainText("#3 fix(api): cambio 3")
+  await expect(card).toContainText("Corre Deploy · stage")
+  await expect(card).toContainText("El agente lo pide")
+  if (shots) await card.screenshot({ path: join(shots, "promotion-request.png") })
+  await card.getByRole("button", { name: "Promover a stage" }).click()
+  await expect(card).toHaveAttribute("data-decision", "approved")
+  // El deploy que dispara aparece en el mismo chat.
+  await expect(page.getByText("Promoviste development → stage")).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByTestId("github-run").first()).toContainText("Deploy · stage")
+  await expect(conv.getByTestId("conv-title")).toHaveText("promueve development a stage")
+  if (shots) await page.screenshot({ path: join(shots, "promotion-chat.png") })
+})

@@ -23,6 +23,7 @@ const NEEDS_CONTEXT = new Set([
   "setup.request",
   "batch.plan",
   "github.pr_merge",
+  "delivery.promote",
 ])
 
 /** Qué se le puede contestar desde el aviso: aprobar/negar, una opción o sólo «Ver». */
@@ -54,6 +55,10 @@ function summary(a: Pending): string {
   if (tool === "git.plan") return "Propone un plan de git"
   if (tool === "stage.gate") return "Espera tu gate del método"
   if (tool === "batch.plan") return "El orquestador propone un lote: revísalo antes de arrancar"
+  if (tool === "delivery.promote") {
+    const i = (op.input ?? {}) as { from?: string; to?: string }
+    return `Pide promover ${i.from ?? ""} → ${i.to ?? ""}`
+  }
   if (tool === "github.pr_merge")
     return `Pide mergear la PR #${(op.input as { number?: number } | null)?.number ?? ""}`
   if (tool === "AskUserQuestion")

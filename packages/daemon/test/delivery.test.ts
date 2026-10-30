@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import { execFileSync } from "node:child_process"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Daemon, IpcClient } from "../src/index.ts"
@@ -305,5 +305,124 @@ describe("ADR-0043: Entregas y promociones", () => {
     expect(
       execFileSync("git", ["rev-parse", "stage"], { cwd: origin, encoding: "utf8" }).trim(),
     ).toBe(before)
+  }, 60_000)
+
+  test("el agente pide la promoción; el humano la aprueba y su deploy queda en el chat del run", async () => {
+    const { human, daemon, origin, setRuns } = await boot()
+    const pid = daemon.project.project_id
+    const w = daemon.repo.createWorkItem({ project_id: pid, title: "promover", kind: "chore" })
+    const run = daemon.repo.createRun({ project_id: pid, work_item_id: w.id, purpose: "plan" })
+    daemon.repo.updateRun(run.id, { status: "running" })
+    const { file } = daemon.agentTokens.issue({
+      run_id: run.id,
+      project_id: pid,
+      work_item_id: w.id,
+    })
+    const agent = await IpcClient.connect(daemon.agentServer.path)
+    clients.push(agent)
+    await agent.call("session.bind_agent", { token: readFileSync(file, "utf8") })
+    // Ve lo que falta y no puede promover por su cuenta.
+    const st = (await agent.call("delivery.status", {})) as Status
+    expect(st.promotions[0]?.pending.map((c) => c.pr)).toEqual([3])
+    await expect(
+      agent.call("delivery.promote", {
+        ...meta(),
+        from: "development",
+        to: "stage",
+        from_sha: st.promotions[0]?.from_sha,
+        to_sha: st.promotions[0]?.to_sha,
+      }),
+    ).rejects.toThrow()
+    // Lo bloqueado no se pide: dice por qué.
+    await expect(
+      agent.call("delivery.promote_request", { ...meta(), from: "stage", to: "main", why: "x" }),
+    ).rejects.toThrow("main ya tiene todo lo de stage")
+    const asked = (await agent.call("delivery.promote_request", {
+      ...meta(),
+      from: "development",
+      to: "stage",
+      why: "el humano lo pidió en la conversación",
+    })) as { approval_id: string; pending: number }
+    expect(asked.pending).toBe(1)
+    const before = execFileSync("git", ["rev-parse", "stage"], {
+      cwd: origin,
+      encoding: "utf8",
+    }).trim()
+    const pending = (await human.call("approvals.list", {})) as {
+      approvals: {
+        id: string
+        operation_hash: string
+        operation: { tool: string; input: { pending: unknown[] } }
+      }[]
+    }
+    const a = pending.approvals.find((x) => x.id === asked.approval_id)
+    expect(a?.operation.tool).toBe("delivery.promote")
+    // Nada se movió todavía.
+    expect(
+      execFileSync("git", ["rev-parse", "stage"], { cwd: origin, encoding: "utf8" }).trim(),
+    ).toBe(before)
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: asked.approval_id,
+      operation_hash: a?.operation_hash,
+      decision: "approve_once",
+    })
+    await daemon.idle()
+    const done = daemon.repo
+      .eventsAfter(0, null, 5000)
+      .find((e) => e.kind === "git.promotion.completed")
+    expect(done?.run_id).toBe(run.id)
+    const sha = (JSON.parse(done?.payload_json ?? "{}") as { sha: string }).sha
+    expect(
+      execFileSync("git", ["rev-parse", "stage"], { cwd: origin, encoding: "utf8" }).trim(),
+    ).toBe(sha)
+    expect(daemon.ci.following()).toContain(sha)
+
+    // A producción: con el deploy de stage verde se pide, y aprobarla exige escribir «main».
+    setRuns([
+      {
+        databaseId: 1,
+        workflowName: "Deploy · stage",
+        status: "completed",
+        conclusion: "success",
+        event: "push",
+        headBranch: "stage",
+        headSha: sha,
+        url: "https://github.com/o/r/actions/runs/1",
+        createdAt: "2026-10-30T10:00:00Z",
+        updatedAt: "2026-10-30T10:09:00Z",
+      },
+    ])
+    const prod = (await agent.call("delivery.promote_request", {
+      ...meta(),
+      from: "stage",
+      to: "main",
+      why: "stage quedó verde",
+    })) as { approval_id: string }
+    const pa = (
+      (await human.call("approvals.list", {})) as {
+        approvals: { id: string; operation_hash: string }[]
+      }
+    ).approvals.find((x) => x.id === prod.approval_id)
+    const resolve = (confirm?: string) =>
+      human.call("approvals.resolve", {
+        ...meta(),
+        approval_id: prod.approval_id,
+        operation_hash: pa?.operation_hash,
+        decision: "approve_once",
+        ...(confirm ? { confirm } : {}),
+      })
+    await expect(resolve()).rejects.toThrow("escribe «main»")
+    await expect(resolve("stage")).rejects.toThrow("escribe «main»")
+    await resolve("main")
+    await daemon.idle()
+    const toMain = daemon.repo
+      .eventsAfter(0, null, 5000)
+      .filter((e) => e.kind === "git.promotion.completed")
+      .map((e) => JSON.parse(e.payload_json) as { to: string; sha: string })
+      .find((x) => x.to === "main")
+    expect(
+      execFileSync("git", ["rev-parse", "main"], { cwd: origin, encoding: "utf8" }).trim(),
+    ).toBe(toMain?.sha as string)
   }, 60_000)
 })

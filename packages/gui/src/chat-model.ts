@@ -263,6 +263,16 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           text: `PR #${String(p.number)} mergeada en ${String(p.base)} (${String(p.method)})${typeof p.merge_sha === "string" ? ` · ${p.merge_sha.slice(0, 7)}` : ""}`,
         })
         break
+      case "git.promotion.failed": {
+        const files = Array.isArray(p.conflicts) ? (p.conflicts as string[]) : []
+        items.push({
+          kind: "status",
+          key,
+          tone: "error",
+          text: `No se pudo promover ${String(p.from)} → ${String(p.to)}: ${String(p.reason)}${files.length ? ` (${files.join(", ")})` : ""}`,
+        })
+        break
+      }
       case "github.pr.merge_failed":
         items.push({
           kind: "status",

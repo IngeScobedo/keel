@@ -1797,6 +1797,15 @@ export const Methods = {
     result: z.object({ cancelled: z.boolean() }),
   },
   // --- GitHub por el gh del humano (ADR-0043) -------------------------------------------
+  /** ADR-0043 §4: el agente pide promover; queda pendiente para el humano. */
+  "delivery.promote_request": {
+    params: MutationMeta.extend({
+      from: z.string(),
+      to: z.string(),
+      why: z.string().min(1).max(2000),
+    }),
+    result: z.object({ approval_id: z.string(), pending: z.number().int() }),
+  },
   "github.status": {
     params: z.object({ project_id: z.string().optional(), fresh: z.boolean().optional() }),
     result: GithubStatusSchema,
@@ -2248,6 +2257,8 @@ export const AGENT_METHODS: readonly MethodName[] = [
   "github.run",
   "github.run_log",
   "github.merge_request",
+  "delivery.status",
+  "delivery.promote_request",
   "context.search",
   "context.project",
   "evidence.list",
@@ -2282,6 +2293,8 @@ export const METHOD_SCOPE: Partial<Record<MethodName, AgentScope>> = {
   "github.run": "tasks:read",
   "github.run_log": "tasks:read",
   "github.merge_request": "tasks:write",
+  "delivery.status": "tasks:read",
+  "delivery.promote_request": "tasks:write",
   "work_items.list": "tasks:read",
   "work_items.get": "tasks:read",
   "work_items.create": "tasks:write",

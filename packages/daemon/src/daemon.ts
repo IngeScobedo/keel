@@ -2510,52 +2510,72 @@ export class Daemon {
       "delivery.promote": (params, ctx) => {
         requireHuman(ctx, "promover entre ramas")
         const p = params as Params<"delivery.promote">
-        const pid = this.scopeOf(ctx, p.project_id)
+        return this.promoteNow({
+          projectId: this.scopeOf(ctx, p.project_id),
+          from: p.from,
+          to: p.to,
+          fromSha: p.from_sha,
+          toSha: p.to_sha,
+          confirmProd: p.confirm_prod === true,
+          actor: actorOf(ctx),
+          runId: null,
+        })
+      },
+      /**
+       * ADR-0043 §4: el agente pide una promoción; queda como pendiente para el humano con
+       * lo que entra, el gate y el workflow que dispara. El agente nunca promueve.
+       */
+      "delivery.promote_request": (params, ctx) => {
+        const p = params as Params<"delivery.promote_request">
+        if (ctx.actor.kind !== "agent" || !ctx.actor.run_id)
+          throw rpcError(
+            ErrorCode.unauthorized,
+            "la promoción la pide el agente de un run; el humano promueve desde Entregas",
+          )
+        const runId = ctx.actor.run_id
+        const pid = (repo.getRun(runId) as RunRow).project_id
         return this.deliveryStatus(pid).then(async (st) => {
           const promo = st.promotions.find((x) => x.from === p.from && x.to === p.to)
           if (!promo)
             throw rpcError(
               ErrorCode.invalidParams,
-              `${p.from} → ${p.to} no es una promoción del flujo`,
+              `${p.from} → ${p.to} no es una promoción del flujo (${st.promotions.map((x) => `${x.from} → ${x.to}`).join(", ") || "sin flujo"})`,
             )
-          if (promo.environment === "prod" && p.confirm_prod !== true)
-            throw rpcError(
-              ErrorCode.invalidParams,
-              `promover a ${p.to} despliega a producción: confírmalo (ADR-0026)`,
-            )
-          // El gate se vuelve a evaluar: lo que viste puede haber cambiado.
           if (promo.blocked_by.length)
             throw rpcError(ErrorCode.conflict, `todavía no: ${promo.blocked_by.join(" · ")}`)
-          const root = this.repo.projectRoot(pid) ?? this.rootPath
-          const g = this.credentials.gitEnv(pid, this.noAskpassPath())
-          try {
-            const { sha } = await promote(root, g.env, {
-              from: p.from,
-              to: p.to,
-              fromSha: p.from_sha,
-              toSha: p.to_sha,
-              message: promo.message,
-            })
-            this.fetches.delete(pid)
-            this.emitSystem("git.promotion.completed", null, {
-              project_id: pid,
-              from: p.from,
-              to: p.to,
-              sha,
-              prev_sha: p.to_sha,
-              prs: promo.pending.filter((c) => c.pr !== null).map((c) => c.pr),
-              commits: promo.pending.length,
-              actor: actorOf(ctx),
-            })
-            this.ci.follow({ projectId: pid, runId: null, cwd: root, sha })
-            return { sha, from: p.from, to: p.to }
-          } catch (e) {
-            if (e instanceof PromotionError)
-              throw rpcError(ErrorCode.conflict, e.message, { conflicts: e.conflicts })
-            throw e
-          } finally {
-            g.done()
+          const input = {
+            from: promo.from,
+            to: promo.to,
+            from_sha: promo.from_sha,
+            to_sha: promo.to_sha,
+            message: promo.message,
+            environment: promo.environment,
+            workflows: promo.workflows,
+            requires: promo.requires,
+            pending: promo.pending,
+            why: p.why,
           }
+          const hash = await sha256Hex(canonicalJson({ tool: "delivery.promote", input }))
+          return this.mutation<Params<"delivery.promote_request">>(
+            "delivery.promote_request",
+            (_q, uow) => {
+              const id = repo.createApproval({
+                project_id: pid,
+                run_id: runId,
+                operation_hash: hash,
+                operation: { tool: "delivery.promote", input, run_id: runId },
+                expires_at: null,
+              })
+              uow.emit("approval.requested", runId, {
+                approval_id: id,
+                operation_hash: hash,
+                tool: "delivery.promote",
+                input,
+                expires_at: null,
+              })
+              return { approval_id: id, pending: promo.pending.length }
+            },
+          )(params, ctx)
         })
       },
       // --- GitHub por el gh del humano (ADR-0043) -------------------------------------
@@ -3241,6 +3261,11 @@ export class Daemon {
           // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
           const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
           if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
+          // ADR-0043 §4: la promoción que pidió el agente la decide el humano.
+          if (op.tool === "delivery.promote") {
+            requireHuman(ctx, "decidir una promoción")
+            return this.resolvePromotion(uow, a, op.input, p)
+          }
           // ADR-0043 §3: el merge que pidió el agente lo decide el humano.
           if (op.tool === "github.pr_merge") {
             requireHuman(ctx, "decidir el merge de una PR")
@@ -5405,6 +5430,129 @@ export class Daemon {
     return { runId: id, worktree: wt.worktree_path }
   }
 
+  /**
+   * ADR-0043 §4: la promoción, con el gate evaluado otra vez y atada a las cabezas que se
+   * vieron. Merge sin checkout y push sin force; su CI se sigue desde aquí.
+   */
+  private async promoteNow(o: {
+    projectId: string
+    from: string
+    to: string
+    fromSha: string
+    toSha: string
+    confirmProd: boolean
+    actor: unknown
+    runId: string | null
+  }): Promise<{ sha: string; from: string; to: string }> {
+    const st = await this.deliveryStatus(o.projectId)
+    const promo = st.promotions.find((x) => x.from === o.from && x.to === o.to)
+    if (!promo)
+      throw rpcError(ErrorCode.invalidParams, `${o.from} → ${o.to} no es una promoción del flujo`)
+    if (promo.environment === "prod" && !o.confirmProd)
+      throw rpcError(
+        ErrorCode.invalidParams,
+        `promover a ${o.to} despliega a producción: confírmalo (ADR-0026)`,
+      )
+    // El gate se vuelve a evaluar: lo que se vio puede haber cambiado.
+    if (promo.blocked_by.length)
+      throw rpcError(ErrorCode.conflict, `todavía no: ${promo.blocked_by.join(" · ")}`)
+    const root = this.repo.projectRoot(o.projectId) ?? this.rootPath
+    const g = this.credentials.gitEnv(o.projectId, this.noAskpassPath())
+    try {
+      const { sha } = await promote(root, g.env, {
+        from: o.from,
+        to: o.to,
+        fromSha: o.fromSha,
+        toSha: o.toSha,
+        message: promo.message,
+      })
+      this.fetches.delete(o.projectId)
+      runUnitOfWork(this.uowDeps(), this.systemScope(o.projectId), (uow) =>
+        uow.emit("git.promotion.completed", o.runId, {
+          project_id: o.projectId,
+          from: o.from,
+          to: o.to,
+          sha,
+          prev_sha: o.toSha,
+          prs: promo.pending.filter((c) => c.pr !== null).map((c) => c.pr),
+          commits: promo.pending.length,
+          actor: o.actor,
+        }),
+      )
+      this.ci.follow({ projectId: o.projectId, runId: o.runId, cwd: root, sha })
+      return { sha, from: o.from, to: o.to }
+    } catch (e) {
+      if (e instanceof PromotionError)
+        throw rpcError(ErrorCode.conflict, e.message, { conflicts: e.conflicts })
+      throw e
+    } finally {
+      g.done()
+    }
+  }
+
+  /** ADR-0043 §4: el humano decide la promoción que pidió el agente; a prod, escribiendo la rama. */
+  private resolvePromotion(
+    uow: UnitOfWork,
+    a: NonNullable<ReturnType<Repo["getApproval"]>>,
+    input: unknown,
+    p: Params<"approvals.resolve">,
+  ) {
+    if (p.decision === "deny") {
+      this.repo.setApproval(a.id, "denied", uow.actorId)
+      uow.emit("approval.resolved", a.run_id, {
+        approval_id: a.id,
+        decision: "denied",
+        ...(p.reason ? { reason: p.reason } : {}),
+      })
+      return { approval_id: a.id, state: "denied" as const }
+    }
+    if (p.decision !== "approve_once")
+      throw rpcError(ErrorCode.invalidParams, "una promoción se aprueba una vez o se deniega")
+    const m = input as {
+      from: string
+      to: string
+      from_sha: string
+      to_sha: string
+      environment: string | null
+    }
+    if (m.environment === "prod" && p.confirm?.trim() !== m.to)
+      throw rpcError(
+        ErrorCode.invalidParams,
+        `promover a ${m.to} despliega a producción: escribe «${m.to}» para confirmarlo (ADR-0026)`,
+      )
+    this.repo.setApproval(a.id, "approved", uow.actorId)
+    uow.emit("approval.resolved", a.run_id, { approval_id: a.id, decision: "approved" })
+    const actor = { id: uow.actorId, kind: "human" }
+    uow.afterCommit(() =>
+      this.track(
+        this.promoteNow({
+          projectId: a.project_id,
+          from: m.from,
+          to: m.to,
+          fromSha: m.from_sha,
+          toSha: m.to_sha,
+          confirmProd: m.environment === "prod",
+          actor,
+          runId: a.run_id,
+        })
+          .then(() => this.repo.setApproval(a.id, "consumed", null))
+          .catch((e) => {
+            this.repo.setApproval(a.id, "expired", null)
+            const rpc = (e as { rpc?: { details?: { conflicts?: string[] } } }).rpc
+            runUnitOfWork(this.uowDeps(), this.systemScope(a.project_id), (u) =>
+              u.emit("git.promotion.failed", a.run_id, {
+                from: m.from,
+                to: m.to,
+                reason: e instanceof Error ? e.message : String(e),
+                conflicts: rpc?.details?.conflicts ?? [],
+              }),
+            )
+          }),
+      ),
+    )
+    return { approval_id: a.id, state: "approved" as const }
+  }
+
   /** Después de un merge: su evento y, si dejó commit en la base, seguir su CI. */
   private afterMerge(
     projectId: string,
@@ -6362,6 +6510,7 @@ export function conversationHeader(): string {
     "5) propón el plan con plan_propose: un intent por resultado verificable, con goal, scope, acceptance, ordering y el profile del agente que conviene (modelo chico para copy o ui-change simples, grande para design-proposal o research).",
     "Keel abre la tarjeta del plan; el humano la corrige y la aprueba, y Keel crea la feature con sus subtareas. Termina tu turno con un resumen corto.",
     "Si sólo te pregunta algo, responde. Si encuentras algo suelto que hay que hacer, créalo con task_create; lo que valga guardar, con note_add. Busca antes con context_search.",
+    "Si te pide promover entre ramas (p. ej. de development a stage) o mergear una PR: mira delivery_status (o pr_status), y si nada lo bloquea pídelo con promote_request (o pr_merge_request) diciendo qué entra y por qué; si algo lo bloquea, explícalo. Tú nunca promueves ni mergeas: lo aprueba el humano en la tarjeta, y el deploy se ve ahí mismo.",
     "Las tools de Keel funcionan aunque estés en modo plan.",
   ].join(" ")
 }

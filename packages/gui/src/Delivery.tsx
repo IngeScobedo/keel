@@ -404,3 +404,166 @@ function PromoteDialog({
     </Modal>
   )
 }
+
+/**
+ * ADR-0043 §4: el agente pidió una promoción. Se decide en el chat con lo que entra, el
+ * workflow que dispara y el gate de ahora; a producción, escribiendo la rama.
+ */
+export function PromotionRequestCard({
+  call,
+  approvalId,
+  operationHash,
+  input,
+  decision,
+}: {
+  call: Call
+  approvalId: string
+  operationHash: string
+  input: unknown
+  decision: "approved" | "denied" | "expired" | null
+}) {
+  const m = (input ?? {}) as {
+    from?: string
+    to?: string
+    from_sha?: string
+    to_sha?: string
+    message?: string
+    environment?: string | null
+    workflows?: string[]
+    pending?: { sha: string; pr: number | null; title: string }[]
+    why?: string
+  }
+  const prod = m.environment === "prod"
+  const [now, setNow] = useState<Promotion | null>(null)
+  const [typed, setTyped] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  useEffect(() => {
+    if (decision !== null) return
+    let alive = true
+    call("delivery.status", {})
+      .then((st) => {
+        if (alive) setNow(st.promotions.find((p) => p.from === m.from && p.to === m.to) ?? null)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [call, decision, m.from, m.to])
+  const moved = now !== null && (now.from_sha !== m.from_sha || now.to_sha !== m.to_sha)
+  const blocked = now?.blocked_by ?? []
+  async function resolve(d: "approve_once" | "deny") {
+    setBusy(true)
+    setError("")
+    try {
+      await call("approvals.resolve", {
+        ...mutationMeta(),
+        approval_id: approvalId,
+        operation_hash: operationHash,
+        decision: d,
+        ...(d === "approve_once" && prod ? { confirm: typed.trim() } : {}),
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const pending = m.pending ?? []
+  return (
+    <div
+      className="delivery-request"
+      data-testid="promotion-request"
+      data-decision={decision ?? "pending"}
+      data-prod={prod || undefined}
+    >
+      <header>
+        {prod ? <Rocket size={15} /> : <ArrowRight size={15} />}
+        <strong>
+          Promover <span className="mono">{m.from}</span> → <span className="mono">{m.to}</span>
+        </strong>
+        {m.environment && (
+          <span className={`gh-pill ${prod ? "gh-failed" : ""}`}>{m.environment}</span>
+        )}
+        <span className="gh-spacer" />
+        <span className="mono muted">
+          {m.from_sha?.slice(0, 7)} → {m.to_sha?.slice(0, 7)}
+        </span>
+      </header>
+      {m.why && <p className="delivery-why">El agente lo pide: {m.why}</p>}
+      <div className="delivery-request-body">
+        <div>
+          <h4>
+            Entra{pending.length === 1 ? "" : "n"} {pending.length}{" "}
+            {pending.some((c) => c.pr) ? "PR" : pending.length === 1 ? "commit" : "commits"}
+          </h4>
+          <ul>
+            {pending.slice(0, 10).map((c) => (
+              <li key={c.sha}>
+                <span className="gh-dot succeeded" />
+                <span className="delivery-text">
+                  {c.pr ? `#${c.pr} ` : ""}
+                  {c.title}
+                </span>
+                <span className="mono muted">{c.sha.slice(0, 7)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h4>Al empujar a {m.to}</h4>
+          <p className="muted">
+            {m.workflows?.length
+              ? `Corre ${m.workflows.join(" y ")}; lo verás aquí paso a paso.`
+              : "No corre ningún workflow."}
+          </p>
+          <p className="muted mono">«{m.message}»</p>
+          <p className="muted">Merge sin checkout; tu copia local no se toca. Nunca force push.</p>
+        </div>
+      </div>
+      {decision === null && (blocked.length > 0 || moved) && (
+        <p className="gh-merge-warn bad">
+          {blocked.length
+            ? `Todavía no: ${blocked.join(" · ")}`
+            : "Las ramas se movieron desde que el agente lo pidió: al aprobar, Keel lo vuelve a revisar y puede caducar."}
+        </p>
+      )}
+      {decision === null ? (
+        <footer>
+          {prod && (
+            <label className="delivery-confirm">
+              Es producción. Escribe <strong className="mono">{m.to}</strong> para confirmar:
+              <input
+                aria-label="Confirmar rama de producción"
+                className="mono"
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+              />
+            </label>
+          )}
+          <span className="gh-spacer" />
+          <Button disabled={busy} onClick={() => void resolve("deny")}>
+            Rechazar
+          </Button>
+          <Button
+            variant="primary"
+            icon={prod ? Rocket : ArrowRight}
+            disabled={busy || blocked.length > 0 || (prod && typed.trim() !== m.to)}
+            onClick={() => void resolve("approve_once")}
+          >
+            {busy ? "Promoviendo…" : `Promover a ${m.to}`}
+          </Button>
+        </footer>
+      ) : (
+        <p className="muted gh-note">
+          {decision === "approved"
+            ? "Aprobaste la promoción."
+            : decision === "denied"
+              ? "La rechazaste."
+              : "Caducó: las ramas cambiaron o no se pudo hacer."}
+        </p>
+      )}
+      {error && <p className="deleted">{error}</p>}
+    </div>
+  )
+}

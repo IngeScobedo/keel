@@ -319,6 +319,53 @@ export function keelTools(client: IpcClient, binding: () => Promise<Binding>): M
       }),
       (a) => client.call("github.merge_request", { ...mutation(), ...a }),
     ),
+    tool(
+      "delivery_status",
+      "Entregas del proyecto: el flujo de ramas (p. ej. development → stage → main), qué falta promover en cada paso (PRs), si algo lo bloquea y qué workflow dispara, y el último deploy de cada rama.",
+      z.object({}),
+      async () => {
+        const r = (await client.call("delivery.status", {})) as {
+          flow: { work_base: string } | null
+          promotions: {
+            from: string
+            to: string
+            environment: string | null
+            workflows: string[]
+            pending: { pr: number | null; title: string }[]
+            blocked_by: string[]
+          }[]
+          branches: {
+            name: string
+            head: { sha: string; subject: string } | null
+            runs: { workflow: string; status: string; conclusion: string | null }[]
+          }[]
+        }
+        if (!r.flow)
+          return { flow: null, note: "el proyecto no tiene un flujo de ramas reconocible" }
+        return {
+          flow: [r.flow.work_base, ...r.promotions.map((p) => p.to)].join(" → "),
+          promotions: r.promotions.map((p) => ({
+            from: p.from,
+            to: p.to,
+            environment: p.environment,
+            triggers: p.workflows,
+            pending: p.pending.map((c) => (c.pr ? `#${c.pr} ${c.title}` : c.title)),
+            blocked_by: p.blocked_by,
+          })),
+          branches: r.branches.map((b) => ({
+            name: b.name,
+            head: b.head ? `${b.head.sha.slice(0, 7)} ${b.head.subject}` : null,
+            last_runs: b.runs.map((x) => `${x.workflow}: ${x.conclusion ?? x.status}`),
+          })),
+        }
+      },
+    ),
+    tool(
+      "promote_request",
+      "Pide al humano promover una rama del flujo a la siguiente (p. ej. development → stage). Queda pendiente con lo que entra, el gate y el workflow que dispara; tú nunca promueves. A producción el humano confirma escribiendo la rama. Revisa antes delivery_status: si algo lo bloquea, dilo en vez de pedirlo.",
+      z.object({ from: z.string(), to: z.string(), why: z.string().min(1) }),
+      (a) => client.call("delivery.promote_request", { ...mutation(), ...a }),
+    ),
     // --- el método (ADR-0021): Keel valida y verifica; el agente recibe lo justo ---
     tool(
       "stage_current",

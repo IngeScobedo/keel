@@ -26,6 +26,7 @@ import {
   firstPrompt,
   githubQuery,
   methodQuery,
+  promotionQuery,
   replayQuery,
   setupQuery,
 } from "../replay.ts"
@@ -60,6 +61,9 @@ const daemon: Daemon = new Daemon({
       // «github…» abre una PR y promueve a stage (ADR-0043).
       if (task?.title.startsWith("github")) return githubQuery(daemon)(a)
       // La conversación del proyecto (ADR-0024) la contesta su propio guion.
+      // «promueve…» en la conversación: el agente pide la promoción (ADR-0043 §4).
+      if (isConversationKey(task?.dedupe_key) && /promueve/i.test(firstPrompt(a.prompt)))
+        return promotionQuery(daemon)(a)
       if (isConversationKey(task?.dedupe_key)) return conversationQuery(daemon)(a)
       return firstPrompt(a.prompt).startsWith("chat") ? chatQuery()(a) : replayQuery()(a)
     },

@@ -137,6 +137,10 @@ export function ProjectConversation({
         setAsked(r.run)
         setRunId(r.run.id)
         setConvId(r.conversation.id)
+        // El primer mensaje titula la conversación: el encabezado lo refleja sin recargar.
+        setOpened((o) =>
+          o && o.work_item.id === r.conversation.id ? { ...o, work_item: r.conversation } : o,
+        )
         setFresh(false)
         setText("")
         setPending([])
