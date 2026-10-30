@@ -496,4 +496,64 @@
       animation: none;
     }
   }
+
+  /* Segmented: un riel hundido; la opción elegida en relieve. */
+  .ui-segmented {
+    display: inline-flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-sunken);
+    min-width: 0;
+  }
+  .ui-segment {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 0 var(--space-4);
+    min-height: 26px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background 120ms ease,
+      color 120ms ease,
+      border-color 120ms ease;
+  }
+  .ui-segmented-sm .ui-segment {
+    min-height: 22px;
+    padding: 0 var(--space-3);
+    font-size: 11px;
+  }
+  .ui-segmented-mono .ui-segment {
+    font-family: var(--font-mono), monospace;
+  }
+  .ui-segment:hover:not([data-disabled]) {
+    color: var(--color-text-primary);
+    background: var(--color-surface-hover);
+  }
+  .ui-segment[data-pressed] {
+    border-color: var(--color-border-default);
+    background: var(--color-surface-raised);
+    color: var(--color-text-primary);
+  }
+  .ui-segment[data-pressed] svg {
+    color: var(--color-accent-default);
+  }
+  .ui-segment:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 1px;
+  }
+  .ui-segment[data-disabled] {
+    color: var(--color-text-disabled);
+    cursor: not-allowed;
+  }
 }

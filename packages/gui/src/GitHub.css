@@ -184,22 +184,57 @@
     gap: var(--space-2);
     color: var(--color-status-succeeded);
   }
-  .gh-merge-row {
+  .gh-merge-method {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-5);
+  }
+  .gh-merge-explain {
+    font-size: 12px;
+  }
+  .gh-merge-field {
+    display: grid;
+    gap: var(--space-2);
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+  }
+  .gh-merge-field input {
+    width: 100%;
+    min-height: 30px;
+    padding: 0 var(--space-4);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-canvas);
+    color: var(--color-text-primary);
+    font-size: 12px;
+  }
+  .gh-merge-field input:focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: -1px;
+  }
+  .gh-merge-actions {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-4);
-  }
-  .gh-subject {
-    flex: 1 1 160px;
-    min-width: 0;
-  }
-  .gh-check {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
     font-size: 12px;
     color: var(--color-text-secondary);
+  }
+  .gh-merge-head {
+    white-space: nowrap;
+  }
+  .gh-merge-warn {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-status-waiting-human-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-status-waiting-human-bg);
+    font-size: 12px;
+  }
+  .gh-merge-warn.bad {
+    border-color: var(--color-status-failed-border);
+    background: var(--color-status-failed-bg);
   }
   .gh-note {
     font-size: 11px;

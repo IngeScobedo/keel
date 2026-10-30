@@ -47,7 +47,7 @@ import {
   nextAction,
   splitUnified,
 } from "./task-model.js"
-import { Button, SidePanel, Tabs, TextArea } from "./ui/index.js"
+import { Button, Segmented, SidePanel, Tabs, TextArea } from "./ui/index.js"
 import { Empty, Hint, Modal, Status } from "./ui.js"
 import { Trail, useOpenDetail, usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -819,22 +819,17 @@ function Changes({ task, run, call }: { task: WorkItem; run: Run | undefined; ca
             Subtareas · {c.subtasks.filter((x) => x.integrated_sha).length} de {c.subtasks.length}{" "}
             integradas
           </h4>
-          <fieldset className="segmented tf-changes-filter" aria-label="Ver cambios de">
-            <button type="button" aria-pressed={only === null} onClick={() => setOnly(null)}>
-              Todo
-            </button>
-            {c.subtasks.map((x) => (
-              <button
-                key={x.key}
-                type="button"
-                className="mono"
-                aria-pressed={only === x.key}
-                onClick={() => setOnly(only === x.key ? null : x.key)}
-              >
-                {x.key}
-              </button>
-            ))}
-          </fieldset>
+          <Segmented
+            aria-label="Ver cambios de"
+            size="sm"
+            mono
+            value={only ?? "todo"}
+            onChange={(v) => setOnly(v === "todo" ? null : v)}
+            options={[
+              { value: "todo", label: "Todo" },
+              ...c.subtasks.map((x) => ({ value: x.key, label: x.key, title: x.title })),
+            ]}
+          />
           <ul className="tf-subchanges" data-testid="feature-subtasks">
             {c.subtasks.map((x) => {
               const a = x.files.reduce((s, f) => s + f.additions, 0)

@@ -9,8 +9,10 @@ import {
   Copy,
   ExternalLink,
   GitBranch,
+  GitCommitHorizontal,
   GitMerge,
   GitPullRequest,
+  ListOrdered,
   LogIn,
   RefreshCw,
   RotateCcw,
@@ -18,6 +20,7 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { mutationMeta } from "./client.js"
+import { Checkbox, Segmented } from "./ui/index.js"
 import { Button, Hint, Modal } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 import "./GitHub.css"
@@ -142,19 +145,16 @@ export function GithubSettings({ call }: { call: Call }) {
           </dl>
           <div className="gh-actions">
             {!status.gh.ready && (
-              <fieldset className="segmented" aria-label="Protocolo de git">
-                {(["ssh", "https"] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    className="mono"
-                    aria-pressed={protocol === p}
-                    onClick={() => setProtocol(p)}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </fieldset>
+              <Segmented
+                aria-label="Protocolo de git"
+                mono
+                value={protocol}
+                onChange={setProtocol}
+                options={[
+                  { value: "ssh", label: "ssh" },
+                  { value: "https", label: "https" },
+                ]}
+              />
             )}
             <Button
               variant={status.gh.ready ? "default" : "primary"}
@@ -301,7 +301,22 @@ function NeedsGh({ call, kind, onReady }: { call: Call; kind: string; onReady: (
 
 // --- la PR ------------------------------------------------------------------------------
 
-const METHOD_LABEL = { merge: "Merge commit", squash: "Squash and merge", rebase: "Rebase" }
+const METHOD_LABEL = {
+  merge: "Merge commit",
+  squash: "Squash and merge",
+  rebase: "Rebase and merge",
+}
+const METHOD_ICON = {
+  merge: <GitMerge size={13} aria-hidden />,
+  squash: <GitCommitHorizontal size={13} aria-hidden />,
+  rebase: <ListOrdered size={13} aria-hidden />,
+}
+const METHOD_EXPLAIN = {
+  merge: (base: string) => `Un commit de merge junta los commits de la rama en ${base}.`,
+  squash: (base: string) => `Los commits de la rama quedan en uno solo en ${base}.`,
+  rebase: (base: string) =>
+    `Los commits se reaplican uno a uno sobre ${base}, sin commit de merge.`,
+}
 const DONE = new Set(["completed", "success", "failure", "neutral", "skipped", "cancelled"])
 
 function checkTone(c: GithubPr["checks"][number]): "running" | "succeeded" | "failed" | "queued" {
@@ -480,35 +495,40 @@ export function PrCard({ call, number, branch }: { call: Call; number?: number; 
       </div>
       {open && (
         <footer className="gh-merge" data-testid="github-merge">
-          <div className="gh-merge-row">
-            <fieldset className="segmented" aria-label="Método de merge">
-              {methods.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  aria-pressed={method === m}
-                  onClick={() => setMethod(m)}
-                >
-                  {METHOD_LABEL[m]}
-                </button>
-              ))}
-            </fieldset>
-            {method !== "rebase" && (
+          <div className="gh-merge-method">
+            <Segmented
+              aria-label="Método de merge"
+              value={method}
+              onChange={setMethod}
+              options={methods.map((m) => ({
+                value: m,
+                label: METHOD_LABEL[m],
+                icon: METHOD_ICON[m],
+              }))}
+            />
+            <span className="muted gh-merge-explain">{METHOD_EXPLAIN[method](pr.base)}</span>
+          </div>
+          {method !== "rebase" && (
+            <label className="gh-merge-field">
+              <span>
+                {method === "squash" ? "Título del commit" : "Título del commit de merge"}
+              </span>
               <input
                 aria-label="Título del commit de merge"
-                className="mono gh-subject"
+                className="mono"
                 value={subject}
                 onChange={(e) => setSubject(e.target.value)}
               />
-            )}
-            <label className="gh-check">
-              <input
-                type="checkbox"
-                checked={deleteBranch}
-                onChange={(e) => setDeleteBranch(e.target.checked)}
-              />
-              Borrar la rama
             </label>
+          )}
+          <div className="gh-merge-actions">
+            <Checkbox checked={deleteBranch} onChange={setDeleteBranch}>
+              Borrar <span className="mono">{pr.head}</span> al mergear
+            </Checkbox>
+            <span className="gh-spacer" />
+            <span className="muted gh-note gh-merge-head" title={pr.head_sha}>
+              atado a <span className="mono">{pr.head_sha.slice(0, 7)}</span>
+            </span>
             <Button
               variant="primary"
               icon={GitMerge}
@@ -518,12 +538,15 @@ export function PrCard({ call, number, branch }: { call: Call; number?: number; 
               {busy ? "Mergeando…" : METHOD_LABEL[method]}
             </Button>
           </div>
-          <p className="muted gh-note">
-            Atado a <span className="mono">{pr.head_sha.slice(0, 7)}</span>: si alguien empuja a la
-            rama, GitHub lo rechaza y la tarjeta muestra la nueva cabeza.
-            {running ? " El CI sigue corriendo." : ""}
-            {failed ? ` ${failed} check${failed === 1 ? "" : "s"} fallaron.` : ""}
-          </p>
+          {(running || failed > 0 || pr.mergeable === "conflicting") && (
+            <p className={`gh-merge-warn ${failed || pr.mergeable === "conflicting" ? "bad" : ""}`}>
+              {pr.mergeable === "conflicting"
+                ? `Tiene conflictos con ${pr.base}: resuélvelos en la rama antes de mergear.`
+                : failed
+                  ? `${failed} check${failed === 1 ? "" : "s"} fallaron: revisa antes de mergear.`
+                  : "El CI sigue corriendo: puedes esperar a que pase."}
+            </p>
+          )}
           {error && <p className="deleted">{error}</p>}
         </footer>
       )}

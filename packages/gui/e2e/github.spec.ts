@@ -50,6 +50,7 @@ test("la PR vive en el chat: checks, squash and merge y el deploy paso a paso", 
   await expect(pr.getByLabel("Título del commit de merge")).toHaveValue(
     "fix(api): corrige la portada de Pre Purchase (#51)",
   )
+  if (shots) await pr.screenshot({ path: join(shots, "github-merge-footer.png") })
   await pr
     .getByTestId("github-merge")
     .getByRole("button", { name: "Squash and merge" })

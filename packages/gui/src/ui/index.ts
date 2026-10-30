@@ -13,5 +13,6 @@ export {
   TooltipProvider,
 } from "./overlays.js"
 export { SidePanel } from "./panel.js"
+export { type Segment, Segmented } from "./segmented.js"
 export { Tabs } from "./tabs.js"
 export { type ToastData, ToastProvider, ToastViewport, useToasts } from "./toast.js"
