@@ -17,6 +17,7 @@ import { initRepo } from "../git-fixture.ts"
 import { writeFakeAnsible } from "./fake-ansible.ts"
 import { isConversationKey } from "../../src/store/repo.ts"
 import { writeFakeGh } from "./fake-gh.ts"
+import { makeFlowRepo } from "./flow-repo.ts"
 import { memoryKeyStore } from "../../src/vault/keystore.ts"
 import {
   chatQuery,
@@ -31,6 +32,8 @@ import {
 
 const dir = mkdtempSync(join(tmpdir(), "keel-e2e-"))
 initRepo(join(dir, "repo"))
+// ADR-0043: con KEEL_E2E_DELIVERY=1, el repo trae el flujo development → stage → main.
+if (process.env.KEEL_E2E_DELIVERY === "1") makeFlowRepo(join(dir, "repo"), join(dir, "origin.git"))
 // Un segundo repo para abrirlo desde la GUI (ADR-0019 §2).
 const otherRepo = initRepo(join(dir, "otro"))
 const daemon: Daemon = new Daemon({

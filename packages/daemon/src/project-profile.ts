@@ -10,6 +10,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { ProjectProfile } from "@keel/core"
 import { git } from "@keel/git"
+import { detectFlow } from "./git-flow.js"
 
 const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "target", ".nx", "vendor"])
 
@@ -110,10 +111,13 @@ export async function detectProfile(root: string): Promise<ProjectProfile> {
     "ROADMAP.md",
     "roadmap.md",
   ])
+  // ADR-0043 §2: el flujo de ramas; sus ramas de integración son protegidas para el agente.
+  const { flow, co_authored_by } = await detectFlow(root)
+  const flowBranches = flow ? [flow.work_base, ...flow.promotions.map((p) => p.to)] : []
   return {
     stack: [...new Set(stack)],
     verify,
-    protected_branches: await protectedBranches(root),
+    protected_branches: [...new Set([...(await protectedBranches(root)), ...flowBranches])],
     branch_prefixes: { ...DEFAULT_BRANCH_PREFIXES },
     generated_paths: dirs.filter((d) => /(^|\/)generated$/i.test(d)).map((d) => `${d}/**`),
     canon: { adr_dirs: adrDirs, sdd_dirs: sddDirs, roadmap },
@@ -124,6 +128,8 @@ export async function detectProfile(root: string): Promise<ProjectProfile> {
       agents_md: has("AGENTS.md"),
       claude_md: has("CLAUDE.md"),
     },
+    flow,
+    conventions: { co_authored_by },
   }
 }
 

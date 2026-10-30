@@ -16,9 +16,12 @@ import {
   canReturn,
   checkTransition,
   contractSection,
+  type DeliveryStatus,
   describePattern,
   type Effort,
   ErrorCode,
+  type GithubPr,
+  type GithubRun,
   type GitPlan,
   GitPlanSchema,
   intakeDraft,
@@ -101,7 +104,7 @@ import type { LiveChange } from "./adapters/provider.js"
 import { AgentTokens } from "./agent-tokens.js"
 import { ApprovalGate, type ApprovalResolution, QUESTION_TOOLS } from "./approvals.js"
 import { ArtifactStore, parseArtifactRef } from "./artifacts.js"
-import { checkBase, deployState, pullBase } from "./base-sync.js"
+import { checkBase, deployState, git as gitRun, pullBase } from "./base-sync.js"
 import { EventBus } from "./bus.js"
 import { runCommand, runUnitOfWork, type UnitOfWork } from "./command.js"
 import { projectContext, searchContext } from "./context.js"
@@ -118,6 +121,7 @@ import {
   validationContext,
   workPrompt,
 } from "./flows.js"
+import { fetchOrigin, headOf, PromotionError, pendingCommits, promote } from "./git-flow.js"
 import { buildPlan, DIFF_INLINE_MAX, executePlan, type GitPlansDeps } from "./git-plans.js"
 import {
   GithubService,
@@ -251,6 +255,8 @@ export class Daemon {
   readonly broker: ResourceBroker
   /** ADR-0043: GitHub por el `gh` del humano. */
   readonly github: GithubService
+  /** El último fetch del remoto por proyecto: Entregas no lo repite en cada vistazo. */
+  private readonly fetchedAt = new Map<string, number>()
   /** «Suele tardar» por workflow y repo, refrescado cada 10 min. */
   private readonly typicalRun = new Map<string, { at: number; ms: number | null }>()
   /** ADR-0025: el vault y las credenciales de las conexiones. */
@@ -2466,6 +2472,62 @@ export class Daemon {
             p.connection_id,
           ),
         )
+      },
+      // --- Entregas: el flujo de ramas y sus promociones (ADR-0043 §4 y §6) -----------
+      "delivery.status": (params, ctx) => {
+        const p = params as Params<"delivery.status">
+        const pid = this.scopeOf(ctx, p.project_id)
+        return this.deliveryStatus(pid)
+      },
+      "delivery.promote": (params, ctx) => {
+        requireHuman(ctx, "promover entre ramas")
+        const p = params as Params<"delivery.promote">
+        const pid = this.scopeOf(ctx, p.project_id)
+        return this.deliveryStatus(pid).then(async (st) => {
+          const promo = st.promotions.find((x) => x.from === p.from && x.to === p.to)
+          if (!promo)
+            throw rpcError(
+              ErrorCode.invalidParams,
+              `${p.from} → ${p.to} no es una promoción del flujo`,
+            )
+          if (promo.environment === "prod" && p.confirm_prod !== true)
+            throw rpcError(
+              ErrorCode.invalidParams,
+              `promover a ${p.to} despliega a producción: confírmalo (ADR-0026)`,
+            )
+          // El gate se vuelve a evaluar: lo que viste puede haber cambiado.
+          if (promo.blocked_by.length)
+            throw rpcError(ErrorCode.conflict, `todavía no: ${promo.blocked_by.join(" · ")}`)
+          const root = this.repo.projectRoot(pid) ?? this.rootPath
+          const g = this.credentials.gitEnv(pid, this.noAskpassPath())
+          try {
+            const { sha } = await promote(root, g.env, {
+              from: p.from,
+              to: p.to,
+              fromSha: p.from_sha,
+              toSha: p.to_sha,
+              message: promo.message,
+            })
+            this.fetchedAt.delete(pid)
+            this.emitSystem("git.promotion.completed", null, {
+              project_id: pid,
+              from: p.from,
+              to: p.to,
+              sha,
+              prev_sha: p.to_sha,
+              prs: promo.pending.filter((c) => c.pr !== null).map((c) => c.pr),
+              commits: promo.pending.length,
+              actor: actorOf(ctx),
+            })
+            return { sha, from: p.from, to: p.to }
+          } catch (e) {
+            if (e instanceof PromotionError)
+              throw rpcError(ErrorCode.conflict, e.message, { conflicts: e.conflicts })
+            throw e
+          } finally {
+            g.done()
+          }
+        })
       },
       // --- GitHub por el gh del humano (ADR-0043) -------------------------------------
       "github.status": (params, ctx) => {
@@ -5103,6 +5165,111 @@ export class Daemon {
       uow.emit("approval.resolved", runId, { approval_id: approvalId, decision }),
     )
     return decision
+  }
+
+  /**
+   * Entregas (ADR-0043 §6): el flujo confirmado (o el detectado), cada rama con su cabeza
+   * y sus últimos runs, lo que falta promover y por qué no se puede todavía.
+   */
+  private async deliveryStatus(pid: string): Promise<DeliveryStatus> {
+    const root = this.repo.projectRoot(pid) ?? this.rootPath
+    const confirmed = this.repo.getProfile(pid) ? this.profileOf(pid) : null
+    const detected = this.detectedProfiles.get(pid) ?? (await this.detectedProfile(pid))
+    const flow = confirmed?.flow ?? detected.flow ?? null
+    const flow_source = confirmed?.flow
+      ? ("confirmed" as const)
+      : flow
+        ? ("detected" as const)
+        : null
+    if (!flow)
+      return {
+        flow: null,
+        flow_source: null,
+        fetch_error: null,
+        branches: [],
+        promotions: [],
+        open_prs: null,
+        gh_error: null,
+      }
+    let fetch_error: string | null = null
+    if (Date.now() - (this.fetchedAt.get(pid) ?? 0) > 60_000) {
+      const g = this.credentials.gitEnv(pid, this.noAskpassPath())
+      try {
+        fetch_error = await fetchOrigin(root, g.env)
+      } finally {
+        g.done()
+      }
+      if (!fetch_error) this.fetchedAt.set(pid, Date.now())
+    }
+    const names = [flow.work_base, ...flow.promotions.map((x) => x.to)]
+    const envOf = (b: string) => flow.promotions.find((x) => x.to === b)?.environment ?? null
+    const bin = this.ghPath()
+    const gh = await this.github.status()
+    const ghOk = bin !== null && gh.ready
+    const opts = { cwd: root, gh: bin ?? "gh" }
+    let gh_error: string | null = ghOk
+      ? null
+      : gh.installed
+        ? "gh no tiene sesión"
+        : "gh no está instalado"
+    const branches = await Promise.all(
+      names.map(async (name) => {
+        const sha = await headOf(root, name)
+        const info = sha
+          ? (await gitRun(root, ["log", "-1", "--format=%s%x1f%cI", sha], {})).out
+          : ""
+        const [subject = "", date = ""] = info.split("\x1f")
+        let runs: GithubRun[] = []
+        if (ghOk)
+          try {
+            const all = (await workflowRuns(opts, { branch: name, limit: 20 })).map(runView)
+            // El último de cada workflow.
+            runs = all.filter((r, i) => all.findIndex((x) => x.workflow === r.workflow) === i)
+          } catch (e) {
+            gh_error = e instanceof Error ? e.message : String(e)
+          }
+        return {
+          name,
+          environment: envOf(name),
+          head: sha ? { sha, subject, date } : null,
+          runs,
+        }
+      }),
+    )
+    const promotions = await Promise.all(
+      flow.promotions.map(async (x) => {
+        const [from_sha, to_sha] = [await headOf(root, x.from), await headOf(root, x.to)]
+        const pending = from_sha && to_sha ? await pendingCommits(root, x.from, x.to) : []
+        const blocked_by: string[] = []
+        if (!from_sha || !to_sha) blocked_by.push(`no encuentro origin/${from_sha ? x.to : x.from}`)
+        else if (pending.length === 0) blocked_by.push(`${x.to} ya tiene todo lo de ${x.from}`)
+        if (x.requires.length && from_sha && pending.length > 0) {
+          if (!ghOk) blocked_by.push(`sin gh no puedo comprobar ${x.requires.join(", ")}`)
+          else {
+            const runs = await workflowRuns(opts, { commit: from_sha, limit: 20 }).catch(() => [])
+            for (const w of x.requires) {
+              const r = runs.find((y) => y.workflowName === w)
+              if (!r) blocked_by.push(`${w} no corrió para ${from_sha.slice(0, 7)}`)
+              else if (r.status !== "completed")
+                blocked_by.push(`${w} de ${from_sha.slice(0, 7)} sigue corriendo`)
+              else if (r.conclusion !== "success")
+                blocked_by.push(`${w} de ${from_sha.slice(0, 7)} terminó en ${r.conclusion}`)
+            }
+          }
+        }
+        return { ...x, from_sha, to_sha, pending, blocked_by }
+      }),
+    )
+    let open_prs: GithubPr[] | null = null
+    if (ghOk)
+      try {
+        open_prs = (
+          await pullRequests(opts, { state: "open", base: flow.work_base, limit: 20 })
+        ).map(prView)
+      } catch (e) {
+        gh_error = e instanceof Error ? e.message : String(e)
+      }
+    return { flow, flow_source, fetch_error, branches, promotions, open_prs, gh_error }
   }
 
   /** El `gh` del humano: el de las opciones o el del PATH (ADR-0015 §5, ADR-0043 §1). */

@@ -273,6 +273,32 @@ export const TaskDocViewSchema = z.object({
   content_markdown: z.string().optional(),
 })
 export type TaskDocView = z.infer<typeof TaskDocViewSchema>
+/**
+ * ADR-0043 §2: cómo entra el código a cada rama. Lo detecta Keel de los workflows y de
+ * la historia de merges; el humano lo confirma en el perfil.
+ */
+export const GitFlowSchema = z.object({
+  /** De dónde salen las ramas cortas y adónde van sus PR. */
+  work_base: z.string(),
+  /** Lo que la tarjeta de PR ofrece primero. */
+  pr_merge_method: z.enum(["merge", "squash", "rebase"]),
+  promotions: z.array(
+    z.object({
+      from: z.string(),
+      to: z.string(),
+      message: z.string(),
+      /** El entorno al que despliega lo que dispara el push a `to`. */
+      environment: z.enum(["prod", "staging", "dev"]).nullable(),
+      /** Workflows que corren al empujar a `to`. */
+      workflows: z.array(z.string()),
+      /** Workflows que tienen que estar verdes para el commit que se promueve. */
+      requires: z.array(z.string()),
+    }),
+  ),
+  /** De dónde salió cada cosa: workflows y mensajes de la historia. */
+  evidence: z.array(z.string()),
+})
+export type GitFlow = z.infer<typeof GitFlowSchema>
 /** Lo que Keel sabe del proyecto para conducir el método (ADR-0021 §5). */
 export const ProjectProfileSchema = z.object({
   stack: z.array(z.string()),
@@ -299,6 +325,10 @@ export const ProjectProfileSchema = z.object({
   adr_pattern: z.string().nullable(),
   /** El repo trae su propio harness (`.claude/`, `AGENTS.md`). */
   harness: z.object({ claude_dir: z.boolean(), agents_md: z.boolean(), claude_md: z.boolean() }),
+  /** ADR-0043 §2: el flujo de ramas del proyecto; null si no tiene uno reconocible. */
+  flow: GitFlowSchema.nullable().default(null),
+  /** ADR-0043 §7: convenciones que Keel respeta en sus commits. */
+  conventions: z.object({ co_authored_by: z.boolean() }).default({ co_authored_by: true }),
 })
 export type ProjectProfile = z.infer<typeof ProjectProfileSchema>
 export const ProjectProfileViewSchema = z.object({
@@ -610,6 +640,48 @@ export const GithubRunDetailSchema = GithubRunSchema.extend({
   typical_ms: z.number().int().nullable(),
 })
 export type GithubRunDetail = z.infer<typeof GithubRunDetailSchema>
+
+/** ADR-0043 §4: lo que entra con una promoción y si su gate deja pasar. */
+export const PromotionViewSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  message: z.string(),
+  environment: z.enum(["prod", "staging", "dev"]).nullable(),
+  workflows: z.array(z.string()),
+  requires: z.array(z.string()),
+  from_sha: z.string().nullable(),
+  to_sha: z.string().nullable(),
+  pending: z.array(
+    z.object({
+      sha: z.string(),
+      subject: z.string(),
+      pr: z.number().int().nullable(),
+      title: z.string(),
+    }),
+  ),
+  /** El «todavía no, y por qué» (ADR-0038): vacío si se puede promover. */
+  blocked_by: z.array(z.string()),
+})
+export const DeliveryStatusSchema = z.object({
+  flow: GitFlowSchema.nullable(),
+  /** `confirmed` en el perfil, o sólo `detected` por Keel. */
+  flow_source: z.enum(["confirmed", "detected"]).nullable(),
+  fetch_error: z.string().nullable(),
+  branches: z.array(
+    z.object({
+      name: z.string(),
+      environment: z.enum(["prod", "staging", "dev"]).nullable(),
+      head: z.object({ sha: z.string(), subject: z.string(), date: z.string() }).nullable(),
+      /** Los últimos runs de cada workflow en esa rama. */
+      runs: z.array(GithubRunSchema),
+    }),
+  ),
+  promotions: z.array(PromotionViewSchema),
+  /** PRs abiertas hacia la base de trabajo; null si gh no puede. */
+  open_prs: z.array(GithubPrSchema).nullable(),
+  gh_error: z.string().nullable(),
+})
+export type DeliveryStatus = z.infer<typeof DeliveryStatusSchema>
 
 export const ConnectionViewSchema = z.object({
   id: z.string(),
@@ -1742,6 +1814,26 @@ export const Methods = {
       failed_only: z.boolean().optional(),
     }),
     result: z.object({ ok: z.literal(true) }),
+  },
+  /** ADR-0043 §6: Entregas — cada rama del flujo, lo que falta promover y su gate. */
+  "delivery.status": {
+    params: z.object({ project_id: z.string().optional() }),
+    result: DeliveryStatusSchema,
+  },
+  /**
+   * ADR-0043 §4: promover es del humano, atado a las cabezas que vio. A producción pide
+   * `confirm_prod` (ADR-0026). Merge sin checkout y push sin force.
+   */
+  "delivery.promote": {
+    params: MutationMeta.extend({
+      project_id: z.string().optional(),
+      from: z.string(),
+      to: z.string(),
+      from_sha: z.string().min(7),
+      to_sha: z.string().min(7),
+      confirm_prod: z.boolean().optional(),
+    }),
+    result: z.object({ sha: z.string(), from: z.string(), to: z.string() }),
   },
   "connections.test": {
     params: z.object({ connection_id: z.string() }),

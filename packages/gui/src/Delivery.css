@@ -1,0 +1,130 @@
+/* ADR-0043 §6: Entregas, una columna por rama del flujo. Canvas: página 21, pantalla 02. */
+@layer components {
+  .delivery-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+  }
+  .delivery-banner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--color-accent-default);
+    border-radius: var(--radius-md);
+    background: var(--color-accent-subtle);
+    font-size: 12px;
+  }
+  .delivery-banner span {
+    flex: 1;
+  }
+  .delivery-cols {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: var(--space-6);
+    align-items: stretch;
+  }
+  .delivery-col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 420px;
+    padding: var(--space-5);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-raised);
+    min-width: 0;
+  }
+  .delivery-col > header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-size: 15px;
+  }
+  .delivery-col > header .muted {
+    font-size: 12px;
+  }
+  .delivery-col h3 {
+    margin: var(--space-4) 0 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-text-tertiary);
+    text-transform: uppercase;
+  }
+  .delivery-head {
+    margin: 0;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .delivery-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: var(--color-surface-sunken);
+    color: var(--color-text-primary);
+    font-size: 12px;
+    text-align: left;
+  }
+  button.delivery-item:hover {
+    background: var(--color-surface-hover);
+  }
+  .delivery-item .mono {
+    font-size: 11px;
+  }
+  .delivery-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .delivery-gate {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--color-status-waiting-human-border);
+    border-radius: var(--radius-md);
+    background: var(--color-status-waiting-human-bg);
+    font-size: 12px;
+  }
+  .delivery-gate[data-ready] {
+    border-color: var(--color-status-succeeded-border);
+    background: var(--color-status-succeeded-bg);
+  }
+  .delivery-gate p {
+    margin: 0;
+  }
+  .delivery-after {
+    display: grid;
+    gap: var(--space-3);
+  }
+  .delivery-after p {
+    margin: 0;
+  }
+  .delivery-plan {
+    display: grid;
+    gap: var(--space-4);
+  }
+  .delivery-plan p,
+  .delivery-plan ul {
+    margin: 0;
+  }
+  .delivery-plan ul {
+    max-height: 220px;
+    overflow: auto;
+    padding-left: var(--space-6);
+    font-size: 12px;
+  }
+  .delivery-confirm {
+    display: grid;
+    gap: var(--space-2);
+    font-size: 12px;
+  }
+}

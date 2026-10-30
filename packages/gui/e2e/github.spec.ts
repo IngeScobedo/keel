@@ -86,3 +86,49 @@ test("sin sesión: Ajustes inicia la de gh y muestra su código", async ({ page 
   })
   await expect(login).toHaveCount(0)
 })
+
+test("Entregas: el flujo detectado, promover a stage con su deploy y a prod con confirmación", async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  daemon = await bootDaemon({ KEEL_E2E_DELIVERY: "1" })
+  await nativeShell(page, daemon)
+  await page.goto("/")
+  await expect(page.locator(".header-status")).toContainText("keeld", { timeout: 15_000 })
+  await page.getByRole("button", { name: "Entregas", exact: true }).click()
+  const delivery = page.getByTestId("delivery")
+  await expect(delivery).toContainText("development → stage → main")
+  // Detectado de la historia y de los workflows; el humano lo confirma.
+  await expect(page.getByTestId("delivery-detected")).toContainText("PRs mergeadas en development")
+  await page.getByRole("button", { name: "Confirmar flujo" }).click()
+  await expect(page.getByTestId("delivery-detected")).toHaveCount(0)
+
+  const dev = page.getByTestId("delivery-development")
+  await expect(dev).toContainText("#51 fix(api): corrige la portada de Pre Purchase")
+  await expect(dev).toContainText("#3 fix(api): cambio 3")
+  if (shots) await page.screenshot({ path: join(shots, "delivery.png") })
+
+  await page.getByTestId("promote-development-stage").getByRole("button").click()
+  const dialog = page.getByTestId("promote-dialog")
+  await expect(dialog).toContainText("#3 fix(api): cambio 3")
+  await expect(dialog).toContainText("corre Deploy · stage")
+  await dialog.getByRole("button", { name: "Promover a stage" }).click()
+  const after = page.getByTestId("delivery-promoted")
+  await expect(after).toContainText("Promoviste development → stage")
+  await expect(after.getByTestId("github-run")).toContainText("Deploy · stage")
+
+  // A prod: el gate espera el deploy de stage en verde; luego pide escribir «main».
+  const toMain = page.getByTestId("promote-stage-main")
+  await expect(async () => {
+    await page.getByRole("button", { name: /Actualizar/ }).click()
+    await expect(toMain.getByRole("button")).toBeEnabled({ timeout: 2_000 })
+  }).toPass({ timeout: 40_000 })
+  await toMain.getByRole("button").click()
+  const prod = page.getByTestId("promote-dialog")
+  const go = prod.getByRole("button", { name: "Promover a main" })
+  await expect(go).toBeDisabled()
+  await prod.getByLabel("Confirmar rama de producción").fill("main")
+  await go.click()
+  await expect(page.getByTestId("delivery-promoted")).toContainText("Promoviste stage → main")
+  if (shots) await page.screenshot({ path: join(shots, "delivery-promoted.png") })
+})

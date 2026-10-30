@@ -13,7 +13,7 @@ export type BaseState = {
   error: string | null
 }
 
-async function git(
+export async function git(
   root: string,
   args: string[],
   env: Record<string, string>,

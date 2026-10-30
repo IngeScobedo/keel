@@ -44,7 +44,7 @@ else if (a === "pr" && b === "view") read("logged", "1") === "1" ? out(pr()) : (
 else if (a === "pr" && b === "list") out([pr()])
 else if (a === "pr" && b === "merge") { write("pr", "MERGED"); write("merged-at", iso(Date.now())); write("merge-args", JSON.stringify(args)) }
 else if (a === "api") out("")
-else if (a === "run" && b === "list") { const i = args.indexOf("--branch"); out(i >= 0 && args[i + 1] !== "stage" ? [] : [run()].map(({ jobs, ...r }) => r)) }
+else if (a === "run" && b === "list") { const i = args.indexOf("--branch"); const c = args.indexOf("--commit"); const one = ({ jobs, ...r }) => (c >= 0 ? { ...r, headSha: args[c + 1] } : r); out(i >= 0 && args[i + 1] !== "stage" ? [] : [run()].map(one)) }
 else if (a === "run" && b === "view") out(run())
 else { process.stderr.write("gh doble: no sé " + args.join(" ")); process.exit(1) }
 `,

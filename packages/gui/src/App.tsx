@@ -17,6 +17,7 @@ import {
   PenTool,
   Plug,
   Plus,
+  Rocket,
   RotateCw,
   Search,
   Settings as SettingsIcon,
@@ -30,6 +31,7 @@ import { Board } from "./Board.js"
 import { CloseTask } from "./CloseTask.js"
 import { ControlPlane } from "./ControlPlane.js"
 import { hasNativeShell, mutationMeta } from "./client.js"
+import { Delivery } from "./Delivery.js"
 import { demoDetails } from "./fixtures.js"
 import { GithubSettings } from "./GitHub.js"
 import { Inbox } from "./Inbox.js"
@@ -61,6 +63,7 @@ const nav = [
   { id: "runs", label: "Runs", icon: Activity },
   { id: "workbench", label: "Workbench", icon: Terminal },
   { id: "design", label: "Design Studio", icon: PenTool },
+  { id: "delivery", label: "Entregas", icon: Rocket },
   { id: "permissions", label: "Permisos", icon: ShieldCheck },
   { id: "connections", label: "Connections", icon: Plug },
   { id: "agents", label: "Agent Control Plane", icon: Bot },
@@ -612,6 +615,14 @@ export function App() {
                 </div>
               ))}
             {page === "agents" && <ControlPlane demo={demo} />}
+            {page === "delivery" &&
+              (workspace.mode === "live" ? (
+                <Delivery call={workspace.call} />
+              ) : (
+                <div className="padded">
+                  <Hint>Conecta el daemon para ver las entregas del proyecto.</Hint>
+                </div>
+              ))}
             {page === "connections" &&
               (workspace.mode === "live" ? (
                 <LiveConnections
