@@ -172,7 +172,12 @@ export function pullRequest(opts: GhOptions, ref: number | string): Promise<Pull
 
 export function pullRequests(
   opts: GhOptions,
-  q: { state?: "open" | "closed" | "merged" | "all"; base?: string; head?: string; limit?: number } = {},
+  q: {
+    state?: "open" | "closed" | "merged" | "all"
+    base?: string
+    head?: string
+    limit?: number
+  } = {},
 ): Promise<PullRequest[]> {
   return ghJson(
     z.array(PullRequestSchema),
@@ -315,7 +320,13 @@ export async function failedLogTail(opts: GhOptions, id: number, lines = 60): Pr
   // Cada línea viene como «job\tpaso\tfecha mensaje»: queda el mensaje.
   return out
     .split("\n")
-    .map((l) => l.split("\t").slice(2).join("\t").replace(/^\S+Z\s/, ""))
+    .map((l) =>
+      l
+        .split("\t")
+        .slice(2)
+        .join("\t")
+        .replace(/^\S+Z\s/, ""),
+    )
     .filter((l) => l.trim())
     .slice(-lines)
     .join("\n")

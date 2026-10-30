@@ -67,7 +67,9 @@ const PR = {
   mergedAt: null,
   mergedBy: null,
   body: "",
-  statusCheckRollup: [{ __typename: "CheckRun", name: "main", status: "IN_PROGRESS", conclusion: "" }],
+  statusCheckRollup: [
+    { __typename: "CheckRun", name: "main", status: "IN_PROGRESS", conclusion: "" },
+  ],
   files: [{ path: "a.ts", additions: 3, deletions: 1 }],
 }
 
@@ -140,18 +142,30 @@ if (args[0] === "pr" && args[1] === "view") out(${JSON.stringify(PR)})
       "fix(api): corrige la portada (#51)",
     ])
     expect(merge).not.toContain("--delete-branch")
-    expect(del).toEqual(["api", "-X", "DELETE", "repos/{owner}/{repo}/git/refs/heads/fix/api-portada"])
+    expect(del).toEqual([
+      "api",
+      "-X",
+      "DELETE",
+      "repos/{owner}/{repo}/git/refs/heads/fix/api-portada",
+    ])
   })
 
   test("GitHub rechaza un merge si la cabeza cambió: error `rejected`", async () => {
-    const f = fakeGh(`fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)")`)
-    const merge = mergePullRequest({ cwd: f.cwd, gh: f.gh }, 51, { method: "merge", headSha: "old" })
+    const f = fakeGh(
+      `fail("GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)")`,
+    )
+    const merge = mergePullRequest({ cwd: f.cwd, gh: f.gh }, 51, {
+      method: "merge",
+      headSha: "old",
+    })
     await expect(merge).rejects.toBeInstanceOf(GhError)
     await expect(merge).rejects.toMatchObject({ kind: "rejected" })
   })
 
   test("el log de los pasos fallidos llega sin el prefijo de job, paso y hora", async () => {
-    const f = fakeGh(`out("deploy\\tBuild\\t2026-10-30T10:00:00.1Z step 1\\ndeploy\\tBuild\\t2026-10-30T10:00:01.2Z ERROR: no space left\\n")`)
+    const f = fakeGh(
+      `out("deploy\\tBuild\\t2026-10-30T10:00:00.1Z step 1\\ndeploy\\tBuild\\t2026-10-30T10:00:01.2Z ERROR: no space left\\n")`,
+    )
     expect(await failedLogTail({ cwd: f.cwd, gh: f.gh }, 7)).toBe("step 1\nERROR: no space left")
   })
 })
