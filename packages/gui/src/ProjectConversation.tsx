@@ -280,7 +280,7 @@ export function ProjectConversation({
               type="file"
               hidden
               multiple
-              accept=".md,.markdown,.txt,.csv,.json,.docx"
+              accept=".md,.markdown,.txt,.csv,.json,.docx,.pdf"
               aria-label="Archivo para la conversación"
               onChange={(e) => {
                 void attach([...(e.target.files ?? [])])

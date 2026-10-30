@@ -1,0 +1,18 @@
+{
+  "name": "@keel/spike-pdf-text",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Spike: qué librería saca el texto de un PDF para las fuentes del proyecto (ADR-0040 §5).",
+  "type": "module",
+  "scripts": {
+    "fixtures": "bun src/fixtures.ts",
+    "measure": "bun src/measure.ts"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.4.299",
+    "unpdf": "1.9.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
+  }
+}

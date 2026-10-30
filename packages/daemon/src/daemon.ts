@@ -1142,13 +1142,14 @@ export class Daemon {
         },
       ),
       // --- fuentes del proyecto (ADR-0040) ------------------------------------------
-      "sources.add": this.mutation<Params<"sources.add">>("sources.add", (p, uow, ctx) => {
+      // El texto se saca antes de la transacción: un PDF se lee en un Worker (ADR-0040 §5).
+      "sources.add": async (params, ctx) => {
+        const p = params as Params<"sources.add">
         requireHuman(ctx, "adjuntar una fuente")
-        const projectId = this.scopeOf(ctx, p.project_id)
         const bytes = Buffer.from(p.content_base64, "base64")
         let text: string
         try {
-          text = extractText(bytes, p.media_type, p.title)
+          text = await extractText(bytes, p.media_type, p.title)
         } catch (e) {
           if (e instanceof SourceError) throw rpcError(ErrorCode.invalidParams, e.message)
           throw e
@@ -1156,19 +1157,22 @@ export class Daemon {
         const passages = passagesOf(text)
         if (passages.length === 0)
           throw rpcError(ErrorCode.invalidParams, "la fuente no tiene texto que Keel pueda leer")
-        const stored = this.artifacts.put(bytes, p.media_type || "application/octet-stream")
-        const row = repo.addSource({
-          project_id: projectId,
-          title: p.title,
-          media_type: p.media_type,
-          artifact_ref: stored.ref,
-          passages,
-          created_by: uow.actorId,
-        })
-        const view = sourceView(row)
-        uow.emit("source.added", null, { ...view, project_id: projectId })
-        return view
-      }),
+        return this.mutation<Params<"sources.add">>("sources.add", (p, uow, ctx) => {
+          const projectId = this.scopeOf(ctx, p.project_id)
+          const stored = this.artifacts.put(bytes, p.media_type || "application/octet-stream")
+          const row = repo.addSource({
+            project_id: projectId,
+            title: p.title,
+            media_type: p.media_type,
+            artifact_ref: stored.ref,
+            passages,
+            created_by: uow.actorId,
+          })
+          const view = sourceView(row)
+          uow.emit("source.added", null, { ...view, project_id: projectId })
+          return view
+        })(params, ctx)
+      },
       "sources.list": (params, ctx) => {
         const p = params as Params<"sources.list">
         return { sources: repo.listSources(this.scopeOf(ctx, p.project_id)).map(sourceView) }

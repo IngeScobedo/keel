@@ -1,9 +1,11 @@
 /**
- * El texto de una fuente (ADR-0040 §1 y §5): Markdown y texto tal cual, y `.docx` leyendo
- * su `word/document.xml` con un lector ZIP mínimo, sin dependencias. Lo que sale es
- * Markdown que `passagesOf` parte en pasajes. PDF todavía no: pide su spike.
+ * El texto de una fuente (ADR-0040 §1 y §5): Markdown y texto tal cual, `.docx` leyendo
+ * su `word/document.xml` con un lector ZIP mínimo, y PDF con texto por página y bloque
+ * en un Worker (`pdf-worker.ts`). Lo que sale es Markdown que `passagesOf` parte en
+ * pasajes. Escaneos sin texto todavía no: OCR pide su spike.
  */
 import { inflateRawSync } from "node:zlib"
+import type { PdfResult } from "./pdf-text.js"
 
 export class SourceError extends Error {}
 
@@ -11,15 +13,45 @@ const TEXT = /^(text\/|application\/(json|x-yaml|yaml|xml|csv))/
 const TEXT_EXT = /\.(md|markdown|txt|csv|tsv|json|ya?ml|log)$/i
 const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
-export function extractText(bytes: Uint8Array, mediaType: string, title: string): string {
+/** Lo más que Keel espera a un PDF; medido en el spike: 40 páginas en 150 ms. */
+export const PDF_TIMEOUT_MS = 30_000
+
+export async function extractText(
+  bytes: Uint8Array,
+  mediaType: string,
+  title: string,
+  pdfTimeoutMs = PDF_TIMEOUT_MS,
+): Promise<string> {
   if (mediaType === DOCX || /\.docx$/i.test(title)) return docxToMarkdown(bytes)
-  if (mediaType === "application/pdf" || /\.pdf$/i.test(title))
-    throw new SourceError(
-      "PDF todavía no: Keel aún no lo lee (ADR-0040 §5, pendiente de spike). Pégalo como texto o súbelo como .docx o .md.",
-    )
+  if (mediaType === "application/pdf" || /\.pdf$/i.test(title)) return pdfText(bytes, pdfTimeoutMs)
   if (TEXT.test(mediaType) || TEXT_EXT.test(title) || mediaType === "")
     return new TextDecoder("utf-8", { fatal: false }).decode(bytes)
-  throw new SourceError(`no sé leer ${mediaType || title}: sube .md, .txt o .docx`)
+  throw new SourceError(`no sé leer ${mediaType || title}: sube .md, .txt, .docx o .pdf`)
+}
+
+/** El PDF en un Worker propio; si no contesta a tiempo se termina y la fuente se rechaza. */
+function pdfText(bytes: Uint8Array, timeoutMs: number): Promise<string> {
+  const worker = new Worker(new URL("./pdf-worker.ts", import.meta.url).href)
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new SourceError(`el PDF tardó más de ${timeoutMs / 1000} s en leerse`))
+      worker.terminate()
+    }, timeoutMs)
+    worker.onmessage = (e: MessageEvent<PdfResult>) => {
+      clearTimeout(timer)
+      worker.terminate()
+      if (e.data.ok) resolve(e.data.markdown)
+      else reject(new SourceError(e.data.message))
+    }
+    worker.onerror = (e) => {
+      clearTimeout(timer)
+      worker.terminate()
+      reject(new SourceError(`no se pudo leer el PDF: ${e.message}`))
+    }
+    // Copia propia: un Buffer de Node puede compartir su ArrayBuffer con otros.
+    const copy = new Uint8Array(bytes)
+    worker.postMessage(copy, [copy.buffer])
+  })
 }
 
 /** Lee un archivo de un ZIP por su nombre: directorio central y su cabecera local. */

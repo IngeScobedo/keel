@@ -373,7 +373,7 @@ export function Composer({
               type="button"
               className="ui-icon-button"
               aria-label="Adjuntar archivo"
-              title="Adjuntar archivo (.md, .txt, .docx)"
+              title="Adjuntar archivo (.md, .txt, .docx, .pdf)"
               onClick={() => fileInput.current?.click()}
             >
               <Paperclip size={15} aria-hidden />
@@ -383,7 +383,7 @@ export function Composer({
               type="file"
               hidden
               multiple
-              accept=".md,.markdown,.txt,.csv,.json,.docx"
+              accept=".md,.markdown,.txt,.csv,.json,.docx,.pdf"
               aria-label="Archivo a adjuntar"
               onChange={(e) => {
                 extras.attach([...(e.target.files ?? [])])

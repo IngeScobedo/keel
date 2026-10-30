@@ -16,6 +16,7 @@
     "@keel/git": "workspace:*",
     "@openai/codex-sdk": "^0.162.0",
     "sqlite-vec": "^0.1.9",
+    "unpdf": "1.9.0",
     "zod": "^4.4.3"
   },
   "keel": {

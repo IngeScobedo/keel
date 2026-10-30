@@ -12,6 +12,7 @@ import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { conversationHeader } from "../src/daemon.ts"
 import { Daemon, IpcClient, type QueryFn } from "../src/index.ts"
 import { CONVERSATION_KEY } from "../src/store/repo.ts"
+import { minimalPdf } from "./fixtures/minimal-pdf.ts"
 import { initRepo } from "./git-fixture.ts"
 import { firstPrompt } from "./replay.ts"
 
@@ -279,15 +280,29 @@ describe("ADR-0035/0040/0042: de una lista adjunta a un lote", () => {
     expect(report.markdown).toContain(`Lote ${started.batch.display_id}`)
   }, 30_000)
 
-  test("una fuente .docx se lee; un PDF se rechaza con por qué", async () => {
+  test("una fuente .docx y un PDF con texto se leen; un PDF roto se rechaza con por qué", async () => {
     const s = await boot()
-    const pdf = s.human.call("sources.add", {
+    const broken = s.human.call("sources.add", {
       ...meta(),
-      title: "minuta.pdf",
+      title: "rota.pdf",
       media_type: "application/pdf",
       content_base64: Buffer.from("%PDF-1.4").toString("base64"),
     })
-    await expect(pdf).rejects.toThrow("PDF todavía no")
+    await expect(broken).rejects.toThrow("no es un PDF válido")
+    const pdf = (await s.human.call("sources.add", {
+      ...meta(),
+      title: "minuta.pdf",
+      media_type: "application/pdf",
+      content_base64: Buffer.from(minimalPdf(["Separar Proyectos de Pedidos."])).toString("base64"),
+    })) as { key: string; passages: number }
+    expect(pdf.passages).toBe(1)
+    const fromPdf = (await s.human.call("sources.get", { source: pdf.key })) as {
+      passages: { heading: string | null; text: string }[]
+    }
+    expect(fromPdf.passages[0]).toMatchObject({
+      heading: "Página 1",
+      text: "Separar Proyectos de Pedidos.",
+    })
     const docx = await makeDocx([
       ["Heading1", "Minuta"],
       ["", "Quedamos en separar Proyectos de Pedidos."],
