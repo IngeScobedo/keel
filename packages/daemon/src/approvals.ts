@@ -67,6 +67,8 @@ export type ApprovalGateDeps = {
     inMethod: boolean
     /** ADR-0029 §3: en `close`, lo único que el agente puede editar. */
     canon?: { adr_dirs: string[]; sdd_dirs: string[]; roadmap: string | null }
+    /** ADR-0039 §3: la frontera reservada de una subtarea; fuera de ella no se edita. */
+    frontier?: string[]
   }
 }
 
@@ -107,6 +109,18 @@ export class ApprovalGate implements ToolGate {
     const cwd = this.deps.cwdOf?.(runId)
     if (path === null || !cwd) return false
     return canonWritable(relative(cwd, resolve(cwd, path)), canon)
+  }
+
+  /** ADR-0039 §3: ¿el archivo cae dentro de la frontera reservada de la subtarea? */
+  private inFrontier(runId: string, input: unknown, frontier: string[]): boolean {
+    const path = filePathOf(input)
+    const cwd = this.deps.cwdOf?.(runId)
+    if (path === null || !cwd) return true
+    const rel = relative(cwd, resolve(cwd, path)).split("\\").join("/")
+    return frontier.some((g) => {
+      const glob = g.replace(/^\.\//, "").replace(/\/$/, "/**")
+      return glob === rel || rel.startsWith(`${glob}/`) || new Bun.Glob(glob).match(rel)
+    })
   }
 
   private insideRun(runId: string, input: unknown): boolean {
@@ -197,6 +211,17 @@ export class ApprovalGate implements ToolGate {
         req,
         "stage",
         "Keel: en close sólo se escribe el canon del proyecto (ADR, SDD, roadmap) y los documentos de la tarea con task_doc_put (ADR-0029). Para cambiar código, vuelve a implement con stage_advance y el motivo en reason; después hay que revisar otra vez.",
+      )
+    if (
+      stage.frontier?.length &&
+      EDIT_TOOLS.has(req.tool) &&
+      !this.inFrontier(run.id, req.input, stage.frontier)
+    )
+      return this.refuse(
+        ctx,
+        req,
+        "frontier",
+        `Keel: ${filePathOf(req.input) ?? "ese archivo"} está fuera de la frontera de esta subtarea (${stage.frontier.join(", ")}), reservada para que los carriles en paralelo no se pisen (ADR-0039). Si hace falta cambiarlo, pide un handoff con handoff_request: queda como tarea para el carril dueño, con lo que encontraste.`,
       )
     const question = QUESTION_TOOLS.has(req.tool)
     // Una pregunta espera siempre: el tiempo no contesta por el humano.

@@ -1808,6 +1808,38 @@ export const Methods = {
     }),
     result: z.object({ approval_id: z.string(), pending: z.number().int() }),
   },
+  /**
+   * ADR-0039 §2: los carriles de una feature y por qué no arranca cada subtarea que
+   * espera: el límite de runs, su carril (otra con frontera cruzada) o sus dependencias.
+   */
+  "features.lanes": {
+    params: z.object({ work_item_id: z.string() }),
+    result: z.object({
+      max_concurrent_runs: z.number().int(),
+      live_runs: z.number().int(),
+      lanes: z.array(z.array(z.string())),
+      subtasks: z.array(
+        z.object({
+          id: z.string(),
+          key: z.string(),
+          display_id: z.string(),
+          title: z.string(),
+          lifecycle: z.string(),
+          lane: z.number().int().nullable(),
+          state: z.enum([
+            "done",
+            "active",
+            "waiting_lane",
+            "waiting_limit",
+            "waiting_deps",
+            "ready",
+          ]),
+          /** En `waiting_lane`: la subtarea que tiene la frontera reservada. */
+          waiting_for: z.string().nullable(),
+        }),
+      ),
+    }),
+  },
   "github.status": {
     params: z.object({ project_id: z.string().optional(), fresh: z.boolean().optional() }),
     result: GithubStatusSchema,

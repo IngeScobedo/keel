@@ -20,6 +20,7 @@ import {
   describePattern,
   type Effort,
   ErrorCode,
+  frontiersOverlap,
   type GithubPr,
   type GithubRun,
   type GitPlan,
@@ -268,6 +269,8 @@ export class Daemon {
    * El fetch del remoto por proyecto: Entregas no lo repite en cada vistazo ni lo espera.
    * Puede tardar (la llave pide su frase por askpass); corre aparte y se usa al terminar.
    */
+  /** ADR-0039 §4: la integración en curso de cada feature; la siguiente espera su turno. */
+  private readonly integrating = new Map<string, Promise<unknown>>()
   private readonly deliveryCache = new Map<
     string,
     { at: number; value: DeliveryStatus; refreshing: Promise<DeliveryStatus> | null }
@@ -512,6 +515,8 @@ export class Daemon {
     this.track(this.outbox.drain())
     this.server.start()
     this.agentServer.start()
+    // ADR-0039: lo que esperaba lugar antes de reiniciar vuelve a la fila.
+    queueMicrotask(() => this.scheduleAllFeatures())
     let last = performance.now()
     this.lagTimer = setInterval(() => {
       const t = performance.now()
@@ -2590,6 +2595,13 @@ export class Daemon {
         })
       },
       // --- GitHub por el gh del humano (ADR-0043) -------------------------------------
+      "features.lanes": (params, ctx) => {
+        const p = params as Params<"features.lanes">
+        const w = this.requireWorkItem(p.work_item_id)
+        this.scopeOf(ctx, w.project_id)
+        if (!this.featureOf(w.id)) throw rpcError(ErrorCode.invalidParams, "no es una feature")
+        return this.featureLanes(w.id)
+      },
       "github.status": (params, ctx) => {
         const p = params as Params<"github.status">
         const root = repo.projectRoot(this.scopeOf(ctx, p.project_id)) ?? this.rootPath
@@ -3277,6 +3289,8 @@ export class Daemon {
               uow.actorId,
             )
             uow.emit("limits.changed", null, { limits: this.limits, actor: actorOf(ctx) })
+            // ADR-0039 §2: subir el límite deja arrancar lo que esperaba lugar.
+            uow.afterCommit(() => this.scheduleAllFeatures())
           }
           const view = this.settingsView()
           uow.emit("settings.changed", null, view)
@@ -3832,6 +3846,7 @@ export class Daemon {
     readOnly: boolean
     inMethod: boolean
     canon?: ProjectProfile["canon"]
+    frontier?: string[]
   } {
     const flow = this.repo.getFlow(run.work_item_id)
     // Un run que no ejecuta es de sólo lectura, esté o no en el método (ADR-0021 §3).
@@ -3846,6 +3861,9 @@ export class Daemon {
       readOnly: isReadOnlyStage(flow.stage) || frozen,
       inMethod: true,
     }
+    // ADR-0039 §3: la frontera de una subtarea es una reserva; fuera de ella no se edita.
+    const frontier = this.subtaskOf(run.work_item_id)?.frontier ?? []
+    if (flow.stage !== "close" && frontier.length > 0) return { ...policy, frontier }
     // ADR-0029 §3: el cierre sólo escribe el canon; sin perfil, nada fuera de los documentos.
     if (flow.stage === "close")
       return {
@@ -4737,56 +4755,133 @@ export class Daemon {
       this.finishFeature(parentId)
       return
     }
-    // Una a la vez por defecto (ADR-0002 regla 5): nada nuevo mientras otra trabaja o espera.
-    const busy = now.some(
+    // ADR-0039: carriles en paralelo hasta el límite del humano (ADR-0002 regla 5). Una
+    // subtarea lista arranca si su frontera no se cruza con la de una hermana activa: la
+    // que corre, espera al humano, espera revisión o falló tiene su frontera reservada.
+    const frontier = (id: string) => this.subtaskOf(id)?.frontier ?? []
+    const active = now.filter(
       (c) =>
         repo.liveRunFor(c.id) !== null ||
         ["running", "waiting_human", "needs_review", "failed"].includes(c.lifecycle),
     )
-    // Si la hija que acaba de integrarse aún figura con su run vivo, se reintenta cuando
-    // ese run termine (sin esto la feature se quedaba esperando para siempre).
-    if (busy) {
-      this.waitingFeatures.add(parentId)
-      return
-    }
-    const next = now.find((c) => c.lifecycle === "planned" && repo.openBlocks(c.id).length === 0)
-    if (!next) {
-      this.waitingFeatures.delete(parentId)
-      return
-    }
-    try {
-      runUnitOfWork(this.uowDeps(), this.systemScope(parent.project_id), (uow) => {
-        // ADR-0042 §4: el agente que propuso el plan del lote para esta subtarea.
-        const prof = this.subtaskOf(next.id)?.profile
-        const run = this.startFlowRun(uow, next, workPrompt(next, "implement"), {
-          source: "keel",
-          ...(prof ? { profile: prof.provider } : {}),
-          ...(prof?.model || prof?.effort
-            ? {
-                options: {
-                  ...(prof.model ? { model: prof.model } : {}),
-                  ...(prof.effort ? { effort: prof.effort } : {}),
-                },
-              }
-            : {}),
+    const ready = now
+      .filter((c) => c.lifecycle === "planned" && repo.openBlocks(c.id).length === 0)
+      .sort((a, b) => keyOrder(this.subtaskOf(a.id)?.key) - keyOrder(this.subtaskOf(b.id)?.key))
+    let full = false
+    for (const next of ready) {
+      // Mismo carril que una activa: espera a que esa termine o se integre.
+      if (active.some((a) => frontiersOverlap(frontier(a.id), frontier(next.id)))) continue
+      if (full) continue
+      try {
+        runUnitOfWork(this.uowDeps(), this.systemScope(parent.project_id), (uow) => {
+          // ADR-0042 §4: el agente que propuso el plan del lote para esta subtarea.
+          const prof = this.subtaskOf(next.id)?.profile
+          const run = this.startFlowRun(uow, next, workPrompt(next, "implement"), {
+            source: "keel",
+            ...(prof ? { profile: prof.provider } : {}),
+            ...(prof?.model || prof?.effort
+              ? {
+                  options: {
+                    ...(prof.model ? { model: prof.model } : {}),
+                    ...(prof.effort ? { effort: prof.effort } : {}),
+                  },
+                }
+              : {}),
+          })
+          uow.emit("feature.subtask_started", repo.lastRunFor(parentId)?.id ?? null, {
+            work_item_id: parentId,
+            subtask_id: next.id,
+            key: this.subtaskOf(next.id)?.key ?? null,
+            title: next.title,
+            run_id: run.id,
+          })
         })
-        uow.emit("feature.subtask_started", repo.lastRunFor(parentId)?.id ?? null, {
+        active.push(repo.getWorkItem(next.id) as WorkItemRow)
+      } catch (e) {
+        // Sin lugar de concurrencia o sin presupuesto: las demás también esperan.
+        full = true
+        this.emitSystem("feature.waiting", repo.lastRunFor(parentId)?.id ?? null, {
           work_item_id: parentId,
           subtask_id: next.id,
-          key: this.subtaskOf(next.id)?.key ?? null,
-          title: next.title,
-          run_id: run.id,
+          message: e instanceof Error ? e.message : String(e),
         })
-      })
-      this.waitingFeatures.delete(parentId)
-    } catch (e) {
-      // Sin lugar de concurrencia o sin presupuesto: arranca cuando termine otro run.
-      this.waitingFeatures.add(parentId)
-      this.emitSystem("feature.waiting", repo.lastRunFor(parentId)?.id ?? null, {
-        work_item_id: parentId,
-        subtask_id: next.id,
-        message: e instanceof Error ? e.message : String(e),
-      })
+      }
+    }
+    // Queda algo por arrancar: se reintenta al terminar un run o al subir el límite.
+    const pendingStart = repo
+      .childrenOf(parentId)
+      .some((c) => c.lifecycle === "planned" && repo.openBlocks(c.id).length === 0)
+    if (pendingStart || active.length > 0) this.waitingFeatures.add(parentId)
+    else this.waitingFeatures.delete(parentId)
+  }
+
+  /** Todas las features con algo por hacer: al arrancar el daemon y al subir el límite. */
+  private scheduleAllFeatures(): void {
+    for (const id of this.repo.featureParents()) {
+      const w = this.repo.getWorkItem(id)
+      if (!w || w.lifecycle === "done") continue
+      try {
+        this.scheduleFeature(id)
+      } catch (e) {
+        console.error(`keel: no pude programar la feature ${id}`, e)
+      }
+    }
+  }
+
+  /**
+   * ADR-0039 §2: los carriles de una feature y dónde está cada subtarea: corriendo,
+   * esperando lugar (el límite), esperando su carril (otra con frontera cruzada) o sus
+   * dependencias. La GUI lo muestra para que se vea por qué algo no arranca.
+   */
+  private featureLanes(parentId: string) {
+    const repo = this.repo
+    const kids = repo
+      .childrenOf(parentId)
+      .sort((a, b) => keyOrder(this.subtaskOf(a.id)?.key) - keyOrder(this.subtaskOf(b.id)?.key))
+    const info = kids.map((c) => ({ c, sub: this.subtaskOf(c.id) }))
+    const lanes = lanesFor(
+      info.map(({ c, sub }) => ({ key: sub?.key ?? c.display_id, scope: sub?.frontier ?? [] })),
+    )
+    const active = kids.filter(
+      (c) =>
+        repo.liveRunFor(c.id) !== null ||
+        ["running", "waiting_human", "needs_review", "failed"].includes(c.lifecycle),
+    )
+    const live = repo.liveRuns().length
+    const limit = this.limits.max_concurrent_runs
+    return {
+      max_concurrent_runs: limit,
+      live_runs: live,
+      lanes,
+      subtasks: info.map(({ c, sub }) => {
+        const key = sub?.key ?? c.display_id
+        const lane = lanes.findIndex((l) => l.includes(key))
+        let state: "done" | "active" | "waiting_lane" | "waiting_limit" | "waiting_deps" | "ready"
+        let blocking: string | null = null
+        if (c.lifecycle === "done") state = "done"
+        else if (active.some((a) => a.id === c.id)) state = "active"
+        else if (c.lifecycle === "blocked" || repo.openBlocks(c.id).length > 0)
+          state = "waiting_deps"
+        else {
+          const other = active.find((a) =>
+            frontiersOverlap(this.subtaskOf(a.id)?.frontier ?? [], sub?.frontier ?? []),
+          )
+          if (other) {
+            state = "waiting_lane"
+            blocking = this.subtaskOf(other.id)?.key ?? other.display_id
+          } else state = live >= limit ? "waiting_limit" : "ready"
+        }
+        return {
+          id: c.id,
+          key,
+          display_id: c.display_id,
+          title: c.title,
+          lifecycle: c.lifecycle,
+          lane: lane >= 0 ? lane : null,
+          state,
+          waiting_for: blocking,
+        }
+      }),
     }
   }
 
@@ -4840,7 +4935,26 @@ export class Daemon {
    * feature. Un conflicto la devuelve a implementar con los archivos; si se repite en
    * el mismo archivo, se marca en el padre (fronteras mal puestas).
    */
-  private async integrateSubtask(
+  /**
+   * ADR-0039 §4: con carriles en paralelo, dos subtareas pueden cerrar a la vez; sus
+   * integraciones a la rama de la feature van en fila para que una no mueva la rama
+   * debajo de la otra.
+   */
+  private integrateSubtask(
+    item: WorkItemRow,
+    plan: GitPlan,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const parentId = item.parent_work_item_id as string
+    const prev = this.integrating.get(parentId) ?? Promise.resolve()
+    const next = prev.then(() => this.integrateSubtaskNow(item, plan))
+    this.integrating.set(
+      parentId,
+      next.catch(() => {}),
+    )
+    return next
+  }
+
+  private async integrateSubtaskNow(
     item: WorkItemRow,
     plan: GitPlan,
   ): Promise<{ ok: true } | { ok: false; message: string }> {
@@ -6539,6 +6653,12 @@ export function conventionalPlan<
 }
 
 type TaskChangesView = z.infer<(typeof Methods)["tasks.changes"]["result"]>
+
+/** `T3` → 3, para ordenar subtareas por su llave del plan. */
+function keyOrder(key: string | undefined): number {
+  const n = Number(/(\d+)/.exec(key ?? "")?.[1])
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER
+}
 
 /** Un error de `gh` como error del protocolo: la GUI distingue sin sesión de rechazado. */
 function ghCall<T>(work: Promise<T>): Promise<T> {

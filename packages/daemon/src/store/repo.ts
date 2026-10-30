@@ -831,6 +831,15 @@ export class Repo {
       )
       .get(projectId, CONVERSATION_KEY)
   }
+  /** Las tareas padre de una feature (ADR-0022), de todos los proyectos. */
+  featureParents(): string[] {
+    return this.db
+      .query<{ work_item_id: string }, []>(
+        "SELECT work_item_id FROM task_flows WHERE feature_json IS NOT NULL",
+      )
+      .all()
+      .map((r) => r.work_item_id)
+  }
   /** Las conversaciones del proyecto, la de actividad más reciente primero (ADR-0035 §1). */
   conversations(projectId: string): ConversationRow[] {
     const cols = WORK_ITEM_COLS.split(", ")

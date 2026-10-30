@@ -444,4 +444,178 @@ describe("ADR-0022: feature y subtareas", () => {
       .map((e) => JSON.parse(e.payload_json))
     expect(waiting).toMatchObject([{ work_item_id: parent.id, subtask_id: a?.id, what: "commit" }])
   }, 60_000)
+
+  test("ADR-0039: con lugar, los carriles corren a la vez; el límite y el carril dicen por qué esperan", async () => {
+    const { daemon, human, scripts, until } = await boot()
+    const d = () => daemon
+    const parent = (await human.call("work_items.create", {
+      ...meta(),
+      title: "Capítulos en paralelo",
+      kind: "feature",
+    })) as { id: string }
+    scripts.push(async (t) => {
+      await put(t, "brief", BRIEF)
+      await advance(t, "design", { ceremony: "formal", reason: "cambia el contrato" })
+    })
+    scripts.push(async (t) => {
+      await put(t, "spec", SPEC)
+      await put(t, "design", DESIGN)
+      await put(t, "tasks", TASKS)
+      await advance(t, "implement")
+    })
+    // T1 y T2 se quedan trabajando hasta que la prueba las suelte.
+    let release: () => void = () => {}
+    const hold = new Promise<void>((r) => {
+      release = r
+    })
+    const denied: string[] = []
+    const cwds: string[] = []
+    scripts.push(
+      subtaskScript(d, async () => {}),
+      subtaskScript(d, async () => {}),
+      subtaskScript(d),
+    )
+    const t1 = scripts[2] as Script
+    const t2 = scripts[3] as Script
+    scripts[2] = async (t) => {
+      // ADR-0039 §3: fuera de su frontera no edita; se le ofrece el handoff.
+      const cwd = String(t.options.cwd)
+      const r = (await t.use("Write", {
+        file_path: join(cwd, "api/repo/otro.ts"),
+        content: "x",
+      })) as { behavior: string; message?: string } | undefined
+      denied.push(`${r?.behavior}: ${r?.message ?? ""}`)
+      cwds.push(cwd)
+      await hold
+      await t1(t)
+    }
+    scripts[3] = async (t) => {
+      cwds.push(String(t.options.cwd))
+      await hold
+      await t2(t)
+    }
+    await human.call("tasks.work", { ...meta(), work_item_id: parent.id })
+    await until(() => daemon.repo.pendingStageGate(parent.id) !== null, "gate (a)")
+    await approveGate(human, daemon, parent.id)
+    await until(
+      () =>
+        daemon.repo.pendingStageGate(parent.id) !== null &&
+        daemon.repo.getFlow(parent.id)?.stage === "design",
+      "gate (b)",
+    )
+    await approveGate(human, daemon, parent.id, { auto_integrate: true })
+    const kids = daemon.repo.childrenOf(parent.id)
+    type Lanes = {
+      max_concurrent_runs: number
+      lanes: string[][]
+      subtasks: { key: string; state: string; waiting_for: string | null }[]
+    }
+    const lanes = async () =>
+      (await human.call("features.lanes", { work_item_id: parent.id })) as Lanes
+
+    // Con el límite en 1 (el default), T1 corre y T2 espera lugar: la GUI lo dice.
+    await until(() => daemon.repo.liveRunFor(kids[0]?.id as string) !== null, "T1 corre")
+    let l = await lanes()
+    expect(l.lanes).toEqual([["T1"], ["T2"], ["T3"]])
+    expect(l.subtasks.map((x) => [x.key, x.state])).toEqual([
+      ["T1", "active"],
+      ["T2", "waiting_limit"],
+      ["T3", "waiting_deps"],
+    ])
+    expect(daemon.repo.liveRunFor(kids[1]?.id as string)).toBeNull()
+
+    // Subir el límite deja arrancar a T2 sin esperar a que T1 termine.
+    await human.call("settings.update", { ...meta(), limits: { max_concurrent_runs: 2 } })
+    await until(() => daemon.repo.liveRunFor(kids[1]?.id as string) !== null, "T2 corre")
+    l = await lanes()
+    expect(l.subtasks.map((x) => x.state)).toEqual(["active", "active", "waiting_deps"])
+    // Cada una en su worktree.
+    await until(() => cwds.length === 2, "las dos trabajando")
+    expect(cwds[0]).not.toBe(cwds[1])
+    expect(denied[0]).toStartWith("deny: ")
+    expect(denied[0]).toContain("fuera de la frontera")
+    expect(denied[0]).toContain("handoff_request")
+
+    // Se sueltan: las dos se integran (en fila) y la fase 2 arranca.
+    release()
+    await until(
+      () => daemon.repo.childrenOf(parent.id).every((c) => c.lifecycle === "done"),
+      "las 3 integradas",
+      30_000,
+    )
+  }, 60_000)
+
+  test("ADR-0039: dos subtareas con fronteras que se cruzan van en el mismo carril, de a una", async () => {
+    const { daemon, human, scripts, until } = await boot()
+    const d = () => daemon
+    await human.call("settings.update", { ...meta(), limits: { max_concurrent_runs: 3 } })
+    const parent = (await human.call("work_items.create", {
+      ...meta(),
+      title: "Carril compartido",
+      kind: "feature",
+    })) as { id: string }
+    scripts.push(async (t) => {
+      await put(t, "brief", BRIEF)
+      await advance(t, "design", { ceremony: "formal", reason: "cambia el contrato" })
+    })
+    scripts.push(async (t) => {
+      await put(t, "spec", SPEC)
+      await put(t, "design", DESIGN)
+      await put(
+        t,
+        "tasks",
+        `## Fase 1 — API
+- [ ] T1 Contrato de capítulos → \`api/**\` → R1
+- [ ] T2 Repositorio de capítulos → \`api/repo/**\` → R1
+- [ ] T3 Tarjeta por capítulos → \`web/photos/**\` → R2
+`,
+      )
+      await advance(t, "implement")
+    })
+    let release: () => void = () => {}
+    const hold = new Promise<void>((r) => {
+      release = r
+    })
+    const held =
+      (inner: Script): Script =>
+      async (t) => {
+        await hold
+        await inner(t)
+      }
+    scripts.push(held(subtaskScript(d)), held(subtaskScript(d)), held(subtaskScript(d)))
+    await human.call("tasks.work", { ...meta(), work_item_id: parent.id })
+    await until(() => daemon.repo.pendingStageGate(parent.id) !== null, "gate (a)")
+    await approveGate(human, daemon, parent.id)
+    await until(
+      () =>
+        daemon.repo.pendingStageGate(parent.id) !== null &&
+        daemon.repo.getFlow(parent.id)?.stage === "design",
+      "gate (b)",
+    )
+    await approveGate(human, daemon, parent.id, { auto_integrate: true })
+    const kids = daemon.repo.childrenOf(parent.id)
+    await until(
+      () =>
+        daemon.repo.liveRunFor(kids[0]?.id as string) !== null &&
+        daemon.repo.liveRunFor(kids[2]?.id as string) !== null,
+      "T1 y T3 corren",
+    )
+    const l = (await human.call("features.lanes", { work_item_id: parent.id })) as {
+      lanes: string[][]
+      subtasks: { key: string; state: string; waiting_for: string | null }[]
+    }
+    // T1 (api/**) y T2 (api/repo/**) se cruzan: mismo carril; T3 va aparte.
+    expect(l.lanes).toEqual([["T1", "T2"], ["T3"]])
+    expect(l.subtasks.find((x) => x.key === "T2")).toMatchObject({
+      state: "waiting_lane",
+      waiting_for: "T1",
+    })
+    expect(daemon.repo.liveRunFor(kids[1]?.id as string)).toBeNull()
+    release()
+    await until(
+      () => daemon.repo.childrenOf(parent.id).every((c) => c.lifecycle === "done"),
+      "las 3 integradas",
+      30_000,
+    )
+  }, 60_000)
 })

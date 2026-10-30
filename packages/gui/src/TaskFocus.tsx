@@ -252,6 +252,8 @@ export function TaskFocus({
           <WorkFacts task={task} runs={taskRuns} events={events} call={call} />
           {task.feature && (
             <SubtaskLanes
+              call={call}
+              parentId={task.id}
               subtasks={subtasks}
               runs={runs}
               events={events}
@@ -446,7 +448,19 @@ function WorkFacts({
 }
 
 /** Las subtareas trabajando en paneles; las encoladas plegadas; las hechas en una línea. */
+type FeatureLanes = ReturnType<(typeof Methods)["features.lanes"]["result"]["parse"]>
+
+/** Por qué no arranca una subtarea en cola (ADR-0039 §2). */
+const WAIT_LABEL: Record<string, string> = {
+  waiting_limit: "espera lugar",
+  waiting_lane: "espera su carril",
+  waiting_deps: "espera dependencias",
+  ready: "lista",
+}
+
 function SubtaskLanes({
+  call,
+  parentId,
   subtasks,
   runs,
   events,
@@ -454,6 +468,8 @@ function SubtaskLanes({
   onOpen,
   feature,
 }: {
+  call: Call
+  parentId: string
   subtasks: WorkItem[]
   runs: Run[]
   events: EventNotification[]
@@ -462,6 +478,21 @@ function SubtaskLanes({
   feature: NonNullable<WorkItem["feature"]>
 }) {
   const lanes = lanesOf(subtasks, runs, waitingYou)
+  // ADR-0039: los carriles y por qué espera cada una; se relee cuando algo cambia.
+  const [lane, setLane] = useState<FeatureLanes | null>(null)
+  const signature = `${subtasks.map((x) => x.lifecycle).join()}|${runs.filter(isLive).length}`
+  // biome-ignore lint/correctness/useExhaustiveDependencies: la firma sólo dispara la relectura.
+  useEffect(() => {
+    let alive = true
+    call("features.lanes", { work_item_id: parentId })
+      .then((r) => alive && setLane(r))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [call, parentId, signature])
+  const why = (id: string) => lane?.subtasks.find((x) => x.id === id)
+  const waitingLimit = lane?.subtasks.filter((x) => x.state === "waiting_limit").length ?? 0
   return (
     <section className="tf-section" data-testid="feature-plan">
       <h3>
@@ -471,6 +502,14 @@ function SubtaskLanes({
         {feature.branch}
         {feature.auto_integrate ? " · se integran solas" : " · cada integración te pregunta"}
       </p>
+      {lane && (
+        <p className="muted tf-small" data-testid="feature-lanes">
+          {lane.lanes.length} carril{lane.lanes.length === 1 ? "" : "es"} · {lane.live_runs} de{" "}
+          {lane.max_concurrent_runs} run{lane.max_concurrent_runs === 1 ? "" : "s"} en uso
+          {waitingLimit > 0 &&
+            ` · ${waitingLimit} lista${waitingLimit === 1 ? "" : "s"} esperando lugar: subir el límite (Ajustes) es tu decisión`}
+        </p>
+      )}
       <div className="tf-lanes">
         {[...lanes.waiting, ...lanes.working].map((s) => {
           const waiting = lanes.waiting.includes(s)
@@ -518,6 +557,12 @@ function SubtaskLanes({
               <Status state={s.visual_state} dot />
               <span className="mono muted">{s.subtask?.key ?? s.display_id}</span>
               <span>{s.title}</span>
+              {why(s.id) && WAIT_LABEL[why(s.id)?.state ?? ""] && (
+                <span className="rc-pill" data-testid="subtask-wait" data-state={why(s.id)?.state}>
+                  {WAIT_LABEL[why(s.id)?.state ?? ""]}
+                  {why(s.id)?.waiting_for ? ` · ${why(s.id)?.waiting_for}` : ""}
+                </span>
+              )}
             </button>
           ))}
         </details>

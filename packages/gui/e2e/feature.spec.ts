@@ -59,6 +59,9 @@ test("feature: el gate (b) muestra el árbol, las subtareas se integran solas y 
 
   // La vista unificada de cambios: la rama de la feature, por subtarea.
   await page.locator(".task-card").first().click()
+  // ADR-0039: los carriles y cuántos runs hay contra el límite.
+  await expect(page.getByTestId("feature-lanes")).toContainText("3 carriles")
+  await expect(page.getByTestId("feature-lanes")).toContainText(" en uso")
   await page
     .getByRole("navigation", { name: "Contexto" })
     .getByRole("button", { name: "Cambios" })
