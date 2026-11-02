@@ -463,3 +463,41 @@
     background: var(--color-accent-subtle);
   }
 }
+
+/* KEEL-15: la decisión del humano tras una revisión sin FAIL. */
+@layer components {
+  .tf-decision {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    border: 1px solid var(--color-status-waiting-human-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-status-waiting-human-bg);
+  }
+  .tf-decision header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+  .tf-decision header span {
+    font-size: var(--text-meta-size);
+    color: var(--color-text-secondary);
+  }
+  .tf-decision p {
+    margin: 0;
+    color: var(--color-text-secondary);
+  }
+  .tf-decision form,
+  .tf-decision-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .tf-decision .ui-input {
+    flex: 1;
+    min-width: 14rem;
+  }
+}

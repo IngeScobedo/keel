@@ -8,6 +8,7 @@ import {
   dagOf,
   lanesOf,
   nextAction,
+  qaSummary,
   splitUnified,
 } from "../src/task-model.ts"
 
@@ -45,6 +46,22 @@ const SPEC = `## Requisitos
 `
 
 describe("vista de tarea", () => {
+  test("KEEL-15: una revisión sin FAIL y sin run vivo pide la decisión del humano", () => {
+    const done = run({ status: "completed" })
+    const review = flow({ stage: "review" })
+    expect(nextAction(item({}), review, [done], 0, "CONCERNS")).toEqual({
+      kind: "review",
+      label: "Decidir la revisión (CONCERNS)",
+    })
+    expect(nextAction(item({}), review, [done], 0, "FAIL").kind).toBe("work")
+    expect(nextAction(item({}), review, [run({ status: "running" })], 0, "PASS").kind).toBe("watch")
+    expect(
+      qaSummary(
+        "# QA\n\n## Veredicto: CONCERNS\n\nFalta verlo en el navegador.\n## Evidencia\n- lint",
+      ),
+    ).toBe("Falta verlo en el navegador. - lint")
+  })
+
   test("una sola acción, en orden de urgencia", () => {
     expect(nextAction(item({}), null, [], 0)).toEqual({ kind: "work", label: "Trabajar" })
     const gate = flow({

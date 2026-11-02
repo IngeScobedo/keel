@@ -4316,6 +4316,7 @@ export class Daemon {
       if (to === "implement" && !this.repo.getFlow(w.id)?.baseline_json)
         this.track(this.taskVerify(w.id, { baseline: true }))
       if (to === "review") this.track(this.taskVerify(w.id, { notify: true }))
+      if (to === "close" && w.parent_work_item_id) this.track(this.closeCommittedSubtask(w.id))
     })
   }
 
@@ -6204,6 +6205,80 @@ export class Daemon {
     return null
   }
 
+  /**
+   * ADR-0021 §4 y ADR-0022 §2: con el plan de cierre aprobado y hecho, una subtarea se
+   * integra a la feature (si choca, vuelve a implementar) y la tarea termina. Devuelve
+   * false si la subtarea volvió.
+   */
+  private async finishClose(
+    item: WorkItemRow,
+    run: RunRow,
+    plan: GitPlan,
+    planId: string,
+    approver: string | null,
+  ): Promise<boolean> {
+    if (this.repo.getFlow(item.id)?.stage !== "close") return true
+    if (item.parent_work_item_id) {
+      const integrated = await this.integrateSubtask(item, plan)
+      if (!integrated.ok) {
+        runUnitOfWork(this.uowDeps(), this.systemScope(run.project_id), (uow) => {
+          this.repo.updateFlow(item.id, { stage: "implement" })
+          uow.emit("task.stage_changed", run.id, {
+            work_item_id: item.id,
+            from: "close",
+            to: "implement",
+            ceremony: this.repo.getFlow(item.id)?.ceremony ?? null,
+            authorized_by: "system:keel",
+            delegated: true,
+            reason: integrated.message,
+          })
+        })
+        this.closedByPlan.delete(item.id)
+        this.continueFlow(
+          item.id,
+          `No se pudo integrar a la feature: ${integrated.message}. Resuelve el conflicto en tu frontera y vuelve a cerrar.`,
+        )
+        return false
+      }
+    }
+    const current = this.repo.getWorkItem(item.id)
+    // Si el run sigue vivo, la tarea aún no espera la revisión: se cierra al asentarlo.
+    if (current?.lifecycle === "running")
+      this.closedByPlan.set(item.id, approver ?? "system:daemon")
+    if (current?.lifecycle === "needs_review" || current?.lifecycle === "waiting_human")
+      runUnitOfWork(
+        this.uowDeps(),
+        { projectId: run.project_id, actorId: approver ?? "system:daemon" },
+        (uow) => {
+          this.transition(uow, current, "done", "human_close", {
+            runId: run.id,
+            reason: "el humano aprobó el plan de cierre",
+          })
+          uow.emit("task.closed", run.id, { work_item_id: item.id, plan_id: planId, approver })
+        },
+      )
+    return true
+  }
+
+  /**
+   * Una subtarea entra a `close` con su trabajo ya confirmado por un plan que el humano
+   * aprobó antes (KEEL-15 lo aprobó en review): no queda nada que proponer, así que Keel
+   * integra lo confirmado y la cierra. Con cambios sin confirmar, el agente propone el
+   * plan de cierre como siempre.
+   */
+  private async closeCommittedSubtask(itemId: string): Promise<void> {
+    const item = this.repo.getWorkItem(itemId)
+    if (!item?.parent_work_item_id || this.repo.getFlow(itemId)?.stage !== "close") return
+    const done = this.repo.gitPlansFor(itemId).find((a) => a.state === "consumed")
+    const approval = done ? this.repo.getApproval(done.id) : null
+    if (!done || !approval) return
+    const plan = (JSON.parse(approval.operation_json) as { input: GitPlan }).input
+    const run = this.repo.getRun(plan.run_id)
+    if (!run || !existsSync(plan.repo_root)) return
+    if ((await changedFiles(plan.repo_root)).length > 0) return
+    await this.finishClose(item, run, plan, done.id, approval.decision_actor ?? null)
+  }
+
   private async runGitPlan(planId: string, plan: GitPlan): Promise<void> {
     const run = this.repo.getRun(plan.run_id)
     const item = run ? this.repo.getWorkItem(run.work_item_id) : null
@@ -6229,48 +6304,7 @@ export class Daemon {
       await this.recordTaskChanges(run.id, "plan").catch((e) =>
         console.error(`keel: no pude guardar los cambios del plan ${planId}`, e),
       )
-    // ADR-0022 §2: el cierre de una subtarea es integrarla a la feature; si choca, vuelve.
-    if (r.ok && item.parent_work_item_id && this.repo.getFlow(item.id)?.stage === "close") {
-      const integrated = await this.integrateSubtask(item, plan)
-      if (!integrated.ok) {
-        runUnitOfWork(this.uowDeps(), this.systemScope(run.project_id), (uow) => {
-          this.repo.updateFlow(item.id, { stage: "implement" })
-          uow.emit("task.stage_changed", run.id, {
-            work_item_id: item.id,
-            from: "close",
-            to: "implement",
-            ceremony: this.repo.getFlow(item.id)?.ceremony ?? null,
-            authorized_by: "system:keel",
-            delegated: true,
-            reason: integrated.message,
-          })
-        })
-        this.closedByPlan.delete(item.id)
-        this.continueFlow(
-          item.id,
-          `No se pudo integrar a la feature: ${integrated.message}. Resuelve el conflicto en tu frontera y vuelve a cerrar.`,
-        )
-        return
-      }
-    }
-    // ADR-0021 §4: en el cierre del método, el plan aprobado es el gate (c): la tarea termina.
-    const flow = this.repo.getFlow(item.id)
-    const current = this.repo.getWorkItem(item.id)
-    // Si el run sigue vivo, la tarea aún no espera la revisión: se cierra al asentarlo.
-    if (r.ok && flow?.stage === "close" && current?.lifecycle === "running")
-      this.closedByPlan.set(item.id, approver ?? "system:daemon")
-    if (r.ok && flow?.stage === "close" && current?.lifecycle === "needs_review")
-      runUnitOfWork(
-        this.uowDeps(),
-        { projectId: run.project_id, actorId: approver ?? "system:daemon" },
-        (uow) => {
-          this.transition(uow, current, "done", "human_close", {
-            runId: run.id,
-            reason: "el humano aprobó el plan de cierre",
-          })
-          uow.emit("task.closed", run.id, { work_item_id: item.id, plan_id: planId, approver })
-        },
-      )
+    if (r.ok && !(await this.finishClose(item, run, plan, planId, approver))) return
     // El diff aprobado queda como evidencia de la tarea (ADR-0015 §6, ADR-0012).
     if (r.ok && plan.diff_ref) {
       const sha = parseArtifactRef(plan.diff_ref) as string

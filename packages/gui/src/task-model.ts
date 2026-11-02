@@ -3,7 +3,14 @@
  * de la feature como DAG, la checklist derivada del spec, los carriles de subtareas y
  * por qué se abre el cajón. Puro: recibe lo que leyó la GUI y no llama al daemon.
  */
-import { type PlannedTask, parseSpec, parseTasks, qaVerdict, type TaskFlowView } from "@keel/core"
+import {
+  type PlannedTask,
+  parseSpec,
+  parseTasks,
+  type QaVerdict,
+  qaVerdict,
+  type TaskFlowView,
+} from "@keel/core"
 import { type FileDiff, fromUnified } from "./chat-model.js"
 import type { Run, WorkItem } from "./model.js"
 
@@ -17,6 +24,8 @@ export type NextAction =
   | { kind: "work"; label: string }
   | { kind: "watch"; label: string }
   | { kind: "close"; label: string }
+  /** La revisión terminó sin FAIL y el agente no cerró: el humano decide qué sigue. */
+  | { kind: "review"; label: string }
   | { kind: "none"; label: string }
 
 const GATE_LABEL = {
@@ -26,11 +35,24 @@ const GATE_LABEL = {
 } as const
 
 /** Una sola acción, la que toca ahora, en orden de urgencia. */
+/** Las líneas del QA que dicen por qué no es PASS, para la tarjeta de la decisión. */
+export function qaSummary(markdown: string | undefined): string {
+  const lines = (markdown ?? "").split("\n").map((l) => l.trim())
+  const at = lines.findIndex((l) => /Veredicto:/i.test(l))
+  return lines
+    .slice(at + 1)
+    .filter((l) => l && !l.startsWith("#"))
+    .slice(0, 3)
+    .join(" ")
+    .slice(0, 400)
+}
+
 export function nextAction(
   task: WorkItem,
   flow: TaskFlowView | null,
   runs: Run[],
   pending: number,
+  qa: QaVerdict | null = null,
 ): NextAction {
   if (task.lifecycle === "done") return { kind: "none", label: "Cerrada" }
   if (flow?.pending_gate) return { kind: "gate", label: GATE_LABEL[flow.pending_gate.gate] }
@@ -42,6 +64,8 @@ export function nextAction(
     }
   if (runs.some(isLive)) return { kind: "watch", label: "Ver la conversación" }
   if (runs.length === 0) return { kind: "work", label: "Trabajar" }
+  if (flow?.stage === "review" && qa && qa !== "FAIL")
+    return { kind: "review", label: `Decidir la revisión (${qa})` }
   if (task.lifecycle === "needs_review" && !flow) return { kind: "close", label: "Cerrar a mano" }
   return { kind: "work", label: flow ? "Seguir trabajando" : "Trabajar" }
 }

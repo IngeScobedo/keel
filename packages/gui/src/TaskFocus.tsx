@@ -3,7 +3,14 @@
  * conversación, la actividad, el plan y la checklist), a la izquierda el trabajo y a la
  * derecha un cajón con el contexto que se abre solo cuando algo pide al humano.
  */
-import type { EventNotification, Methods, TaskDocKind, TaskFlowView } from "@keel/core"
+import {
+  type EventNotification,
+  type Methods,
+  type QaVerdict,
+  qaVerdict,
+  type TaskDocKind,
+  type TaskFlowView,
+} from "@keel/core"
 import {
   ArrowRight,
   Check,
@@ -47,6 +54,7 @@ import {
   lanesOf,
   type NextAction,
   nextAction,
+  qaSummary,
   splitUnified,
 } from "./task-model.js"
 import { Button, Segmented, SidePanel, Tabs, TextArea } from "./ui/index.js"
@@ -167,7 +175,8 @@ export function TaskFocus({
     }
   }, [call, task.id, task.revision, touches])
 
-  const action = nextAction(task, flow, taskRuns, pending.length)
+  const verdict = docs.qa?.content_markdown ? qaVerdict(docs.qa.content_markdown) : null
+  const action = nextAction(task, flow, taskRuns, pending.length, verdict)
   const hasPlan = Boolean(task.feature) || docs.tasks?.content_markdown !== undefined
   const hasChecklist = docs.spec?.content_markdown !== undefined
   const center = CENTER.filter(
@@ -192,6 +201,8 @@ export function TaskFocus({
   const go = (a: NextAction) => {
     if (a.kind === "plan" || a.kind === "decide") setSection("decidir")
     else if (a.kind === "close") onCloseTask?.()
+    else if (a.kind === "review")
+      document.querySelector<HTMLElement>("[data-testid=review-decision]")?.scrollIntoView()
     else if (a.kind === "work" && !latest)
       document.querySelector<HTMLElement>("[data-testid=task-work] textarea")?.focus()
     else setTab("Conversación")
@@ -291,6 +302,14 @@ export function TaskFocus({
             }}
           />
           <div className="tf-panel" data-tab={active}>
+            {action.kind === "review" && verdict && (
+              <ReviewDecision
+                task={task}
+                verdict={verdict}
+                summary={qaSummary(docs.qa?.content_markdown)}
+                call={call}
+              />
+            )}
             {/* ADR-0044: una sesión que espera al humano no depende de la pestaña. */}
             <DesignSessionCard task={task} events={events} call={call} />
             {active === "Conversación" && history.more && (
@@ -1202,5 +1221,95 @@ function DagNode({
       {children}
       {!item && <span className="muted tf-small">no nació como subtarea</span>}
     </button>
+  )
+}
+
+/**
+ * KEEL-15: la revisión terminó sin FAIL y el agente no avanzó. El humano decide: aceptar
+ * el QA (el agente avanza a close, ADR-0021 §2) o devolver la tarea a implementar.
+ */
+function ReviewDecision({
+  task,
+  verdict,
+  summary,
+  call,
+}: {
+  task: WorkItem
+  verdict: QaVerdict
+  summary: string
+  call: Call
+}) {
+  const [back, setBack] = useState(false)
+  const [why, setWhy] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const run = (p: Promise<unknown>) => {
+    setBusy(true)
+    setError("")
+    p.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() =>
+      setBusy(false),
+    )
+  }
+  return (
+    <section className="tf-decision" data-testid="review-decision" data-verdict={verdict}>
+      <header>
+        <strong>La revisión terminó con QA {verdict}</strong>
+        <span>el agente espera tu decisión para cerrar</span>
+      </header>
+      {summary && <p>{summary}</p>}
+      {back ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            run(
+              call("stages.return", {
+                ...mutationMeta(),
+                work_item_id: task.id,
+                to: "implement",
+                reason: why.trim(),
+              }),
+            )
+          }}
+        >
+          <input
+            className="ui-field ui-input"
+            aria-label="Qué falta"
+            placeholder="Qué falta antes de cerrar"
+            value={why}
+            onChange={(e) => setWhy(e.target.value)}
+          />
+          <Button type="submit" size="sm" disabled={!why.trim() || busy}>
+            Devolver a implementar
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setBack(false)}>
+            Cancelar
+          </Button>
+        </form>
+      ) : (
+        <div className="tf-decision-actions">
+          <Button
+            variant="primary"
+            size="sm"
+            icon={ShieldCheck}
+            disabled={busy}
+            onClick={() =>
+              run(
+                call("tasks.work", {
+                  ...mutationMeta(),
+                  work_item_id: task.id,
+                  text: `Acepto el QA con veredicto ${verdict} tal como está. Avanza a close con stage_advance y cierra la tarea; si ya no hay nada que confirmar, Keel integra lo que aprobé.`,
+                }),
+              )
+            }
+          >
+            Aceptar y cerrar
+          </Button>
+          <Button size="sm" disabled={busy} onClick={() => setBack(true)}>
+            Devolver a implementar
+          </Button>
+        </div>
+      )}
+      {error && <p className="error">{error}</p>}
+    </section>
   )
 }
