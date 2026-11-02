@@ -216,6 +216,110 @@ async function approveGate(human: IpcClient, daemon: Daemon, workItemId: string,
   })
 }
 
+async function keel15(canon: boolean) {
+  const { daemon, human, scripts, until, events, gitOut } = await boot()
+  const parent = (await human.call("work_items.create", {
+    ...meta(),
+    title: "Dos piezas",
+    kind: "feature",
+  })) as { id: string }
+  scripts.push(async (t) => {
+    await put(t, "brief", BRIEF)
+    await advance(t, "design", { ceremony: "formal", reason: "contrato" })
+  })
+  scripts.push(async (t) => {
+    await put(t, "spec", SPEC)
+    await put(t, "design", DESIGN)
+    await put(t, "tasks", "- [ ] A → `api/a/**` → R1\n- [ ] B → `web/b/**` → R2\n")
+    await advance(t, "implement")
+  })
+  // Como KEEL-15: propone el commit en implement, revisa con CONCERNS y termina sin cerrar.
+  scripts.push(async (t) => {
+    const cwd = String(t.options.cwd)
+    execFileSync("mkdir", ["-p", join(cwd, "api/a")])
+    writeFileSync(join(cwd, "api/a/A.ts"), "export const A = true\n")
+    await t.agent.call("git.propose", { ...meta(), message: "A: implementado" })
+    await until(
+      () => daemon.repo.gitPlansFor(t.work_item_id).some((x) => x.state === "consumed"),
+      "el commit aprobado",
+    )
+    await advance(t, "review")
+    await put(t, "qa", "## Veredicto: CONCERNS\n## Evidencia\n- falta verlo en el navegador\n")
+    await t.agent.call("verify.run", { ...meta(), work_item_id: t.work_item_id })
+  })
+  await human.call("tasks.work", { ...meta(), work_item_id: parent.id })
+  await until(() => daemon.repo.pendingStageGate(parent.id) !== null, "gate (a)")
+  await approveGate(human, daemon, parent.id)
+  await until(
+    () =>
+      daemon.repo.getFlow(parent.id)?.stage === "design" &&
+      daemon.repo.pendingStageGate(parent.id) !== null,
+    "gate (b)",
+  )
+  await approveGate(human, daemon, parent.id)
+  // Por clave: dos hijas creadas en el mismo milisegundo no tienen orden fijo.
+  const aId = daemon.repo
+    .childrenOf(parent.id)
+    .find((c) => daemon.repo.getFlow(c.id)?.subtask_json?.includes('"key":"T1"'))?.id as string
+  const pid = daemon.repo.getWorkItem(aId)?.project_id as string
+  await until(
+    () =>
+      daemon.repo
+        .listApprovals(pid)
+        .some((x) => x.state === "pending" && JSON.parse(x.operation_json).tool === "git.plan"),
+    "el plan en implement",
+  )
+  const plan = daemon.repo
+    .listApprovals(pid)
+    .find((x) => x.state === "pending" && JSON.parse(x.operation_json).tool === "git.plan")
+  await human.call("approvals.resolve", {
+    ...meta(),
+    approval_id: plan?.id,
+    operation_hash: plan?.operation_hash,
+    decision: "approve_once",
+  })
+  await until(() => daemon.repo.getWorkItem(aId)?.lifecycle === "waiting_human", "A espera")
+  // El commit se hizo, pero fuera del cierre no se integra.
+  expect(daemon.repo.getFlow(aId)?.stage).toBe("review")
+  expect(events("feature.subtask_integrated")).toHaveLength(0)
+
+  // El humano acepta el QA: el agente avanza a close sin nada que proponer, y Keel cierra.
+  scripts.push(async (t) => {
+    await advance(t, "close")
+    if (!canon) return
+    // Como el cierre real de KEEL-15: lleva lo durable al canon y lo propone.
+    writeFileSync(join(String(t.options.cwd), "TASKS.md"), "- [x] A\n")
+    await t.agent.call("git.propose", { ...meta(), message: "docs: registra A" })
+  })
+  await human.call("tasks.work", {
+    ...meta(),
+    work_item_id: aId,
+    text: "Acepto el QA con CONCERNS: avanza a close.",
+  })
+  if (canon) {
+    // Con un plan de cierre pendiente no se cierra sola: espera la aprobación.
+    await until(() => daemon.repo.getWorkItem(aId)?.lifecycle === "needs_review", "A en revisión")
+    await Bun.sleep(300)
+    expect(daemon.repo.getWorkItem(aId)?.lifecycle).toBe("needs_review")
+    expect(events("feature.subtask_integrated")).toHaveLength(0)
+    const closing = daemon.repo.gitPlansFor(aId).find((x) => x.state === "pending")
+    const approval = daemon.repo.getApproval(closing?.id as string)
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: closing?.id,
+      operation_hash: approval?.operation_hash,
+      decision: "approve_once",
+    })
+  }
+  await until(() => daemon.repo.getWorkItem(aId)?.lifecycle === "done", "A cerrada")
+  expect(events("feature.subtask_integrated")).toMatchObject([{ subtask_id: aId }])
+  const feature = String(daemon.repo.getFlow(parent.id)?.feature_json ?? "{}")
+  const branch = (JSON.parse(feature) as { branch: string }).branch
+  const files = gitOut("ls-tree", "-r", "--name-only", branch)
+  expect(files).toContain("api/a/A.ts")
+  if (canon) expect(files).toContain("TASKS.md")
+}
+
 describe("ADR-0022: feature y subtareas", () => {
   test("el diseño aprobado hace nacer las subtareas; se integran solas a la rama de la feature y el padre revisa", async () => {
     const { daemon, human, scripts, until, events, gitOut } = await boot()
@@ -445,85 +549,16 @@ describe("ADR-0022: feature y subtareas", () => {
     expect(waiting).toMatchObject([{ work_item_id: parent.id, subtask_id: a?.id, what: "commit" }])
   }, 60_000)
 
-  test("KEEL-15: el commit aprobado antes del cierre se integra al entrar a close sin nada nuevo", async () => {
-    const { daemon, human, scripts, until, events } = await boot()
-    const parent = (await human.call("work_items.create", {
-      ...meta(),
-      title: "Dos piezas",
-      kind: "feature",
-    })) as { id: string }
-    scripts.push(async (t) => {
-      await put(t, "brief", BRIEF)
-      await advance(t, "design", { ceremony: "formal", reason: "contrato" })
-    })
-    scripts.push(async (t) => {
-      await put(t, "spec", SPEC)
-      await put(t, "design", DESIGN)
-      await put(t, "tasks", "- [ ] A → `api/a/**` → R1\n- [ ] B → `web/b/**` → R2\n")
-      await advance(t, "implement")
-    })
-    // Como KEEL-15: propone el commit en implement, revisa con CONCERNS y termina sin cerrar.
-    scripts.push(async (t) => {
-      const cwd = String(t.options.cwd)
-      execFileSync("mkdir", ["-p", join(cwd, "api/a")])
-      writeFileSync(join(cwd, "api/a/A.ts"), "export const A = true\n")
-      await t.agent.call("git.propose", { ...meta(), message: "A: implementado" })
-      await until(
-        () => daemon.repo.gitPlansFor(t.work_item_id).some((x) => x.state === "consumed"),
-        "el commit aprobado",
-      )
-      await advance(t, "review")
-      await put(t, "qa", "## Veredicto: CONCERNS\n## Evidencia\n- falta verlo en el navegador\n")
-      await t.agent.call("verify.run", { ...meta(), work_item_id: t.work_item_id })
-    })
-    await human.call("tasks.work", { ...meta(), work_item_id: parent.id })
-    await until(() => daemon.repo.pendingStageGate(parent.id) !== null, "gate (a)")
-    await approveGate(human, daemon, parent.id)
-    await until(
-      () =>
-        daemon.repo.getFlow(parent.id)?.stage === "design" &&
-        daemon.repo.pendingStageGate(parent.id) !== null,
-      "gate (b)",
-    )
-    await approveGate(human, daemon, parent.id)
-    // Por clave: dos hijas creadas en el mismo milisegundo no tienen orden fijo.
-    const aId = daemon.repo
-      .childrenOf(parent.id)
-      .find((c) => daemon.repo.getFlow(c.id)?.subtask_json?.includes('"key":"T1"'))?.id as string
-    const pid = daemon.repo.getWorkItem(aId)?.project_id as string
-    await until(
-      () =>
-        daemon.repo
-          .listApprovals(pid)
-          .some((x) => x.state === "pending" && JSON.parse(x.operation_json).tool === "git.plan"),
-      "el plan en implement",
-    )
-    const plan = daemon.repo
-      .listApprovals(pid)
-      .find((x) => x.state === "pending" && JSON.parse(x.operation_json).tool === "git.plan")
-    await human.call("approvals.resolve", {
-      ...meta(),
-      approval_id: plan?.id,
-      operation_hash: plan?.operation_hash,
-      decision: "approve_once",
-    })
-    await until(() => daemon.repo.getWorkItem(aId)?.lifecycle === "waiting_human", "A espera")
-    // El commit se hizo, pero fuera del cierre no se integra.
-    expect(daemon.repo.getFlow(aId)?.stage).toBe("review")
-    expect(events("feature.subtask_integrated")).toHaveLength(0)
-
-    // El humano acepta el QA: el agente avanza a close sin nada que proponer, y Keel cierra.
-    scripts.push(async (t) => {
-      await advance(t, "close")
-    })
-    await human.call("tasks.work", {
-      ...meta(),
-      work_item_id: aId,
-      text: "Acepto el QA con CONCERNS: avanza a close.",
-    })
-    await until(() => daemon.repo.getWorkItem(aId)?.lifecycle === "done", "A cerrada")
-    expect(events("feature.subtask_integrated")).toMatchObject([{ subtask_id: aId }])
-  }, 60_000)
+  test(
+    "KEEL-15: el commit aprobado antes del cierre se integra al terminar el turno en close",
+    () => keel15(false),
+    60_000,
+  )
+  test(
+    "KEEL-15: con un plan de cierre nuevo en close, espera su aprobación antes de integrar",
+    () => keel15(true),
+    60_000,
+  )
 
   test("ADR-0039: con lugar, los carriles corren a la vez; el límite y el carril dicen por qué esperan", async () => {
     const { daemon, human, scripts, until } = await boot()

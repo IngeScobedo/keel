@@ -822,6 +822,13 @@ export class Daemon {
     }
     // ADR-0044 §1: la sesión de diseño vive mientras la tarea.
     if (to === "done") uow.afterCommit(() => this.design.close(w.id, "la tarea se cerró"))
+    // Un plan que esperaba ya no tiene worktree donde correr: caduca con la tarea.
+    if (to === "done")
+      for (const a of this.repo.gitPlansFor(w.id))
+        if (a.state === "pending") {
+          this.repo.setApproval(a.id, "expired", null)
+          uow.emit("git.plan.expired", a.run_id, { plan_id: a.id, reason: "la tarea se cerró" })
+        }
     if (!updated)
       throw rpcError(ErrorCode.conflict, "otro escritor cambió la tarea; vuelve a leerla", {
         current_revision: this.repo.getWorkItem(w.id)?.revision ?? null,
@@ -4259,6 +4266,18 @@ export class Daemon {
   private afterFlowRun(final: RunRow): void {
     const flow = this.repo.getFlow(final.work_item_id)
     if (!flow || final.status !== "completed") return
+    // El turno terminó en close sin plan pendiente: si lo confirmado ya lo aprobó el
+    // humano y no queda nada más, Keel integra y cierra la subtarea (KEEL-15). Se decide
+    // al terminar el turno, no al entrar a close: en close el agente aún lleva lo durable
+    // al canon y lo propone.
+    const item = this.repo.getWorkItem(final.work_item_id)
+    if (
+      flow.stage === "close" &&
+      item?.parent_work_item_id &&
+      item.lifecycle !== "done" &&
+      !this.repo.gitPlansFor(item.id).some((a) => a.state === "pending")
+    )
+      this.track(this.closeCommittedSubtask(item.id))
     if (this.repo.pendingStageGate(final.work_item_id)) return
     // ADR-0022 §4: el padre espera a sus hijas sin run vivo; Keel lo despierta al final.
     if (this.repo.getWorkItem(final.work_item_id)?.lifecycle === "blocked") return
@@ -4316,7 +4335,6 @@ export class Daemon {
       if (to === "implement" && !this.repo.getFlow(w.id)?.baseline_json)
         this.track(this.taskVerify(w.id, { baseline: true }))
       if (to === "review") this.track(this.taskVerify(w.id, { notify: true }))
-      if (to === "close" && w.parent_work_item_id) this.track(this.closeCommittedSubtask(w.id))
     })
   }
 
@@ -6261,10 +6279,10 @@ export class Daemon {
   }
 
   /**
-   * Una subtarea entra a `close` con su trabajo ya confirmado por un plan que el humano
-   * aprobó antes (KEEL-15 lo aprobó en review): no queda nada que proponer, así que Keel
-   * integra lo confirmado y la cierra. Con cambios sin confirmar, el agente propone el
-   * plan de cierre como siempre.
+   * Una subtarea termina su turno en `close` con su trabajo ya confirmado por un plan que
+   * el humano aprobó antes (KEEL-15 lo aprobó en review): no queda nada que proponer, así
+   * que Keel integra lo confirmado y la cierra. Con cambios sin confirmar, espera el plan
+   * de cierre como siempre.
    */
   private async closeCommittedSubtask(itemId: string): Promise<void> {
     const item = this.repo.getWorkItem(itemId)
