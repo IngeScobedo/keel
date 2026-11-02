@@ -642,6 +642,8 @@ export function App() {
                   call={workspace.call}
                   runs={workspace.runs}
                   events={workspace.events}
+                  tasks={workspace.work_items}
+                  waitingYou={waitingYou}
                   projectName={
                     currentProject?.name || repoName(workspace.health?.project?.root_path)
                   }

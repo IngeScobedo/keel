@@ -68,6 +68,10 @@ test("orquestador: adjuntar una lista, explicarla, corregir el plan y arrancar",
   await expect(page.getByTestId("chat-feature").filter({ hasText: "Nació el lote" })).toContainText(
     "2 subtareas arrancan · 1 al backlog",
   )
+  // CTO / 04: con el lote andando, el hilo vuelve al centro y el lote en vivo a la derecha.
+  await expect(conv).toHaveAttribute("data-stage", "batch")
+  await expect(conv.getByTestId("feature-plan")).toBeVisible()
+  if (shots) await page.screenshot({ path: join(shots, "orq-live.png") })
   const born = conv.getByTestId("conv-born")
   await expect(born.filter({ hasText: "feature: pendientes de la tienda" })).toBeVisible()
   await expect(born.filter({ hasText: "Aviso de ronda nueva" })).toBeVisible()
@@ -80,7 +84,10 @@ test("orquestador: adjuntar una lista, explicarla, corregir el plan y arrancar",
   // instante, así que el plan ya las lista integradas (sólo por clave).
   const plan = focus.getByTestId("feature-plan")
   await expect(plan).toContainText("2/2 integradas", { timeout: 20_000 })
-  await plan.getByTestId("subtask-done").locator("summary").click()
+  await plan
+    .getByTestId("subtask-done")
+    .getByRole("button", { name: /Integradas/ })
+    .click()
   await expect(plan.getByTestId("subtask-done")).toContainText("Proyectos primero en el menú")
   if (shots) await page.screenshot({ path: join(shots, "orq-batch.png") })
 })

@@ -1881,6 +1881,17 @@ export const Methods = {
           ]),
           /** En `waiting_lane`: la subtarea que tiene la frontera reservada. */
           waiting_for: z.string().nullable(),
+          /** Lo que reserva (ADR-0039 §3), su etapa y el agente que la trabaja. */
+          frontier: z.array(z.string()).default([]),
+          stage: z.string().nullable().default(null),
+          profile: z
+            .object({
+              provider: z.string(),
+              model: z.string().optional(),
+              effort: z.string().optional(),
+            })
+            .nullable()
+            .default(null),
         }),
       ),
     }),

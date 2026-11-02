@@ -14,7 +14,6 @@ import {
 import {
   ArrowRight,
   Check,
-  ChevronRight,
   Circle,
   FileCode2,
   FileText,
@@ -40,6 +39,7 @@ import { GitPlanCard } from "./GitPlanCard.js"
 import { MarkdownPreview } from "./Markdown.js"
 import { GateCard } from "./MethodCards.js"
 import { actorLabel, formatCost, type Run, summarizeEvent, type WorkItem } from "./model.js"
+import { LiveBatch } from "./Orchestration.js"
 import { ResearchPanel } from "./Research.js"
 import { RunChat } from "./RunChat.js"
 import { workspaceOf } from "./RunView.js"
@@ -51,7 +51,6 @@ import {
   checklistOf,
   dagOf,
   isLive,
-  lanesOf,
   type NextAction,
   nextAction,
   qaSummary,
@@ -266,15 +265,15 @@ export function TaskFocus({
           />
           <WorkFacts task={task} runs={taskRuns} events={events} call={call} />
           {task.feature && (
-            <SubtaskLanes
+            <LiveBatch
               call={call}
-              parentId={task.id}
+              parent={task}
               subtasks={subtasks}
               runs={runs}
               events={events}
               waitingYou={waitingYou}
               onOpen={onOpenTask}
-              feature={task.feature}
+              compact
             />
           )}
           {task.lifecycle !== "done" && <DesignStart task={task} events={events} call={call} />}
@@ -481,166 +480,6 @@ function WorkFacts({
         </dd>
       </dl>
     </section>
-  )
-}
-
-/** Las subtareas trabajando en paneles; las encoladas plegadas; las hechas en una línea. */
-type FeatureLanes = ReturnType<(typeof Methods)["features.lanes"]["result"]["parse"]>
-
-/** Por qué no arranca una subtarea en cola (ADR-0039 §2). */
-const WAIT_LABEL: Record<string, string> = {
-  waiting_limit: "espera lugar",
-  waiting_lane: "espera su carril",
-  waiting_deps: "espera dependencias",
-  ready: "lista",
-}
-
-function SubtaskLanes({
-  call,
-  parentId,
-  subtasks,
-  runs,
-  events,
-  waitingYou,
-  onOpen,
-  feature,
-}: {
-  call: Call
-  parentId: string
-  subtasks: WorkItem[]
-  runs: Run[]
-  events: EventNotification[]
-  waitingYou: Set<string> | undefined
-  onOpen: (item: WorkItem) => void
-  feature: NonNullable<WorkItem["feature"]>
-}) {
-  const lanes = lanesOf(subtasks, runs, waitingYou)
-  // ADR-0039: los carriles y por qué espera cada una; se relee cuando algo cambia.
-  const [lane, setLane] = useState<FeatureLanes | null>(null)
-  const signature = `${subtasks.map((x) => x.lifecycle).join()}|${runs.filter(isLive).length}`
-  // biome-ignore lint/correctness/useExhaustiveDependencies: la firma sólo dispara la relectura.
-  useEffect(() => {
-    let alive = true
-    call("features.lanes", { work_item_id: parentId })
-      .then((r) => alive && setLane(r))
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [call, parentId, signature])
-  const why = (id: string) => lane?.subtasks.find((x) => x.id === id)
-  const waitingLimit = lane?.subtasks.filter((x) => x.state === "waiting_limit").length ?? 0
-  return (
-    <section className="tf-section" data-testid="feature-plan">
-      <h3>
-        Subtareas · {feature.done}/{feature.total} integradas
-      </h3>
-      <p className="mono muted tf-small">
-        {feature.branch}
-        {feature.auto_integrate ? " · se integran solas" : " · cada integración te pregunta"}
-      </p>
-      {lane && (
-        <p className="muted tf-small" data-testid="feature-lanes">
-          {lane.lanes.length} carril{lane.lanes.length === 1 ? "" : "es"} · {lane.live_runs} de{" "}
-          {lane.max_concurrent_runs} run{lane.max_concurrent_runs === 1 ? "" : "s"} en uso
-          {waitingLimit > 0 &&
-            ` · ${waitingLimit} lista${waitingLimit === 1 ? "" : "s"} esperando lugar: subir el límite (Ajustes) es tu decisión`}
-        </p>
-      )}
-      <div className="tf-lanes">
-        {[...lanes.waiting, ...lanes.working].map((s) => {
-          const waiting = lanes.waiting.includes(s)
-          return (
-            <button
-              type="button"
-              key={s.id}
-              className="tf-subtask"
-              data-lane={waiting ? "waiting" : "working"}
-              onClick={() => onOpen(s)}
-            >
-              <span className="tf-subtask-head">
-                <Status state={s.visual_state} dot />
-                <span className="mono muted">{s.subtask?.key ?? s.display_id}</span>
-                {waiting && (
-                  <span className="rc-pill needs-you">
-                    {waitingYou?.has(s.id) ? "espera tu decisión" : "espera tu revisión"}
-                  </span>
-                )}
-              </span>
-              <strong>{s.title}</strong>
-              <span className="muted tf-small">
-                {s.stage ? (STAGE_LABEL[s.stage] ?? s.stage) : s.lifecycle}
-                {!waiting && (
-                  <>
-                    {" · "}
-                    <LastAction
-                      runs={runs.filter((r) => r.work_item_id === s.id)}
-                      events={events}
-                    />
-                  </>
-                )}
-              </span>
-            </button>
-          )
-        })}
-      </div>
-      {lanes.queued.length > 0 && (
-        <details className="tf-queued" data-testid="subtask-queue">
-          <summary>
-            <ChevronRight size={12} aria-hidden /> En cola · {lanes.queued.length}
-          </summary>
-          {lanes.queued.map((s) => (
-            <button type="button" key={s.id} className="subtask-row" onClick={() => onOpen(s)}>
-              <Status state={s.visual_state} dot />
-              <span className="mono muted">{s.subtask?.key ?? s.display_id}</span>
-              <span>{s.title}</span>
-              {why(s.id) && WAIT_LABEL[why(s.id)?.state ?? ""] && (
-                <span className="rc-pill" data-testid="subtask-wait" data-state={why(s.id)?.state}>
-                  {WAIT_LABEL[why(s.id)?.state ?? ""]}
-                  {why(s.id)?.waiting_for ? ` · ${why(s.id)?.waiting_for}` : ""}
-                </span>
-              )}
-            </button>
-          ))}
-        </details>
-      )}
-      {lanes.done.length > 0 && (
-        <details className="tf-queued" data-testid="subtask-done">
-          <summary>
-            <Check size={12} aria-hidden /> Integradas:{" "}
-            {lanes.done.map((s) => s.subtask?.key ?? s.display_id).join(", ")}
-          </summary>
-          {lanes.done.map((s) => (
-            <button type="button" key={s.id} className="subtask-row" onClick={() => onOpen(s)}>
-              <Status state={s.visual_state} dot />
-              <span className="mono muted">{s.subtask?.key ?? s.display_id}</span>
-              <span>{s.title}</span>
-            </button>
-          ))}
-        </details>
-      )}
-    </section>
-  )
-}
-
-/** Cuánto lleva el run vivo de una subtarea. */
-function LastAction({ runs, events }: { runs: Run[]; events: EventNotification[] }) {
-  const live = runs.find(isLive)
-  const started = live
-    ? events.find((e) => e.kind === "run.created" && e.run_id === live.id)?.received_at
-    : undefined
-  const [now, setNow] = useState(Date.now)
-  useEffect(() => {
-    if (!live) return
-    const t = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(t)
-  }, [live])
-  if (!started) return <>esperando</>
-  const s = Math.max(0, Math.floor((now - Date.parse(started)) / 1000))
-  return (
-    <>
-      trabajando {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
-    </>
   )
 }
 

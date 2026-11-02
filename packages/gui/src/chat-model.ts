@@ -166,13 +166,18 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           said.add(p.text)
           // Lo que escribe Keel al cambiar de etapa no es del humano (ADR-0021).
           if (p.source === "keel") items.push({ kind: "method", key, event: "keel", text: p.text })
-          else items.push({ kind: p.source === "human" ? "human" : "prompt", key, text: p.text })
+          else
+            items.push({
+              kind: p.source === "human" ? "human" : "prompt",
+              key,
+              text: withoutSourcesNote(p.text),
+            })
         }
         break
       case "run.user_message":
         if (typeof p.text === "string") {
           said.add(p.text)
-          items.push({ kind: "human", key, text: p.text })
+          items.push({ kind: "human", key, text: withoutSourcesNote(p.text) })
         }
         break
       case "hook.UserPromptSubmit":
@@ -1033,6 +1038,17 @@ export function questionsOf(input: unknown): Question[] {
 }
 
 /** Las tools del método: su efecto ya se ve como evento de Keel, la tarjeta sobra. */
+/**
+ * ADR-0040: la nota con la que viajan las fuentes es para el agente. El humano ve qué
+ * adjuntó, no la instrucción de leerlas.
+ */
+export function withoutSourcesNote(text: string): string {
+  return text.replace(
+    /\n*\[Keel\] Fuentes adjuntas: (.+?)\. Léelas con la tool source_read[^\n]*$/s,
+    (_m, list: string) => `\n\nAdjuntos: ${list}`,
+  )
+}
+
 export const METHOD_TOOLS = new Set([
   "mcp__keel__stage_current",
   "mcp__keel__stage_advance",
@@ -1041,6 +1057,12 @@ export const METHOD_TOOLS = new Set([
   "mcp__keel__task_docs_list",
   "mcp__keel__verify_run",
   "mcp__keel__project_profile",
+  // El plan propuesto se ve como su tarjeta (ADR-0035 §2), no como la llamada a la tool.
+  "mcp__keel__plan_propose",
+  // Lo que el orquestador lee para armar el plan: se ve en la vista cruda.
+  "mcp__keel__source_read",
+  "mcp__keel__source_list",
+  "mcp__keel__intake_draft",
 ])
 
 export const STAGE_LABEL: Record<string, string> = {

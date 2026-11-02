@@ -289,6 +289,10 @@ export type ComposerExtras = {
   pending: ReactNode
   /** Un comando del composer (`/resume`…): si lo atiende, el texto no se manda. */
   command?: (text: string) => boolean
+  /** ADR-0041 §3: a quién le hablas («Al orquestador»). */
+  target?: string
+  /** Lo que invita a escribir cuando el run terminó. */
+  placeholder?: string
 }
 export const ComposerExtrasContext = createContext<ComposerExtras | null>(null)
 
@@ -332,6 +336,7 @@ export function Composer({
         void send()
       }}
     >
+      {extras?.target && <span className="rc-target">{extras.target}</span>}
       <div className="rc-input">
         <textarea
           aria-label="Mensaje al agente"
@@ -358,7 +363,7 @@ export function Composer({
               ? "Conecta el daemon para escribirle al agente."
               : running
                 ? "Escríbele mientras trabaja"
-                : "El run terminó: escribe para continuar la conversación")
+                : (extras?.placeholder ?? "El run terminó: escribe para continuar la conversación"))
           }
         />
         {extras && draft.trim() && <div className="rc-preview">{extras.preview(draft)}</div>}

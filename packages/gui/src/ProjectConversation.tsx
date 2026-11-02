@@ -13,6 +13,13 @@ import { CommandHints, ConversationHistory, parseCommand } from "./ConversationH
 import { mutationMeta } from "./client.js"
 import type { Run, WorkItem } from "./model.js"
 import {
+  EmptyThread,
+  LiveBatch,
+  LiveBatchEmpty,
+  PlanOnSurface,
+  PlanSurface,
+} from "./Orchestration.js"
+import {
   IntentChips,
   PendingSources,
   SourcesList,
@@ -20,6 +27,7 @@ import {
   sourcesSuffix,
   uploadSource,
 } from "./Orchestrator.js"
+import { stageOf } from "./orchestration-model.js"
 import { RunView } from "./RunView.js"
 import { Button, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -41,10 +49,15 @@ export function ProjectConversation({
   onQuestionSent,
   onOpenTask,
   onBack,
+  tasks = [],
+  waitingYou,
 }: {
   call: Call
   runs: Run[]
   events: EventNotification[]
+  /** Las tareas del proyecto: el lote en vivo se arma con la feature y sus hijas. */
+  tasks?: WorkItem[]
+  waitingYou?: ReadonlySet<string>
   projectName: string
   /** Lo que se preguntó desde ⌘K: se manda al abrir. */
   question?: string
@@ -182,6 +195,8 @@ export function ProjectConversation({
           <IntentChips text={draft} />
         ),
       command: (t) => command(t),
+      target: "Al orquestador",
+      placeholder: "Pregunta, corrige o pide algo más…",
       attach: (files) => void attach(files),
       pending: (
         <PendingSources
@@ -203,6 +218,41 @@ export function ProjectConversation({
   const run = runs.find((r) => r.id === runId) ?? (asked?.id === runId ? asked : null)
   const onRun = useCallback((r: Run) => setRunId(r.id), [])
   const empty = fresh || !run
+  // ADR-0041: lo que ocupa el foco sale de los eventos de esta conversación.
+  const runIds = useMemo(
+    () => new Set(runs.filter((r) => r.work_item_id === convId).map((r) => r.id)),
+    [runs, convId],
+  )
+  const stage = empty ? ({ kind: "empty" } as const) : stageOf(events, runIds)
+  const focusRef = useRef<HTMLDivElement>(null)
+  const planContext = useMemo(
+    () =>
+      stage.kind === "plan"
+        ? {
+            approvalId: stage.plan.approval_id,
+            focus: () => {
+              const el = focusRef.current
+              el?.scrollTo({ top: 0, behavior: "smooth" })
+              el?.querySelector<HTMLInputElement>(".plan-title-input")?.focus()
+            },
+          }
+        : null,
+    [stage],
+  )
+  const parent = stage.kind === "batch" ? tasks.find((t) => t.id === stage.batch.id) : undefined
+  const provenance =
+    stage.kind === "plan"
+      ? [
+          ...new Set(
+            (
+              (stage.plan.input as { plan?: { intents?: { provenance: string[] }[] } }).plan
+                ?.intents ?? []
+            ).flatMap((i) => i.provenance.map((p) => p.split(/[\s§]/)[0] ?? p)),
+          ),
+        ]
+          .filter(Boolean)
+          .join(", ")
+      : ""
 
   async function work(id: string) {
     try {
@@ -217,8 +267,9 @@ export function ProjectConversation({
     <ComposerExtrasContext.Provider value={extras}>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: soltar archivos es un atajo; adjuntar también tiene botón. */}
       <div
-        className={`page conv-page ${dragging ? "conv-drop" : ""}`}
+        className={`page conv-page cto ${dragging ? "conv-drop" : ""}`}
         data-testid="project-conversation"
+        data-stage={stage.kind}
         onDragOver={(e) => {
           if (!e.dataTransfer.types.includes("Files")) return
           e.preventDefault()
@@ -270,129 +321,175 @@ export function ProjectConversation({
             {error}
           </p>
         )}
-        <div className="conv-body">
-          <div className="conv-chat">
-            {empty ? (
-              <div className="conv-empty">
-                <Hint>
-                  {fresh
-                    ? "Una conversación nueva: no arrastra la sesión, las notas ni los lotes de las otras. Las fuentes del proyecto siguen a mano. /resume retoma otra."
-                    : "Pregunta sobre el código o pide trabajo: adjunta una lista de tareas o explícalo, y el orquestador te propone un plan que corriges antes de arrancar. /resume retoma otra conversación; /clear empieza una nueva."}
-                </Hint>
-                <form
-                  onSubmit={(e: FormEvent) => {
-                    e.preventDefault()
-                    if (command(text)) setText("")
-                    else void ask(text, fresh)
+        <PlanOnSurface.Provider value={planContext}>
+          <div className="cto-grid">
+            <section className="cto-col cto-thread" aria-label="Hilo con el orquestador">
+              {empty ? (
+                <EmptyThread
+                  onAttach={() => fileInput.current?.click()}
+                  onPrefill={(t) => {
+                    setText(t)
+                    requestAnimationFrame(() =>
+                      document.querySelector<HTMLTextAreaElement>(".conv-ask textarea")?.focus(),
+                    )
                   }}
-                >
-                  <PendingSources
-                    sources={pending}
-                    onRemove={(id) => setPending((all) => all.filter((x) => x.id !== id))}
-                  />
-                  <textarea
-                    aria-label="Pregunta al proyecto"
-                    placeholder="Pregunta al proyecto o pide trabajo…"
-                    value={text}
-                    onChange={(e) => setText(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
+                  composer={
+                    <form
+                      className="conv-ask"
+                      onSubmit={(e: FormEvent) => {
                         e.preventDefault()
                         if (command(text)) setText("")
                         else void ask(text, fresh)
-                      }
-                    }}
-                  />
-                  {text.trimStart().startsWith("/") ? (
-                    <CommandHints draft={text} />
-                  ) : (
-                    <IntentChips text={text} />
-                  )}
-                  <div className="modal-actions">
-                    <Button
-                      variant="ghost"
-                      icon={Paperclip}
-                      onClick={() => fileInput.current?.click()}
+                      }}
                     >
-                      Adjuntar
-                    </Button>
-                    {fresh && run && <Button onClick={() => setFresh(false)}>Volver</Button>}
-                    <button
-                      className="button primary"
-                      type="submit"
-                      disabled={!text.trim() || sending}
-                    >
-                      <Send size={13} /> Preguntar
-                    </button>
-                  </div>
-                </form>
+                      <span className="rc-target">Al orquestador · borrador</span>
+                      <PendingSources
+                        sources={pending}
+                        onRemove={(id) => setPending((all) => all.filter((x) => x.id !== id))}
+                      />
+                      <textarea
+                        aria-label="Pregunta al proyecto"
+                        placeholder="Revisa el canvas de Casa Matte, separa Proyectos de Pedidos, arregla los pines del Lab…"
+                        value={text}
+                        onChange={(e) => setText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault()
+                            if (command(text)) setText("")
+                            else void ask(text, fresh)
+                          }
+                        }}
+                      />
+                      {text.trimStart().startsWith("/") ? (
+                        <CommandHints draft={text} />
+                      ) : (
+                        <IntentChips text={text} />
+                      )}
+                      <div className="conv-ask-bar">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={Paperclip}
+                          onClick={() => fileInput.current?.click()}
+                        >
+                          Adjuntar
+                        </Button>
+                        <span className="cto-hints">/ comandos</span>
+                        <span className="plan-spacer" />
+                        {fresh && run && (
+                          <Button size="sm" onClick={() => setFresh(false)}>
+                            Volver
+                          </Button>
+                        )}
+                        <button
+                          className="button primary"
+                          type="submit"
+                          disabled={!text.trim() || sending}
+                        >
+                          <Send size={13} /> Preguntar
+                        </button>
+                      </div>
+                    </form>
+                  }
+                />
+              ) : (
+                <RunView
+                  key={run.id}
+                  run={run}
+                  {...(opened ? { task: opened.work_item } : {})}
+                  demo={false}
+                  events={events}
+                  onBack={onBack}
+                  onTask={() => {}}
+                  call={call}
+                  runs={runs}
+                  onRun={onRun}
+                  onOpenTask={onOpenTask}
+                  variant="thread"
+                />
+              )}
+            </section>
+            <section ref={focusRef} className="cto-col cto-focus" aria-label="Foco">
+              {stage.kind === "plan" && (
+                <PlanSurface
+                  key={stage.plan.approval_id}
+                  plan={stage.plan}
+                  call={call}
+                  provenance={provenance}
+                />
+              )}
+            </section>
+            <aside className="cto-col cto-live conv-side" aria-label="Lo que nació aquí">
+              {stage.kind === "empty" && <LiveBatchEmpty sources={sources.length} />}
+              {stage.kind === "batch" && parent && (
+                <LiveBatch
+                  call={call}
+                  parent={parent}
+                  subtasks={tasks.filter((t) => t.parent_work_item_id === parent.id)}
+                  runs={runs}
+                  events={events}
+                  {...(waitingYou ? { waitingYou } : {})}
+                  onOpen={(w) => onOpenTask(w.id)}
+                />
+              )}
+              <div className="conv-side-rest">
+                <h3>Fuentes</h3>
+                <SourcesList call={call} sources={sources} />
+                <Button variant="ghost" icon={Paperclip} onClick={() => fileInput.current?.click()}>
+                  Adjuntar archivo
+                </Button>
+                <input
+                  ref={fileInput}
+                  type="file"
+                  hidden
+                  multiple
+                  accept=".md,.markdown,.txt,.csv,.json,.docx,.pdf"
+                  aria-label="Archivo para la conversación"
+                  onChange={(e) => {
+                    void attach([...(e.target.files ?? [])])
+                    e.target.value = ""
+                  }}
+                />
+                {stage.kind !== "empty" && (
+                  <>
+                    <h3>Nacieron aquí</h3>
+                    {(opened?.born ?? []).length === 0 && <Hint>Aún ninguna tarea.</Hint>}
+                    {(opened?.born ?? []).map((w) => (
+                      <div key={w.id} className="conv-born" data-testid="conv-born">
+                        <span>
+                          <span className="mono muted">{w.display_id}</span> {w.title}
+                        </span>
+                        <span className="conv-born-actions">
+                          {w.priority && w.priority !== "medium" && (
+                            <span className={`rc-pill priority-${w.priority}`}>{w.priority}</span>
+                          )}
+                          <span className="rc-pill">{w.stage ?? w.lifecycle}</span>
+                        </span>
+                        <span className="conv-born-actions">
+                          {!w.stage && (
+                            <Button icon={Play} onClick={() => void work(w.id)}>
+                              Trabajar
+                            </Button>
+                          )}
+                          <Button onClick={() => onOpenTask(w.id)}>Abrir</Button>
+                        </span>
+                      </div>
+                    ))}
+                    <h3>Notas</h3>
+                    {(opened?.notes ?? []).length === 0 && (
+                      <Hint>Lo que valga guardar queda aquí.</Hint>
+                    )}
+                    {(opened?.notes ?? []).map((n) => (
+                      <p key={n.id} className="muted conv-note">
+                        {n.content_markdown.split("\n")[0]}
+                      </p>
+                    ))}
+                  </>
+                )}
               </div>
-            ) : (
-              <RunView
-                key={run.id}
-                run={run}
-                {...(opened ? { task: opened.work_item } : {})}
-                demo={false}
-                events={events}
-                onBack={onBack}
-                onTask={() => {}}
-                call={call}
-                runs={runs}
-                onRun={onRun}
-                onOpenTask={onOpenTask}
-              />
-            )}
+            </aside>
           </div>
-          <aside className="conv-side" aria-label="Lo que nació aquí">
-            <h3>Fuentes</h3>
-            <SourcesList call={call} sources={sources} />
-            <Button variant="ghost" icon={Paperclip} onClick={() => fileInput.current?.click()}>
-              Adjuntar archivo
-            </Button>
-            <input
-              ref={fileInput}
-              type="file"
-              hidden
-              multiple
-              accept=".md,.markdown,.txt,.csv,.json,.docx,.pdf"
-              aria-label="Archivo para la conversación"
-              onChange={(e) => {
-                void attach([...(e.target.files ?? [])])
-                e.target.value = ""
-              }}
-            />
-            <h3>Nacieron aquí</h3>
-            {(opened?.born ?? []).length === 0 && <Hint>Aún ninguna tarea.</Hint>}
-            {(opened?.born ?? []).map((w) => (
-              <div key={w.id} className="conv-born" data-testid="conv-born">
-                <span>
-                  <span className="mono muted">{w.display_id}</span> {w.title}
-                </span>
-                <span className="conv-born-actions">
-                  {w.priority && w.priority !== "medium" && (
-                    <span className={`rc-pill priority-${w.priority}`}>{w.priority}</span>
-                  )}
-                  <span className="rc-pill">{w.stage ?? w.lifecycle}</span>
-                </span>
-                <span className="conv-born-actions">
-                  {!w.stage && (
-                    <Button icon={Play} onClick={() => void work(w.id)}>
-                      Trabajar
-                    </Button>
-                  )}
-                  <Button onClick={() => onOpenTask(w.id)}>Abrir</Button>
-                </span>
-              </div>
-            ))}
-            <h3>Notas</h3>
-            {(opened?.notes ?? []).length === 0 && <Hint>Lo que valga guardar queda aquí.</Hint>}
-            {(opened?.notes ?? []).map((n) => (
-              <p key={n.id} className="muted conv-note">
-                {n.content_markdown.split("\n")[0]}
-              </p>
-            ))}
-          </aside>
-        </div>
+        </PlanOnSurface.Provider>
       </div>
     </ComposerExtrasContext.Provider>
   )

@@ -5048,6 +5048,9 @@ export class Daemon {
           lane: lane >= 0 ? lane : null,
           state,
           waiting_for: blocking,
+          frontier: sub?.frontier ?? [],
+          stage: this.repo.getFlow(c.id)?.stage ?? null,
+          profile: sub?.profile ?? null,
         }
       }),
     }

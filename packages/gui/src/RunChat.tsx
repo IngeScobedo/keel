@@ -18,6 +18,7 @@ import { InfraCard } from "./InfraCard.js"
 import { Markdown } from "./Markdown.js"
 import { GateCard, MethodRow } from "./MethodCards.js"
 import type { Run } from "./model.js"
+import { PlanDecided, PlanPointer, usePlanOnSurface } from "./Orchestration.js"
 import { BatchPlanCard } from "./Orchestrator.js"
 import { RunLedger } from "./RunLedger.js"
 import { SetupCard } from "./SetupCard.js"
@@ -42,6 +43,7 @@ export function RunChat({
   task,
   onContinued,
   onTask,
+  ledger: withLedger = true,
 }: {
   events: EventNotification[]
   call?: Call
@@ -52,6 +54,8 @@ export function RunChat({
   /** Al continuar un run terminado nace uno nuevo: la vista pasa a él. */
   onContinued?: (run: Run) => void
   onTask?: (id: string) => void
+  /** ADR-0041: en la conversación, la columna derecha es del lote, no del run. */
+  ledger?: boolean
 }) {
   const items = buildChat(events)
   const ledger = buildLedger(items, events)
@@ -141,7 +145,7 @@ export function RunChat({
   const firstPending = ledger.waiting[0]?.approval_id ?? null
   const rows = layout(items, density)
   return (
-    <div className="rc">
+    <div className={withLedger ? "rc" : "rc rc-solo"}>
       <div className="rc-main">
         <div
           className="rc-scroll"
@@ -203,18 +207,20 @@ export function RunChat({
           />
         </div>
       </div>
-      <RunLedger
-        ledger={ledger}
-        run={run}
-        {...(task ? { task } : {})}
-        onJump={jump}
-        peek={peek}
-        onPeek={setPeek}
-        docPeek={docPeek}
-        onDocPeek={setDocPeek}
-        {...(onTask ? { onTask } : {})}
-        {...(call ? { call } : {})}
-      />
+      {withLedger && (
+        <RunLedger
+          ledger={ledger}
+          run={run}
+          {...(task ? { task } : {})}
+          onJump={jump}
+          peek={peek}
+          onPeek={setPeek}
+          docPeek={docPeek}
+          onDocPeek={setDocPeek}
+          {...(onTask ? { onTask } : {})}
+          {...(call ? { call } : {})}
+        />
+      )}
     </div>
   )
 }
@@ -404,7 +410,7 @@ function Pending({
   const active = a.decision === null && a.approval_id === firstPending
   const c = call ? { call } : {}
   if (a.tool === "stage.gate") return <GateCard a={a} active={active} {...c} />
-  if (a.tool === "batch.plan") return <BatchPlanCard a={a} active={active} {...c} />
+  if (a.tool === "batch.plan") return <BatchPlan a={a} active={active} {...c} />
   if (a.tool === "delivery.promote" && call)
     return (
       <PromotionRequestCard
@@ -459,4 +465,12 @@ function Said({
       )}
     </div>
   )
+}
+
+/** ADR-0041: si la conversación ya muestra el plan como superficie, aquí basta su puntero. */
+function BatchPlan({ a, active, call }: { a: Approval; active: boolean; call?: Call }) {
+  const focus = usePlanOnSurface(a)
+  if (a.decision !== null) return <PlanDecided a={a} />
+  if (focus) return <PlanPointer a={a} onOpen={focus} />
+  return <BatchPlanCard a={a} active={active} {...(call ? { call } : {})} />
 }

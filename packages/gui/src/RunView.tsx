@@ -106,6 +106,11 @@ type RunViewProps = {
   onFollow?: (run: Run) => void
   /** Abrir otra tarea (la que creó el agente) desde el chat. */
   onOpenTask?: (id: string) => void
+  /**
+   * ADR-0041: en la conversación el run es el hilo con el orquestador; sin la barra del
+   * run ni sus pestañas, sólo la charla (y detenerlo si corre).
+   */
+  variant?: "page" | "thread"
 }
 
 /** Con daemon, el run es un chat de foco (ADR-0020); sin él, la vista de ejemplo. */
@@ -140,6 +145,7 @@ function LiveRunView({
   onRun,
   onFollow,
   onOpenTask,
+  variant = "page",
 }: RunViewProps) {
   const { events } = useTaskHistory(call, run.work_item_id, liveEvents)
   const [tab, setTab] = usePlaceState<(typeof liveTabs)[number]>("tab", "Chat")
@@ -168,6 +174,44 @@ function LiveRunView({
   }, [childId])
   const mode = run.options?.permission_mode ?? "ask"
   const started = runEvents.find((e) => e.kind === "run.created")?.received_at ?? null
+  if (variant === "thread")
+    return (
+      <div className="page run-page run-focus rc-thread">
+        <div className="rc-thread-bar">
+          <RunClock run={run} started={started} />
+          <span className="toolbar-spacer" />
+          {running && call && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                call("runs.cancel", { ...mutationMeta(), run_id: run.id }).catch((e: unknown) =>
+                  setStopError(e instanceof Error ? e.message : String(e)),
+                )
+              }
+            >
+              Detener
+            </Button>
+          )}
+        </div>
+        {stopError && (
+          <p className="error-banner" role="alert">
+            {stopError}
+          </p>
+        )}
+        <RunChat
+          events={chainEvents}
+          run={run}
+          running={running}
+          density={density}
+          ledger={false}
+          {...(task ? { task } : {})}
+          {...(call ? { call } : {})}
+          {...(onRun ? { onContinued: onRun } : {})}
+          {...(onOpenTask ? { onTask: onOpenTask } : {})}
+        />
+      </div>
+    )
   return (
     <div className="page run-page run-focus">
       <header className="rc-head">
