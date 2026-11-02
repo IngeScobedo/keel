@@ -199,6 +199,7 @@ import {
 } from "./vault/ssh.js"
 import { Vault, VaultError } from "./vault/vault.js"
 import { runVerify } from "./verify.js"
+import { atCommit, pristineAt, headOf as worktreeHead } from "./verify-baseline.js"
 import type { WorkspaceDriver } from "./workspace-driver.js"
 import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
 import { WorktreeSetup } from "./worktree-setup.js"
@@ -5215,6 +5216,64 @@ export class Daemon {
   }
 
   /**
+   * El commit contra el que se mide el baseline: donde nació la rama de la feature para
+   * un padre, donde nació el worktree para las demás. `null` sin worktree de Keel.
+   */
+  private baseShaOf(w: WorkItemRow): string | null {
+    const feat = this.featureOf(w.id)
+    if (feat?.base_sha) return feat.base_sha
+    const last = this.repo.lastRunFor(w.id)
+    const wt = last
+      ? this.repo
+          .runWorktrees(last.id)
+          .find((x) => x.slot === "root" && existsSync(x.worktree_path))
+      : undefined
+    return wt?.base_sha ?? null
+  }
+
+  /** Baselines por commit y perfil: las hijas de una fase nacen del mismo commit. */
+  private readonly baselines = new Map<string, Promise<VerifyResult[]>>()
+
+  /**
+   * Mide el baseline en el commit base (ver `verify-baseline.ts`). `inPlace`: se midió en
+   * el worktree de la tarea porque sigue en el base, y sirve también de resultado actual.
+   */
+  private async baselineAt(
+    w: WorkItemRow,
+    cwd: string,
+    profile: ProjectProfile,
+    runId: string | null,
+  ): Promise<{ results: VerifyResult[]; inPlace: boolean }> {
+    const store = (text: string) => this.artifacts.put(text, "text/plain").ref
+    if (!profile.verify.length) return { results: [], inPlace: true }
+    const sha = this.baseShaOf(w)
+    if (!sha || (await pristineAt(cwd, sha)))
+      return { results: await runVerify(cwd, profile.verify, { store }), inPlace: true }
+    // `nx affected` en el base no ve cambios y no corre nada: con la cabeza de la tarea
+    // elige los mismos proyectos que la medición actual. Otros comandos lo ignoran.
+    const head = await worktreeHead(cwd)
+    const key = [sha, head, JSON.stringify(profile.verify), JSON.stringify(profile.setup)].join(
+      "\0",
+    )
+    let job = this.baselines.get(key)
+    if (!job) {
+      const dir = join(this.opts.worktreesDir ?? defaultWorktreesDir(), ".baseline")
+      job = atCommit(cwd, sha, dir, async (at) => {
+        await this.ensureSetup(w, at, runId)
+        return runVerify(at, profile.verify, {
+          store,
+          env: { ...process.env, ...(head ? { NX_HEAD: head } : {}) },
+        })
+      })
+      this.baselines.set(key, job)
+      if (this.baselines.size > 16)
+        this.baselines.delete(this.baselines.keys().next().value as string)
+      job.catch(() => this.baselines.delete(key))
+    }
+    return { results: await job, inPlace: false }
+  }
+
+  /**
    * Corre la verificación del proyecto en el worktree de la tarea (ADR-0021 §4),
    * guarda baseline o último resultado y, si se pide, se lo cuenta al agente en
    * pocas líneas. Una a la vez por tarea.
@@ -5233,28 +5292,34 @@ export class Daemon {
       .then(async () => {
         const w = this.requireWorkItem(workItemId)
         const profile = this.profileOf(w.project_id) ?? (await this.detectedProfile(w.project_id))
+        const cwd = this.taskCwd(w)
+        const runId = this.repo.lastRunFor(w.id)?.id ?? null
         // Sin dependencias, verify falla igual antes y después del cambio y no dice nada.
-        await this.ensureSetup(w, this.taskCwd(w), this.repo.lastRunFor(w.id)?.id ?? null)
-        const results = profile.verify.length
-          ? await runVerify(this.taskCwd(w), profile.verify, {
-              store: (text) => this.artifacts.put(text, "text/plain").ref,
-            })
-          : []
+        await this.ensureSetup(w, cwd, runId)
+        const stored = this.repo.getFlow(w.id)?.baseline_json
+        const kept = stored ? (JSON.parse(stored) as VerifyResult[]) : null
+        const isBaseline = o.baseline === true || !measuredAtBase(kept)
+        const fresh = isBaseline ? await this.baselineAt(w, cwd, profile, runId) : null
+        const results = !profile.verify.length
+          ? []
+          : fresh?.inPlace
+            ? fresh.results
+            : await runVerify(cwd, profile.verify, {
+                store: (text) => this.artifacts.put(text, "text/plain").ref,
+              })
         const flow = this.repo.getFlow(w.id)
-        const isBaseline = o.baseline === true || !flow?.baseline_json
-        const base = isBaseline
-          ? results
-          : (JSON.parse(flow?.baseline_json ?? "[]") as VerifyResult[])
+        const base = fresh ? fresh.results : (kept ?? [])
         const delta = verifyDelta(base, results)
         runUnitOfWork(this.uowDeps(), this.systemScope(w.project_id), (uow) => {
           if (flow)
             this.repo.updateFlow(w.id, {
               last_verify_json: JSON.stringify(results),
-              ...(isBaseline ? { baseline_json: JSON.stringify(results) } : {}),
+              ...(fresh ? { baseline_json: JSON.stringify(fresh.results) } : {}),
             })
           uow.emit("verify.completed", this.repo.lastRunFor(w.id)?.id ?? null, {
             work_item_id: w.id,
-            baseline: isBaseline,
+            // Lo que se muestra es el baseline sólo si se midió ahí mismo.
+            baseline: fresh?.inPlace === true,
             results,
             delta,
           })
@@ -5265,7 +5330,7 @@ export class Daemon {
           if (this.providerOf(live).sendMessage(live.id, text))
             this.emitSystem("run.keel_message", live.id, { text })
         }
-        return { results, delta, baseline: isBaseline }
+        return { results, delta, baseline: fresh?.inPlace === true }
       })
     this.verifying.set(workItemId, job)
     try {
@@ -7206,9 +7271,17 @@ function mediaTypeOf(path: string): string {
 }
 
 /** El resultado de la verificación en una línea: lo que lee el agente (ADR-0021 §4). */
+/**
+ * Un baseline sirve si se midió con huellas, es decir, desde que se mide en el commit
+ * base: los de antes se tomaban en el worktree con el cambio puesto y se miden otra vez.
+ */
+function measuredAtBase(b: readonly VerifyResult[] | null): b is VerifyResult[] {
+  return b !== null && b.every((r) => r.failures !== undefined)
+}
+
 function verifySummary(
   results: readonly VerifyResult[],
-  delta: { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] },
+  delta: ReturnType<typeof verifyDelta>,
 ): string {
   const head = delta.green ? "sin rojo nuevo" : `rojo nuevo en ${delta.newRed.join(", ")}`
   const parts = results.map(
@@ -7216,7 +7289,19 @@ function verifySummary(
       `${r.name} ${r.ok ? "✓" : delta.stillRed.includes(r.name) ? "✗ (ya estaba rojo)" : "✗"} ${Math.round(r.duration_ms / 1000)} s`,
   )
   const fail = results.filter((r) => !r.ok && delta.newRed.includes(r.name))
-  return `${head}. ${parts.join(" · ")}${fail.length ? `\n${fail.map((r) => `--- ${r.name}\n${r.tail}`).join("\n")}` : ""}`
+  const detail = fail.map((r) => {
+    // Con huellas, lo nuevo dice más que la cola: en un comando que ya estaba rojo, la
+    // cola suele ser la deuda vieja.
+    const fresh = delta.newFailures[r.name] ?? []
+    const list = fresh.length
+      ? `fallas nuevas (${fresh.length}):\n${fresh
+          .slice(0, 15)
+          .map((f) => `- ${f}`)
+          .join("\n")}${fresh.length > 15 ? `\n- … y ${fresh.length - 15} más` : ""}\n`
+      : ""
+    return `--- ${r.name}\n${list}${r.tail}`
+  })
+  return `${head}. ${parts.join(" · ")}${detail.length ? `\n${detail.join("\n")}` : ""}`
 }
 
 /**

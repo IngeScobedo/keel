@@ -4,7 +4,7 @@ import { useEffect, useState } from "react"
 import { approvalCanResolve } from "./approvals.js"
 import { type Approval, makeDemoApprovals } from "./fixtures.js"
 import { formatCost, type Run, type WorkItem } from "./model.js"
-import { Button, Empty, Hint, Modal, Status } from "./ui.js"
+import { Button, Empty, Hint, Modal, Status, waitingLabel } from "./ui.js"
 
 export function Inbox({
   demo,
@@ -198,7 +198,7 @@ export function Inbox({
               </header>
               {reviews.map((task) => (
                 <div className="review-row" key={task.id}>
-                  <Status state={task.visual_state} dot />
+                  <Status state={task.visual_state} dot label={waitingLabel(task)} />
                   <span className="mono muted">{task.display_id}</span>
                   <strong>{task.title}</strong>
                   <span className="mono muted">

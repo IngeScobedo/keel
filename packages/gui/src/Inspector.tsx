@@ -23,7 +23,7 @@ import {
 } from "./model.js"
 import { ResearchPanel } from "./Research.js"
 import { FeaturePlan, TaskWork } from "./TaskWork.js"
-import { Button, Empty, Hint, Modal, Status, Tabs } from "./ui.js"
+import { Button, Empty, Hint, Modal, Status, Tabs, waitingLabel } from "./ui.js"
 import { Trail, usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
@@ -135,7 +135,7 @@ export function Inspector({
           <dd>{demo ? "Feature" : "No disponible"}</dd>
           <dt>Status</dt>
           <dd>
-            <Status state={task.visual_state} />
+            <Status state={task.visual_state} label={waitingLabel(task)} />
           </dd>
           <dt>Lifecycle</dt>
           <dd>{task.lifecycle}</dd>

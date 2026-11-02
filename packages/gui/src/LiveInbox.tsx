@@ -11,7 +11,7 @@ import { mutationMeta } from "./client.js"
 import { GitPlanCard } from "./GitPlanCard.js"
 import { actorLabel, formatCost, type Run, type WorkItem } from "./model.js"
 import { Select } from "./ui/index.js"
-import { Button, Empty, Hint, Modal, Status } from "./ui.js"
+import { Button, Empty, Hint, Modal, Status, waitingLabel } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Approval = ReturnType<typeof ApprovalViewSchema.parse>
@@ -370,7 +370,7 @@ export function LiveInbox({
               </header>
               {reviews.map((t) => (
                 <div className="review-row" key={t.id}>
-                  <Status state={t.visual_state} dot />
+                  <Status state={t.visual_state} dot label={waitingLabel(t)} />
                   <span className="mono muted">{t.display_id}</span>
                   <strong>{t.title}</strong>
                   <span className="mono muted">

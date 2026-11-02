@@ -61,7 +61,7 @@ import {
   splitUnified,
 } from "./task-model.js"
 import { Button, Segmented, SidePanel, Tabs, TextArea } from "./ui/index.js"
-import { Empty, Hint, Modal, Status } from "./ui.js"
+import { Empty, Hint, Modal, Status, waitingLabel } from "./ui.js"
 import { Trail, useOpenDetail, usePlaceState } from "./useNav.js"
 import type { useWorkspace } from "./useWorkspace.js"
 import "./TaskFocus.css"
@@ -229,7 +229,7 @@ export function TaskFocus({
         {panel ? <FocusBar task={task} {...panel} /> : <Trail />}
         <div className="tf-title">
           <h1>{task.title}</h1>
-          <Status state={task.visual_state} />
+          <Status state={task.visual_state} label={waitingLabel(task)} />
           {task.stage && (
             <span className="tf-stage" title="Etapa del método">
               {STAGE_LABEL[task.stage] ?? task.stage}

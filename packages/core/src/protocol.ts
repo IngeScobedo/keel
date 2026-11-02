@@ -192,6 +192,10 @@ export const WorkItemViewSchema = z.object({
   subtask: z
     .object({ key: z.string(), phase: z.number().int(), phase_title: z.string() })
     .optional(),
+  /** Con `waiting_human`: por qué espera al humano, en una línea. */
+  waiting_on: z
+    .object({ kind: z.enum(["decision", "qa_fail", "reply"]), text: z.string() })
+    .optional(),
   ...projected,
 })
 /** Resultado de un comando de verificación del proyecto, recortado para el agente. */
@@ -204,6 +208,12 @@ export const VerifyResultSchema = z.object({
   /** Las últimas líneas de la salida; la salida entera queda como artefacto. */
   tail: z.string(),
   output_ref: z.string().nullable(),
+  /**
+   * La huella de cada falla (`failureKeys`); `null` si la salida no tiene un formato
+   * conocido. Falta en los resultados de antes de las huellas: un baseline así se mide
+   * otra vez en el commit base.
+   */
+  failures: z.array(z.string()).nullable().optional(),
 })
 export type VerifyResult = z.infer<typeof VerifyResultSchema>
 export const VerifyDeltaSchema = z.object({
@@ -211,6 +221,7 @@ export const VerifyDeltaSchema = z.object({
   newRed: z.array(z.string()),
   stillRed: z.array(z.string()),
   fixed: z.array(z.string()),
+  newFailures: z.record(z.string(), z.array(z.string())).optional(),
 })
 export const DocReportSchema = z.object({
   ok: z.boolean(),

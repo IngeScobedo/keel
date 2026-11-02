@@ -182,7 +182,7 @@ async function boot() {
       .eventsAfter(0, null, 100_000)
       .filter((e) => e.kind === kind)
       .map((e) => JSON.parse(e.payload_json) as Record<string, unknown>)
-  return { daemon, human, scripts, seen, task, runsOf, until, events }
+  return { daemon, human, scripts, seen, task, runsOf, until, events, repoDir }
 }
 
 const put = (t: Turn, work_item_id: string, kind: string, content_markdown: string) =>
@@ -595,6 +595,8 @@ describe("ADR-0030 §3: el worktree trae sus dependencias", () => {
         },
       },
     })
+    // Como en un proyecto real, lo instalado no es un cambio: el worktree sigue en su base.
+    writeFileSync(join(s.repoDir, ".git", "info", "exclude"), "node_modules/\n")
     const w = await s.task("Con dependencias")
     s.scripts.push(async (t) => {
       await put(t, w.id, "brief", BRIEF)
@@ -616,4 +618,81 @@ describe("ADR-0030 §3: el worktree trae sus dependencias", () => {
     expect(done[0]).toMatchObject({ work_item_id: w.id, ok: true })
     expect(s.events("workspace.setup_failed")).toHaveLength(0)
   }, 40_000)
+})
+
+describe("ADR-0021 §4: el baseline se mide en el commit base", () => {
+  test("con el cambio puesto, el baseline sale de un worktree aparte en el base; el viejo se vuelve a medir", async () => {
+    const s = await boot()
+    const profile = (await s.human.call("projects.profile_get", {})) as {
+      profile: Record<string, unknown>
+    }
+    await s.human.call("projects.profile_set", {
+      ...meta(),
+      profile: { ...profile.profile, verify: [{ name: "test", command: "test ! -f roto.txt" }] },
+    })
+    const w = await s.task("Baseline en el base")
+    let release: () => void = () => {}
+    const hold = new Promise<void>((r) => {
+      release = r
+    })
+    let verdict: { delta: { green: boolean; newRed: string[] }; baseline: boolean } | null = null
+    let cwd = ""
+    s.scripts.push(async (t) => {
+      await put(t, w.id, "brief", BRIEF)
+      await advance(t, w.id, "implement", { ceremony: "direct", reason: "fix chico" })
+      await hold
+      cwd = String(t.options.cwd)
+      // El cambio rompe el test antes de que haya un baseline que sirva.
+      writeFileSync(join(cwd, "roto.txt"), "x\n")
+      verdict = (await t.agent.call("verify.run", { ...meta(), work_item_id: w.id })) as never
+    })
+    await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })
+    await s.until(() => s.daemon.repo.getFlow(w.id)?.baseline_json !== null, 20_000)
+    // Un baseline de antes de las huellas, tomado con el cambio puesto (como el de KEEL-13).
+    s.daemon.repo.updateFlow(w.id, {
+      baseline_json: JSON.stringify([
+        {
+          name: "test",
+          command: "test ! -f roto.txt",
+          ok: false,
+          exit_code: 1,
+          duration_ms: 1,
+          tail: "",
+          output_ref: null,
+        },
+      ]),
+    })
+    release()
+    await s.until(() => verdict !== null, 20_000)
+    // En el base no existe `roto.txt`: el test pasaba, y fallar ahora es rojo nuevo.
+    expect(verdict).toMatchObject({ delta: { green: false, newRed: ["test"] }, baseline: false })
+    expect(JSON.parse(s.daemon.repo.getFlow(w.id)?.baseline_json ?? "[]")).toMatchObject([
+      { name: "test", ok: true, failures: [] },
+    ])
+    // El worktree del baseline no queda.
+    const list = Bun.spawnSync(["git", "worktree", "list"], { cwd }).stdout.toString()
+    expect(list).not.toContain(".baseline")
+  }, 40_000)
+})
+
+describe("«Waiting for you» dice por qué", () => {
+  test("un QA en FAIL que devolvió la tarea a implementar, sin nada que aprobar", async () => {
+    const s = await boot()
+    const w = await s.task("Revisión que falla")
+    s.scripts.push(async (t) => {
+      await put(t, w.id, "brief", BRIEF)
+      await advance(t, w.id, "implement", { ceremony: "direct", reason: "fix chico" })
+      writeFileSync(join(String(t.options.cwd), "ok.txt"), "listo\n")
+      await t.agent.call("verify.run", { ...meta(), work_item_id: w.id })
+      await advance(t, w.id, "review")
+      await put(t, w.id, "qa", "## Veredicto: FAIL\nEl nombre pasa de 50.\n")
+      await advance(t, w.id, "implement", { reason: "QA en FAIL" })
+    })
+    await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })
+    await s.until(() => s.daemon.repo.getWorkItem(w.id)?.lifecycle === "waiting_human", 20_000)
+    const view = (await s.human.call("work_items.get", { work_item_id: w.id })) as {
+      item: { waiting_on?: { kind: string; text: string } }
+    }
+    expect(view.item.waiting_on).toEqual({ kind: "qa_fail", text: "QA en FAIL · dile cómo seguir" })
+  }, 30_000)
 })

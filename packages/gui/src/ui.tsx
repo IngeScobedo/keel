@@ -44,6 +44,14 @@ const stateIcons: Record<VisualState, LucideIcon> = {
   orphan: Unplug,
   budget_stop: Square,
 }
+/** «Waiting for you» con su porqué, si el daemon lo sabe (QA en FAIL, contéstale…). */
+export function waitingLabel(t: {
+  visual_state: VisualState
+  waiting_on?: { text: string } | undefined
+}): string | undefined {
+  return t.visual_state === "waiting_human" ? t.waiting_on?.text : undefined
+}
+
 export function Status({
   state,
   dot = false,
@@ -52,7 +60,7 @@ export function Status({
   state: VisualState
   dot?: boolean
   /** Otro texto para el mismo estado (p. ej. una feature que espera a sus subtareas). */
-  label?: string
+  label?: string | undefined
 }) {
   const Icon = stateIcons[state]
   const text = label ?? stateLabels[state]

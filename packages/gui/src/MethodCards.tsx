@@ -153,6 +153,9 @@ export function MethodRow({
   }
 }
 
+/** Cuántas fallas nuevas se listan por comando; el resto queda en la salida. */
+const NEW_SHOWN = 8
+
 /** La verificación que corrió Keel: verde o rojo nuevo, y la cola de lo que falló. */
 function VerifyCard({ item }: { item: Extract<MethodItem, { event: "verify" }> }) {
   const [open, setOpen] = useState(!item.delta.green && !item.baseline)
@@ -190,6 +193,21 @@ function VerifyCard({ item }: { item: Extract<MethodItem, { event: "verify" }> }
               Ya estaba rojo antes de empezar: {item.delta.stillRed.join(", ")}
             </p>
           )}
+          {Object.entries(item.delta.newFailures ?? {}).map(([name, list]) => (
+            <div key={name} className="rc-verify-new" data-testid="verify-new-failures">
+              <p>Fallas nuevas en {name}:</p>
+              <ul>
+                {list.slice(0, NEW_SHOWN).map((f) => (
+                  <li key={f} className="mono">
+                    {f}
+                  </li>
+                ))}
+              </ul>
+              {list.length > NEW_SHOWN && (
+                <p className="muted">y {list.length - NEW_SHOWN} más en la salida</p>
+              )}
+            </div>
+          ))}
           {item.results
             .filter((r) => !r.ok)
             .map((r) => (

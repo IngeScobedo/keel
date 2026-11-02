@@ -569,20 +569,54 @@ export function validateDoc(
 
 // --- verificación delta-verde ------------------------------------------------------
 
-/** Un comando de verificación del proyecto (lint, typecheck, test, build…). */
-export type VerifyCheck = { name: string; ok: boolean }
+/**
+ * Un comando de verificación del proyecto (lint, typecheck, test, build…) y, si su
+ * salida tiene un formato conocido, la huella de cada falla (`failureKeys`).
+ */
+export type VerifyCheck = {
+  name: string
+  ok: boolean
+  failures?: readonly string[] | null | undefined
+}
 
 /**
  * «Verde» es no introducir rojo nuevo: lo que pasaba en el baseline y ahora
- * falla. La deuda que ya estaba roja no bloquea, pero se reporta.
+ * falla, o lo que ya fallaba y ahora falla además en algo nuevo (con huellas de los
+ * dos lados). La deuda que ya estaba roja no bloquea, pero se reporta.
  */
 export function verifyDelta(
   baseline: readonly VerifyCheck[] | null,
   now: readonly VerifyCheck[],
-): { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] } {
-  const before = new Map((baseline ?? []).map((c) => [c.name, c.ok]))
-  const newRed = now.filter((c) => !c.ok && before.get(c.name) !== false).map((c) => c.name)
-  const stillRed = now.filter((c) => !c.ok && before.get(c.name) === false).map((c) => c.name)
-  const fixed = now.filter((c) => c.ok && before.get(c.name) === false).map((c) => c.name)
-  return { green: newRed.length === 0, newRed, stillRed, fixed }
+): {
+  green: boolean
+  newRed: string[]
+  stillRed: string[]
+  fixed: string[]
+  /** Por comando, las fallas que no estaban en el baseline. */
+  newFailures: Record<string, string[]>
+} {
+  const before = new Map((baseline ?? []).map((c) => [c.name, c]))
+  const newRed: string[] = []
+  const stillRed: string[] = []
+  const fixed: string[] = []
+  const newFailures: Record<string, string[]> = {}
+  for (const c of now) {
+    const b = before.get(c.name)
+    if (c.ok) {
+      if (b?.ok === false) fixed.push(c.name)
+      continue
+    }
+    if (b?.ok !== false) {
+      newRed.push(c.name)
+      if (c.failures?.length) newFailures[c.name] = [...c.failures]
+      continue
+    }
+    const known = b.failures ? new Set(b.failures) : null
+    const added = known && c.failures ? c.failures.filter((f) => !known.has(f)) : []
+    if (added.length) {
+      newRed.push(c.name)
+      newFailures[c.name] = added
+    } else stillRed.push(c.name)
+  }
+  return { green: newRed.length === 0, newRed, stillRed, fixed, newFailures }
 }

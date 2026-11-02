@@ -537,7 +537,9 @@ function shown(
       sub,
       item,
       tone: "you",
-      line: waitingYou?.has(sub.id) ? "espera tu decisión" : "espera tu revisión",
+      line: waitingYou?.has(sub.id)
+        ? "espera tu decisión"
+        : (item?.waiting_on?.text ?? "espera tu revisión"),
     }
   return {
     sub,

@@ -6,7 +6,7 @@
  * calcula `verifyDelta` de `@keel/core`.
  */
 import { spawn } from "node:child_process"
-import { type ProjectProfile, redact, type VerifyResult } from "@keel/core"
+import { failureKeys, type ProjectProfile, redact, type VerifyResult } from "@keel/core"
 
 /** Líneas finales que ve el agente; lo demás, en el artefacto. */
 const TAIL_LINES = 30
@@ -75,14 +75,16 @@ export function runOne(
         ? `\n[keel] se cortó al vencer ${c.timeout_ms ?? DEFAULT_TIMEOUT_MS} ms`
         : ""
       const full = `$ ${c.command}\n${text}${error ? `\n[keel] ${error}` : ""}${note}`
+      const ok = code === 0 && !timedOut && !error
       resolve({
         name: c.name,
         command: c.command,
-        ok: code === 0 && !timedOut && !error,
+        ok,
         exit_code: code,
         duration_ms: Date.now() - started,
         tail: tail(full, TAIL_LINES),
         output_ref: text.trim() ? deps.store(full) : null,
+        failures: ok ? [] : failureKeys(text, cwd),
       })
     }
     child.on("error", (e) => finish(null, e.message))

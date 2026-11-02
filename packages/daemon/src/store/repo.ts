@@ -11,6 +11,7 @@ import {
   type Lifecycle,
   type LiveRun,
   type NodeState,
+  qaVerdict,
   type RunPurpose,
   type RunStatus,
   type Stage,
@@ -1814,7 +1815,50 @@ export class Repo {
       visual_state: visualForWorkItem(w.lifecycle, liveRun),
       ...flowFields(this.getFlow(w.id)),
       ...this.featureFields(w.id),
+      ...this.waitingFields(w),
     }
+  }
+
+  /**
+   * Por qué la tarea espera al humano, en una línea: «Waiting for you» solo no dice si
+   * hay que aprobar algo o contestarle al agente (KEEL-13, 2026-11-02: QA en FAIL, el
+   * agente cerró su turno y no había nada que aprobar).
+   */
+  private waitingFields(w: WorkItemRow): {
+    waiting_on?: { kind: "decision" | "qa_fail" | "reply"; text: string }
+  } {
+    if (w.lifecycle !== "waiting_human") return {}
+    const pending = this.db
+      .query<{ n: number }, [string, string]>(
+        `SELECT count(*) AS n FROM approval_requests a JOIN runs r ON r.id = a.run_id
+          WHERE r.work_item_id = ? AND a.state = 'pending'
+            AND (a.expires_at IS NULL OR a.expires_at > ?)`,
+      )
+      .get(w.id, new Date().toISOString())
+    if ((pending?.n ?? 0) > 0)
+      return { waiting_on: { kind: "decision", text: "Espera tu decisión" } }
+    const flow = this.getFlow(w.id)
+    const qa = flow?.stage === "implement" ? this.getTaskDoc(w.id, "qa") : null
+    // El QA en FAIL de la última revisión, que la devolvió a implementar.
+    if (qa && qa.created_at >= (this.lastStageEntry(w.id, "review") ?? "") && this.artifacts) {
+      const verdict = qaVerdict(this.taskDocContent(qa))
+      if (verdict === "FAIL")
+        return { waiting_on: { kind: "qa_fail", text: "QA en FAIL · dile cómo seguir" } }
+    }
+    return { waiting_on: { kind: "reply", text: "Terminó su turno · contéstale" } }
+  }
+
+  /** Cuándo entró la tarea por última vez a una etapa, de sus eventos. */
+  private lastStageEntry(workItemId: string, stage: Stage): string | null {
+    const row = this.db
+      .query<{ at: string | null }, [string, string]>(
+        `SELECT max(received_at) AS at FROM events
+          WHERE kind = 'task.stage_changed'
+            AND json_extract(payload_json, '$.work_item_id') = ?
+            AND json_extract(payload_json, '$.to') = ?`,
+      )
+      .get(workItemId, stage)
+    return row?.at ?? null
   }
   /** ADR-0022 §5: el avance de una feature, o la línea del plan de una subtarea. */
   private featureFields(id: string) {

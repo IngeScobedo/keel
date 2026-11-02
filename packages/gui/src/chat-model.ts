@@ -81,7 +81,14 @@ export type MethodItem =
       event: "verify"
       baseline: boolean
       results: { name: string; ok: boolean; duration_ms: number; tail: string }[]
-      delta: { green: boolean; newRed: string[]; stillRed: string[]; fixed: string[] }
+      delta: {
+        green: boolean
+        newRed: string[]
+        stillRed: string[]
+        fixed: string[]
+        /** Las fallas que no estaban en el baseline, por comando (huellas de ADR-0021 §4). */
+        newFailures?: Record<string, string[]>
+      }
     }
   | { kind: "method"; key: string; event: "keel" | "stalled" | "closed" | "started"; text: string }
   /** ADR-0022 §5: una línea por subtarea que nace, arranca, se integra o vuelve. */
@@ -473,6 +480,7 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
             newRed: string[]
             stillRed: string[]
             fixed: string[]
+            newFailures?: Record<string, string[]>
           },
         })
         break

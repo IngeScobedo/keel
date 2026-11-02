@@ -23,7 +23,7 @@ import {
   type WorkItem,
 } from "./model.js"
 import { Select } from "./ui/index.js"
-import { Button, Empty, Status } from "./ui.js"
+import { Button, Empty, Status, waitingLabel } from "./ui.js"
 
 export function TaskCard({
   item,
@@ -68,7 +68,7 @@ export function TaskCard({
         {item.feature && item.lifecycle === "blocked" ? (
           <Status state="queued" label="Esperando subtareas" />
         ) : (
-          <Status state={item.visual_state} />
+          <Status state={item.visual_state} label={waitingLabel(item)} />
         )}
       </span>
       <span className="card-title">{item.title}</span>
@@ -467,7 +467,7 @@ export function Board({
                         </button>
                       </td>
                       <td>
-                        <Status state={item.visual_state} />
+                        <Status state={item.visual_state} label={waitingLabel(item)} />
                       </td>
                       <td>{details[item.id]?.repo ?? "No disponible"}</td>
                       <td className="mono">

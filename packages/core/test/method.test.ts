@@ -147,14 +147,39 @@ describe("ADR-0021: validación determinista de documentos", () => {
         { name: "test", ok: true },
         { name: "build", ok: true },
       ]),
-    ).toEqual({ green: true, newRed: [], stillRed: ["lint"], fixed: [] })
+    ).toEqual({ green: true, newRed: [], stillRed: ["lint"], fixed: [], newFailures: {} })
     expect(
       verifyDelta(base, [
         { name: "lint", ok: true },
         { name: "test", ok: false },
         { name: "build", ok: true },
       ]),
-    ).toEqual({ green: false, newRed: ["test"], stillRed: [], fixed: ["lint"] })
+    ).toEqual({ green: false, newRed: ["test"], stillRed: [], fixed: ["lint"], newFailures: {} })
+  })
+  test("KEEL-13: una falla nueva en un comando que ya estaba rojo es rojo nuevo", () => {
+    const base = [
+      { name: "typecheck", ok: false, failures: ["src/a.test.ts TS6305: viejo"] },
+      { name: "test", ok: false, failures: ["|store| src/b.test.tsx > B > ya fallaba"] },
+      { name: "lint", ok: false, failures: null },
+    ]
+    expect(
+      verifyDelta(base, [
+        {
+          name: "typecheck",
+          ok: false,
+          failures: ["src/a.test.ts TS6305: viejo", "src/G.tsx TS6133: 'hasChapters' sin uso"],
+        },
+        { name: "test", ok: false, failures: ["|store| src/b.test.tsx > B > ya fallaba"] },
+        // Sin huellas de un lado se compara el comando entero.
+        { name: "lint", ok: false, failures: ["x"] },
+      ]),
+    ).toEqual({
+      green: false,
+      newRed: ["typecheck"],
+      stillRed: ["test", "lint"],
+      fixed: [],
+      newFailures: { typecheck: ["src/G.tsx TS6133: 'hasChapters' sin uso"] },
+    })
   })
 })
 

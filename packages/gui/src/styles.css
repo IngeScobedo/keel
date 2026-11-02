@@ -3289,6 +3289,18 @@ button.rc-ledger-row:hover {
   overflow: auto;
   white-space: pre-wrap;
 }
+.rc-verify-new ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rc-verify-new li {
+  font-size: 11px;
+  color: var(--color-status-failed);
+  overflow-wrap: anywhere;
+}
 .rc-gate {
   display: flex;
   flex-direction: column;
