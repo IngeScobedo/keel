@@ -10,7 +10,7 @@
  * - `batch`: el lote corre; el hilo vuelve al centro y a la derecha queda el lote en
  *   vivo (CTO / 04).
  */
-import type { EventNotification } from "@keel/core"
+import type { EventNotification, Methods } from "@keel/core"
 import type { Approval } from "./chat-model.js"
 
 export type Stage =
@@ -84,4 +84,23 @@ const STAGES = ["brief", "design", "implement", "review", "close"] as const
 export function stepOf(stage: string | null): { n: number; of: number } {
   const i = stage ? STAGES.indexOf(stage as (typeof STAGES)[number]) : -1
   return { n: i < 0 ? 0 : i + 1, of: STAGES.length }
+}
+
+// --- CTO / 05 ---------------------------------------------------------------------------
+
+export type PendingApproval = ReturnType<
+  (typeof Methods)["approvals.list"]["result"]["parse"]
+>["approvals"][number]
+
+const PERMISSION_TOOLS = new Set(["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch"])
+
+/** Qué destraba contestar: ordena la lista y lo dice en una línea. */
+export function unlockOf(a: { operation: unknown }): { rank: number; kind: string; line: string } {
+  const tool = (a.operation as { tool?: string } | null)?.tool ?? "?"
+  if (PERMISSION_TOOLS.has(tool) || tool.startsWith("mcp__") || tool === "AskUserQuestion")
+    return { rank: 0, kind: "Permiso", line: "Un agente trabajando espera tu respuesta" }
+  if (tool === "git.plan")
+    return { rank: 1, kind: "Commit", line: "Destraba integrar la subtarea a la feature" }
+  if (tool === "stage.gate") return { rank: 2, kind: "Gate", line: "Destraba la siguiente etapa" }
+  return { rank: 3, kind: "Decisión", line: "Espera tu decisión" }
 }

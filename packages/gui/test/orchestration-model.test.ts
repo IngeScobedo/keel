@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { agentName, leaseOf, stageOf, stepOf } from "../src/orchestration-model.js"
+import { agentName, leaseOf, stageOf, stepOf, unlockOf } from "../src/orchestration-model.js"
 
 let seq = 0
 const at = (kind: string, payload: unknown, run_id: string | null = "r1") => ({
@@ -46,5 +46,16 @@ describe("ADR-0041: la etapa de la conversación", () => {
     expect(leaseOf(["apps/store/**", "docs/x.md"])).toBe("apps/store/** +1")
     expect(leaseOf([])).toBe("sin frontera")
     expect(stepOf("implement")).toEqual({ n: 3, of: 5 })
+  })
+})
+
+describe("CTO / 05: lo que te espera, por lo que destraba", () => {
+  test("primero el agente bloqueado, luego el commit que integra, luego el gate", () => {
+    const op = (tool: string) => ({ operation: { tool } })
+    const sorted = [op("stage.gate"), op("git.plan"), op("Bash"), op("otra")]
+      .map((a) => unlockOf(a))
+      .sort((a, b) => a.rank - b.rank)
+      .map((u) => u.kind)
+    expect(sorted).toEqual(["Permiso", "Commit", "Gate", "Decisión"])
   })
 })

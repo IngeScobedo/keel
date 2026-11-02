@@ -38,7 +38,7 @@ import type { Approval } from "./chat-model.js"
 import { STAGE_LABEL } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import type { Run, WorkItem } from "./model.js"
-import { agentName, laneName, leaseOf, stepOf } from "./orchestration-model.js"
+import { agentName, laneName, leaseOf, stepOf, unlockOf } from "./orchestration-model.js"
 import { Select, Switch } from "./ui/index.js"
 import { Button } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
@@ -578,6 +578,7 @@ export function LiveBatch({
   waitingYou,
   onOpen,
   compact = false,
+  needsYou,
 }: {
   call: Call
   parent: WorkItem
@@ -588,6 +589,8 @@ export function LiveBatch({
   onOpen: (item: WorkItem) => void
   /** En el panel lateral de la tarea: sin su propio margen. */
   compact?: boolean
+  /** Lo que te espera del lote: abre su foco (CTO / 05). */
+  needsYou?: { count: number; onOpen: () => void } | undefined
 }) {
   const [lanes, setLanes] = useState<Lanes | null>(null)
   const [showDone, setShowDone] = useState(false)
@@ -662,6 +665,15 @@ export function LiveBatch({
             {feature.auto_integrate ? " · se integran solas" : " · cada integración te pregunta"}
           </span>
         </p>
+      )}
+      {needsYou && needsYou.count > 0 && (
+        <button type="button" className="lb-needs" onClick={needsYou.onOpen} data-testid="lb-needs">
+          <span className="ny-glyph" aria-hidden /> Te espera{needsYou.count === 1 ? "" : "n"}{" "}
+          {needsYou.count}
+          <span>
+            Ver <ArrowRight size={12} aria-hidden />
+          </span>
+        </button>
       )}
       {waitingLimit > 0 && (
         <p className="lb-note">
@@ -748,6 +760,99 @@ export function LiveBatch({
           </div>
         </div>
       )}
+    </section>
+  )
+}
+
+// --- CTO / 05: lo que te espera ----------------------------------------------------------
+
+type Pending = ReturnType<
+  (typeof Methods)["approvals.list"]["result"]["parse"]
+>["approvals"][number]
+
+/**
+ * «Te esperan» (CTO / 05): lo pendiente del lote, ordenado por lo que destraba, no por
+ * cuándo llegó. A la izquierda la lista; a la derecha lo elegido con su tarjeta para
+ * resolverlo ahí mismo.
+ */
+export function NeedsYouSurface({
+  items,
+  renderCard,
+  onOpenTask,
+}: {
+  items: Pending[]
+  /** La tarjeta que resuelve cada aprobación (la de la bandeja). */
+  renderCard: (a: Pending, onDone: () => void) => ReactNode
+  onOpenTask: (id: string) => void
+}) {
+  const sorted = [...items].sort((a, b) => unlockOf(a).rank - unlockOf(b).rank)
+  const kinds = [...new Set(sorted.map((a) => unlockOf(a).kind))]
+  const [filter, setFilter] = useState<string | null>(null)
+  const list = filter ? sorted.filter((a) => unlockOf(a).kind === filter) : sorted
+  const [picked, setPicked] = useState<string | null>(null)
+  const current = list.find((a) => a.id === picked) ?? list[0]
+  if (sorted.length === 0)
+    return (
+      <section className="ny cto-enter" data-testid="needs-you">
+        <h1>Nada te espera</h1>
+        <p className="muted">Los agentes siguen solos. Lo que pida tu decisión aparece aquí.</p>
+      </section>
+    )
+  return (
+    <section className="ny cto-enter" data-testid="needs-you" aria-label="Te esperan">
+      <header>
+        <h1>Te esperan · {sorted.length}</h1>
+        <p className="muted">Ordenado por lo que destraba, no por cuándo llegó.</p>
+        <div className="ny-filters">
+          <button type="button" aria-pressed={filter === null} onClick={() => setFilter(null)}>
+            Todo {sorted.length}
+          </button>
+          {kinds.map((k) => (
+            <button type="button" key={k} aria-pressed={filter === k} onClick={() => setFilter(k)}>
+              {k} {sorted.filter((a) => unlockOf(a).kind === k).length}
+            </button>
+          ))}
+        </div>
+      </header>
+      <div className="ny-body">
+        <ul className="ny-list">
+          {list.map((a, n) => {
+            const u = unlockOf(a)
+            return (
+              <li key={a.id} style={{ "--i": n } as React.CSSProperties}>
+                <button
+                  type="button"
+                  aria-current={current?.id === a.id || undefined}
+                  onClick={() => setPicked(a.id)}
+                >
+                  <span className="ny-glyph" data-kind={u.kind} aria-hidden />
+                  <span className="mono muted">{a.work_item_display_id}</span>
+                  <span className="ny-text">
+                    <strong>{a.work_item_title}</strong>
+                    <span className="muted">
+                      {u.kind} · {u.line}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            )
+          })}
+        </ul>
+        {current && (
+          <article className="ny-detail" key={current.id}>
+            <p className="cto-section-label">
+              <span className="ny-glyph" data-kind={unlockOf(current).kind} aria-hidden />
+              {current.work_item_display_id} · {unlockOf(current).kind}
+            </p>
+            <h2>{current.work_item_title}</h2>
+            <p className="muted">{unlockOf(current).line}.</p>
+            <div className="ny-card">{renderCard(current, () => setPicked(null))}</div>
+            <Button size="sm" variant="ghost" onClick={() => onOpenTask(current.work_item_id)}>
+              Abrir la tarea <ArrowRight size={12} aria-hidden />
+            </Button>
+          </article>
+        )}
+      </div>
     </section>
   )
 }

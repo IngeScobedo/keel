@@ -12,20 +12,24 @@ import {
   type TaskFlowView,
 } from "@keel/core"
 import {
+  ArrowLeft,
   ArrowRight,
   Check,
+  ChevronRight,
   Circle,
   FileCode2,
   FileText,
   GitBranch,
   Hand,
   ListChecks,
+  Maximize2,
   MessageSquare,
   Network,
   Play,
   ScrollText,
   ShieldCheck,
   StickyNote,
+  X,
 } from "lucide-react"
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ApprovalCard } from "./ApprovalCard.js"
@@ -105,6 +109,7 @@ export function TaskFocus({
   onOpenTask,
   waitingYou,
   onCloseTask,
+  panel,
 }: {
   task: WorkItem
   runs: Run[]
@@ -113,8 +118,13 @@ export function TaskFocus({
   tasks: WorkItem[]
   onRun: (run: Run) => void
   onOpenTask: (item: WorkItem) => void
-  waitingYou?: Set<string>
+  waitingYou?: ReadonlySet<string> | undefined
   onCloseTask?: () => void
+  /**
+   * ADR-0041 §1: abierta como panel junto al hilo de la conversación. La barra de foco
+   * reemplaza al camino: «Chat» y cerrar vuelven al hilo; maximizar abre la página.
+   */
+  panel?: { onClose: () => void; onMaximize: () => void }
 }) {
   // Los ids son ULID: ordenados, el primero es el más reciente. El orden de `runs` mezcla
   // el snapshot y lo que llegó después.
@@ -216,7 +226,7 @@ export function TaskFocus({
   return (
     <div className="page task-focus" data-testid="task-focus">
       <header className="tf-head">
-        <Trail />
+        {panel ? <FocusBar task={task} {...panel} /> : <Trail />}
         <div className="tf-title">
           <h1>{task.title}</h1>
           <Status state={task.visual_state} />
@@ -963,7 +973,7 @@ function PlanDag({
   tasksMd: string | null
   subtasks: WorkItem[]
   onOpen: (item: WorkItem) => void
-  waitingYou: Set<string> | undefined
+  waitingYou: ReadonlySet<string> | undefined
 }) {
   const box = useRef<HTMLDivElement>(null)
   const [paths, setPaths] = useState<{ d: string; key: string }[]>([])
@@ -1159,5 +1169,46 @@ function ReviewDecision({
       )}
       {error && <p className="error">{error}</p>}
     </section>
+  )
+}
+
+/** ds/CTO/FocusBar: de dónde vienes y cómo volver, sin perder el hilo. */
+function FocusBar({
+  task,
+  onClose,
+  onMaximize,
+}: {
+  task: WorkItem
+  onClose: () => void
+  onMaximize: () => void
+}) {
+  return (
+    <nav className="cto-focusbar" aria-label="Foco">
+      <button type="button" className="cto-focusbar-back" onClick={onClose}>
+        <ArrowLeft size={14} aria-hidden /> Chat
+      </button>
+      <ChevronRight size={12} aria-hidden className="muted" />
+      <span className="mono muted">{task.subtask?.key ?? task.display_id}</span>
+      <span className="cto-focusbar-title">{task.title}</span>
+      <span className="tf-spacer" />
+      <button
+        type="button"
+        className="ui-icon-button"
+        aria-label="Abrir a pantalla completa"
+        title="Pantalla completa"
+        onClick={onMaximize}
+      >
+        <Maximize2 size={14} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="ui-icon-button"
+        aria-label="Cerrar el foco"
+        title="Cerrar (Esc)"
+        onClick={onClose}
+      >
+        <X size={14} aria-hidden />
+      </button>
+    </nav>
   )
 }

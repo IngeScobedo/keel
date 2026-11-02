@@ -6,6 +6,7 @@
  */
 import { type Methods, shellCommand } from "@keel/core"
 import { useEffect, useRef, useState } from "react"
+import { isVisibleTask, onVisibleTasks } from "./attention-scope.js"
 import { inputLine, optionLabel, questionsOf } from "./chat-model.js"
 import { mutationMeta } from "./client.js"
 import type { Place } from "./nav.js"
@@ -99,7 +100,7 @@ function Reply({
   }
   return (
     <div className="attention" data-testid="attention">
-      <p className="attention-what mono">{summary(a)}</p>
+      <p className="attention-what">{summary(a)}</p>
       <div className="attention-actions">
         {reply.kind === "approve" && (
           <>
@@ -148,7 +149,35 @@ function Reply({
   )
 }
 
-/** Escucha lo pendiente de todos los proyectos y avisa de lo nuevo. */
+/** Varias cosas te esperan: una fila por cada una, con «Ver»; nada se apila. */
+function Group({ items, onOpen }: { items: Pending[]; onOpen: (a: Pending) => void }) {
+  const shown = items.slice(0, 4)
+  return (
+    <ul className="attention-group" data-testid="attention-group">
+      {shown.map((a) => (
+        <li key={a.id}>
+          <span className="mono muted">{a.work_item_display_id}</span>
+          <span className="attention-group-text">
+            <strong>{a.work_item_title}</strong>
+            <span className="muted">{summary(a)}</span>
+          </span>
+          <button type="button" className="button ghost" onClick={() => onOpen(a)}>
+            Ver
+          </button>
+        </li>
+      ))}
+      {items.length > shown.length && (
+        <li className="muted">y {items.length - shown.length} más en la bandeja</li>
+      )}
+    </ul>
+  )
+}
+
+/**
+ * Escucha lo pendiente de todos los proyectos y avisa de lo nuevo en un solo aviso que
+ * se actualiza (canvas GUI · 04: las aprobaciones se señalan con estado y contador, sin
+ * robar el foco). Lo que ya está a la vista (la tarea abierta, el lote en vivo) no avisa.
+ */
 export function Attention({
   workspace,
   place,
@@ -160,14 +189,77 @@ export function Attention({
 }) {
   const toasts = useToasts()
   const seen = useRef<Set<string> | null>(null)
-  /** Aviso abierto por aprobación: su toast y su tarea. */
-  const shown = useRef(new Map<string, { toast: string; task: string }>())
+  /** Lo que el aviso muestra ahora, por aprobación. */
+  const items = useRef(new Map<string, Pending>())
+  const toastId = useRef<string | null>(null)
   const live = workspace.mode === "live"
   const { call, attentionTick, inboxTick } = workspace
   const here = useRef(place)
   here.current = place
   const open = useRef(onOpen)
   open.current = onOpen
+  const visible = (a: Pending) =>
+    (here.current.page === "task" && here.current.task === a.work_item_id) ||
+    isVisibleTask(a.work_item_id) ||
+    (here.current.page === "conversation" &&
+      (a.operation as { tool?: string } | null)?.tool === "batch.plan")
+  /** El aviso refleja `items`: uno solo, que se crea, se actualiza o se cierra. */
+  const sync = useRef(() => {})
+  sync.current = () => {
+    const list = [...items.current.values()]
+    if (list.length === 0) {
+      if (toastId.current) toasts.close(toastId.current)
+      toastId.current = null
+      return
+    }
+    const one = list.length === 1 ? (list[0] as Pending) : null
+    const drop = (id: string) => {
+      items.current.delete(id)
+      sync.current()
+    }
+    const content = {
+      title: one
+        ? `${one.project_name} · ${one.work_item_display_id}`
+        : `Te esperan ${list.length}`,
+      description: one ? one.work_item_title : "",
+      data: {
+        tone: "attention" as const,
+        render: () =>
+          one ? (
+            <Reply
+              a={one}
+              call={call}
+              onOpen={(x) => {
+                drop(x.id)
+                open.current(x)
+              }}
+              onDone={() => drop(one.id)}
+            />
+          ) : (
+            <Group
+              items={list}
+              onOpen={(x) => {
+                drop(x.id)
+                open.current(x)
+              }}
+            />
+          ),
+      },
+    }
+    if (toastId.current) toasts.update(toastId.current, content)
+    else
+      toastId.current = toasts.add({
+        ...content,
+        // Prioridad normal: Base UI oculta al lector de pantalla los de prioridad alta
+        // hasta que tienen foco, y este aviso tiene botones.
+        timeout: 0,
+        onClose: () => {
+          // Cerrarlo es «ya lo vi»: lo que mostraba no vuelve a avisar.
+          toastId.current = null
+          items.current.clear()
+        },
+      })
+  }
   // biome-ignore lint/correctness/useExhaustiveDependencies: los ticks sólo disparan la relectura.
   useEffect(() => {
     if (!live) return
@@ -177,11 +269,7 @@ export function Attention({
         if (!alive) return
         const ids = new Set(approvals.map((a) => a.id))
         // Lo que ya no espera (se contestó aquí o en otra ventana) deja de avisar.
-        for (const [id, s] of shown.current)
-          if (!ids.has(id)) {
-            toasts.close(s.toast)
-            shown.current.delete(id)
-          }
+        for (const id of [...items.current.keys()]) if (!ids.has(id)) items.current.delete(id)
         // Al conectar no se avisa de lo viejo: para eso está la bandeja.
         if (seen.current === null) {
           seen.current = ids
@@ -190,52 +278,29 @@ export function Attention({
         for (const a of approvals) {
           if (seen.current.has(a.id)) continue
           seen.current.add(a.id)
-          const p = here.current
-          // Si ya estás mirando esa tarea (o la conversación donde está el plan), sobra.
-          if (p.page === "task" && p.task === a.work_item_id) continue
-          if (
-            p.page === "conversation" &&
-            (a.operation as { tool?: string } | null)?.tool === "batch.plan"
-          )
-            continue
-          const toastId = toasts.add({
-            title: `${a.project_name} · ${a.work_item_display_id}`,
-            description: a.work_item_title,
-            // Prioridad normal: Base UI oculta al lector de pantalla los de prioridad alta
-            // hasta que tienen foco, y este aviso tiene botones.
-            timeout: 0,
-            data: {
-              tone: "attention",
-              render: () => (
-                <Reply
-                  a={a}
-                  call={call}
-                  onOpen={(x) => {
-                    toasts.close(toastId)
-                    open.current(x)
-                  }}
-                  onDone={() => toasts.close(toastId)}
-                />
-              ),
-            },
-          })
-          shown.current.set(a.id, { toast: toastId, task: a.work_item_id })
+          if (!visible(a)) items.current.set(a.id, a)
         }
+        sync.current()
       })
       .catch(() => {})
     return () => {
       alive = false
     }
   }, [live, call, attentionTick, inboxTick])
-  // Al llegar a la tarea del aviso, el aviso sobra: lo pendiente ya se ve ahí.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: sólo al cambiar de lugar.
+  // Al llegar a la tarea (o al lote donde está), su aviso sobra: lo pendiente ya se ve ahí.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: sólo al cambiar lo que está a la vista.
   useEffect(() => {
-    if (place.page !== "task") return
-    for (const [id, s] of shown.current)
-      if (s.task === place.task) {
-        toasts.close(s.toast)
-        shown.current.delete(id)
-      }
+    const prune = () => {
+      let changed = false
+      for (const a of [...items.current.values()])
+        if (visible(a)) {
+          items.current.delete(a.id)
+          changed = true
+        }
+      if (changed) sync.current()
+    }
+    prune()
+    return onVisibleTasks(prune)
   }, [place.page, place.task])
   return null
 }

@@ -24,6 +24,66 @@
   .cto[data-stage="plan"] .cto-grid {
     grid-template-columns: var(--cto-thread) minmax(0, 1fr) 0;
   }
+  .cto[data-stage="needs"] .cto-grid,
+  .cto[data-stage="focus"] .cto-grid {
+    grid-template-columns: var(--cto-thread) minmax(0, 1fr) 0;
+  }
+  .cto[data-stage="needs"] .cto-live,
+  .cto[data-stage="focus"] .cto-live {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .cto[data-stage="needs"] .cto-thread,
+  .cto[data-stage="focus"] .cto-thread {
+    background: var(--color-surface-sunken);
+  }
+  .cto[data-stage="needs"] .rc-row > :not(.rc-said):not(.rc-divider),
+  .cto[data-stage="focus"] .rc-row > :not(.rc-said):not(.rc-divider) {
+    margin-left: 0;
+  }
+  .cto-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .cto-panel > .task-focus {
+    flex: 1;
+    min-height: 0;
+  }
+  /* ds/CTO/FocusBar */
+  .cto-focusbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    margin-bottom: var(--space-2);
+    font-size: var(--text-meta-size);
+  }
+  .cto-focusbar-back {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 2px var(--space-2);
+    margin-left: calc(-1 * var(--space-2));
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--color-text-secondary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .cto-focusbar-back:hover {
+    background: var(--color-surface-hover);
+    color: var(--color-text-primary);
+  }
+  .cto-focusbar-title {
+    color: var(--color-text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
   .cto[data-stage="thread"] .cto-grid,
   .cto[data-stage="batch"] .cto-grid {
     grid-template-columns: minmax(0, 1fr) 0 var(--cto-live);
@@ -83,6 +143,8 @@
   .cto[data-stage="plan"] .rc-row > :not(.rc-said):not(.rc-divider) {
     margin-left: 0;
   }
+  .cto[data-stage="needs"] .rc-scroll,
+  .cto[data-stage="focus"] .rc-scroll,
   .cto[data-stage="plan"] .rc-scroll {
     padding: var(--space-5) var(--space-4) var(--space-2);
   }
@@ -915,6 +977,172 @@
     }
     .cto-card:hover,
     .lb-lane:hover {
+      transform: none;
+    }
+  }
+}
+
+/* --- CTO / 05: lo que te espera --------------------------------------------------------- */
+@layer components {
+  .ny {
+    padding: var(--space-8) var(--space-8) var(--space-10);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    min-height: 0;
+  }
+  .ny h1 {
+    margin: 0;
+    font-size: 24px;
+    color: var(--color-text-primary);
+  }
+  .ny header p {
+    margin: var(--space-2) 0 0;
+  }
+  .ny-filters {
+    margin-top: var(--space-4);
+    display: flex;
+    gap: var(--space-2);
+  }
+  .ny-filters button {
+    padding: 3px var(--space-4);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-md);
+    background: none;
+    color: var(--color-text-secondary);
+    font: inherit;
+    cursor: pointer;
+    transition:
+      background var(--cto-state, 120ms) ease,
+      color var(--cto-state, 120ms) ease;
+  }
+  .ny-filters button[aria-pressed="true"] {
+    background: var(--color-accent-default);
+    border-color: var(--color-accent-default);
+    color: var(--color-accent-on);
+  }
+  .ny-body {
+    display: grid;
+    grid-template-columns: minmax(280px, 400px) minmax(0, 1fr);
+    gap: var(--space-5);
+    align-items: start;
+  }
+  .ny-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+  .ny-list li {
+    border-bottom: 1px solid var(--color-border-subtle);
+    animation: cto-in var(--cto-open, 220ms) var(--cto-ease, ease-out) both;
+    animation-delay: calc(min(var(--i, 0), 10) * 25ms);
+  }
+  .ny-list button {
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .ny-list button:hover {
+    background: var(--color-surface-hover);
+  }
+  .ny-list button[aria-current="true"] {
+    border-color: var(--color-border-focus);
+    background: var(--color-surface-selected);
+  }
+  .ny-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .ny-text strong {
+    font-weight: 500;
+    color: var(--color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ny-text .muted {
+    font-size: var(--text-meta-size);
+  }
+  .ny-glyph {
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 7px solid var(--color-status-waiting-human);
+  }
+  .ny-glyph[data-kind="Commit"],
+  .ny-glyph[data-kind="Gate"] {
+    width: 7px;
+    height: 7px;
+    border: 0;
+    transform: rotate(45deg);
+    background: var(--color-status-planning);
+  }
+  .ny-detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-raised);
+    animation: cto-in var(--cto-open, 220ms) var(--cto-ease, ease-out) both;
+  }
+  .ny-detail h2 {
+    margin: 0;
+    font-size: var(--text-title-size);
+    color: var(--color-text-primary);
+  }
+  .ny-detail p {
+    margin: 0;
+  }
+  .ny-card {
+    min-width: 0;
+  }
+
+  /* El lote en vivo avisa lo que te espera; abre su foco. */
+  .lb-needs {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--color-status-waiting-human-border);
+    border-radius: var(--radius-md);
+    background: var(--color-status-waiting-human-bg);
+    color: var(--color-status-waiting-human);
+    font: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: transform var(--cto-expand, 160ms) var(--cto-ease, ease-out);
+  }
+  .lb-needs:hover {
+    transform: translateY(-1px);
+  }
+  .lb-needs span:last-child {
+    margin-left: auto;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ny-list li,
+    .ny-detail {
+      animation: none;
+    }
+    .lb-needs:hover {
       transform: none;
     }
   }

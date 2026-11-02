@@ -4638,21 +4638,61 @@ button.rc-ledger-row:hover {
   overflow-y: auto;
 }
 
-/* ADR-0034 §6: un aviso que se contesta ahí mismo. */
+/* ADR-0034 §6: un aviso que se contesta ahí mismo; varios, en un solo aviso. */
 .attention {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  margin-top: var(--space-3);
+  gap: var(--space-3);
+  margin-top: var(--space-1);
 }
 .attention-what {
   margin: 0;
   font-size: var(--text-meta-size);
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   overflow-wrap: anywhere;
 }
 .attention-actions {
   display: flex;
   flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.attention-actions .button,
+.attention-group .button {
+  padding: 2px var(--space-4);
+  font-size: var(--text-meta-size);
+}
+.attention-group {
+  list-style: none;
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.attention-group li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--color-border-subtle);
+  font-size: var(--text-meta-size);
+}
+.attention-group li:first-child {
+  border-top: 0;
+}
+.attention-group-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.attention-group-text strong {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attention-group-text .muted {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

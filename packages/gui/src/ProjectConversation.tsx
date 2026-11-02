@@ -5,17 +5,21 @@
  * cada una con su sesión, sus notas y sus lotes; `/resume` retoma otra y `/clear`
  * empieza una nueva.
  */
-import type { EventNotification } from "@keel/core"
+import type { EventNotification, Methods } from "@keel/core"
 import { History, MessageSquarePlus, Paperclip, Play, Send } from "lucide-react"
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { ApprovalActions } from "./ApprovalActions.js"
+import { setVisibleTasks } from "./attention-scope.js"
 import { type ComposerExtras, ComposerExtrasContext } from "./Composer.js"
 import { CommandHints, ConversationHistory, parseCommand } from "./ConversationHistory.js"
 import { mutationMeta } from "./client.js"
+import { GitPlanCard } from "./GitPlanCard.js"
 import type { Run, WorkItem } from "./model.js"
 import {
   EmptyThread,
   LiveBatch,
   LiveBatchEmpty,
+  NeedsYouSurface,
   PlanOnSurface,
   PlanSurface,
 } from "./Orchestration.js"
@@ -29,10 +33,14 @@ import {
 } from "./Orchestrator.js"
 import { stageOf } from "./orchestration-model.js"
 import { RunView } from "./RunView.js"
+import { TaskFocus } from "./TaskFocus.js"
 import { Button, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
+type PendingApproval = ReturnType<
+  (typeof Methods)["approvals.list"]["result"]["parse"]
+>["approvals"][number]
 type Opened = {
   work_item: WorkItem
   run: Run | null
@@ -51,6 +59,8 @@ export function ProjectConversation({
   onBack,
   tasks = [],
   waitingYou,
+  onOpenRun,
+  onCloseTask,
 }: {
   call: Call
   runs: Run[]
@@ -58,6 +68,9 @@ export function ProjectConversation({
   /** Las tareas del proyecto: el lote en vivo se arma con la feature y sus hijas. */
   tasks?: WorkItem[]
   waitingYou?: ReadonlySet<string>
+  /** Desde el panel de una tarea: abrir un run o cerrarla a mano, como en su página. */
+  onOpenRun?: (run: Run) => void
+  onCloseTask?: (task: WorkItem) => void
   projectName: string
   /** Lo que se preguntó desde ⌘K: se manda al abrir. */
   question?: string
@@ -66,6 +79,12 @@ export function ProjectConversation({
   onBack: () => void
 }) {
   const [opened, setOpened] = useState<Opened | null>(null)
+  // ADR-0041 §1: la tarea abierta como panel junto al hilo; Esc vuelve al hilo.
+  const [focusTask, setFocusTask] = useState<string | null>(null)
+  // CTO / 05: lo que te espera del lote, como foco.
+  const [needsOpen, setNeedsOpen] = useState(false)
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([])
+  const approvalTick = events.filter((e) => e.kind.startsWith("approval.")).length
   // La conversación abierta; null hasta saber cuál es la más reciente.
   const [convId, setConvId] = useState<string | null>(null)
   const [history, setHistory] = useState(false)
@@ -224,6 +243,20 @@ export function ProjectConversation({
     [runs, convId],
   )
   const stage = empty ? ({ kind: "empty" } as const) : stageOf(events, runIds)
+  const focused = focusTask ? tasks.find((t) => t.id === focusTask) : undefined
+  const layout = focused ? "focus" : needsOpen ? "needs" : stage.kind
+  useEffect(() => {
+    if (!focused && !needsOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || document.querySelector("[role=dialog]"))
+        return
+      // Esc baja un nivel: de la tarea a lo que te espera, de ahí al hilo.
+      if (focused) setFocusTask(null)
+      else setNeedsOpen(false)
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [focused, needsOpen])
   const focusRef = useRef<HTMLDivElement>(null)
   const planContext = useMemo(
     () =>
@@ -240,6 +273,35 @@ export function ProjectConversation({
     [stage],
   )
   const parent = stage.kind === "batch" ? tasks.find((t) => t.id === stage.batch.id) : undefined
+  // Lo que ya está a la vista no necesita aviso: el lote en vivo y la tarea en foco.
+  const visibleKey = [
+    parent?.id,
+    focusTask,
+    ...tasks.filter((t) => parent && t.parent_work_item_id === parent.id).map((t) => t.id),
+  ]
+    .filter(Boolean)
+    .join(",")
+  useEffect(() => {
+    setVisibleTasks(visibleKey ? visibleKey.split(",") : [])
+    return () => setVisibleTasks([])
+  }, [visibleKey])
+  // biome-ignore lint/correctness/useExhaustiveDependencies: cada evento de aprobación relee.
+  useEffect(() => {
+    if (!visibleKey) {
+      setPendingApprovals([])
+      return
+    }
+    let alive = true
+    const scope = new Set(visibleKey.split(","))
+    call("approvals.list", {})
+      .then(
+        (r) => alive && setPendingApprovals(r.approvals.filter((a) => scope.has(a.work_item_id))),
+      )
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [call, visibleKey, approvalTick])
   const provenance =
     stage.kind === "plan"
       ? [
@@ -269,7 +331,7 @@ export function ProjectConversation({
       <div
         className={`page conv-page cto ${dragging ? "conv-drop" : ""}`}
         data-testid="project-conversation"
-        data-stage={stage.kind}
+        data-stage={layout}
         onDragOver={(e) => {
           if (!e.dataTransfer.types.includes("Files")) return
           e.preventDefault()
@@ -404,13 +466,62 @@ export function ProjectConversation({
                   call={call}
                   runs={runs}
                   onRun={onRun}
-                  onOpenTask={onOpenTask}
+                  onOpenTask={(id) => setFocusTask(id)}
                   variant="thread"
                 />
               )}
             </section>
             <section ref={focusRef} className="cto-col cto-focus" aria-label="Foco">
-              {stage.kind === "plan" && (
+              {focused && (
+                <div className="cto-panel cto-enter" key={focused.id}>
+                  {/* El composer del panel le habla al agente de la tarea, no al orquestador. */}
+                  <ComposerExtrasContext.Provider value={null}>
+                    <TaskFocus
+                      task={focused}
+                      runs={runs}
+                      events={events}
+                      call={call}
+                      tasks={tasks}
+                      onRun={(r) => onOpenRun?.(r)}
+                      onOpenTask={(w) => setFocusTask(w.id)}
+                      waitingYou={waitingYou}
+                      {...(onCloseTask ? { onCloseTask: () => onCloseTask(focused) } : {})}
+                      panel={{
+                        onClose: () => setFocusTask(null),
+                        onMaximize: () => onOpenTask(focused.id),
+                      }}
+                    />
+                  </ComposerExtrasContext.Provider>
+                </div>
+              )}
+              {!focused && needsOpen && (
+                <NeedsYouSurface
+                  items={pendingApprovals}
+                  onOpenTask={(id) => setFocusTask(id)}
+                  renderCard={(a, onDone) => {
+                    const op = (a.operation ?? {}) as { tool?: string; input?: unknown }
+                    return op.tool === "git.plan" ? (
+                      <GitPlanCard
+                        input={op.input}
+                        approvalId={a.id}
+                        operationHash={a.operation_hash}
+                        call={call}
+                        pending
+                      />
+                    ) : (
+                      <ApprovalActions
+                        approvalId={a.id}
+                        operationHash={a.operation_hash}
+                        tool={op.tool ?? "?"}
+                        input={op.input}
+                        call={call}
+                        onDone={onDone}
+                      />
+                    )
+                  }}
+                />
+              )}
+              {!focused && !needsOpen && stage.kind === "plan" && (
                 <PlanSurface
                   key={stage.plan.approval_id}
                   plan={stage.plan}
@@ -429,7 +540,8 @@ export function ProjectConversation({
                   runs={runs}
                   events={events}
                   {...(waitingYou ? { waitingYou } : {})}
-                  onOpen={(w) => onOpenTask(w.id)}
+                  onOpen={(w) => setFocusTask(w.id)}
+                  needsYou={{ count: pendingApprovals.length, onOpen: () => setNeedsOpen(true) }}
                 />
               )}
               <div className="conv-side-rest">
@@ -471,7 +583,7 @@ export function ProjectConversation({
                               Trabajar
                             </Button>
                           )}
-                          <Button onClick={() => onOpenTask(w.id)}>Abrir</Button>
+                          <Button onClick={() => setFocusTask(w.id)}>Abrir</Button>
                         </span>
                       </div>
                     ))}

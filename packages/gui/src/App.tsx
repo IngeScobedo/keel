@@ -644,6 +644,8 @@ export function App() {
                   events={workspace.events}
                   tasks={workspace.work_items}
                   waitingYou={waitingYou}
+                  onOpenRun={openRun}
+                  onCloseTask={setClosing}
                   projectName={
                     currentProject?.name || repoName(workspace.health?.project?.root_path)
                   }

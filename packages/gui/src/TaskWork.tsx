@@ -290,7 +290,7 @@ export function FeaturePlan({
   subtasks: WorkItem[]
   onOpen?: (item: WorkItem) => void
   /** Subtareas con algo esperando tu decisión: se abren desde aquí. */
-  waitingYou?: Set<string> | undefined
+  waitingYou?: ReadonlySet<string> | undefined
 }) {
   const feature = task.feature
   if (!feature) return null
