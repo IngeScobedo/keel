@@ -3,7 +3,15 @@
  * procesos y runs al arrancar (ADR-0003 §9) antes de aceptar clientes.
  */
 import { createHash, randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { homedir } from "node:os"
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path"
 import {
@@ -34,6 +42,7 @@ import {
   Methods,
   type MutationMeta,
   matchesPattern,
+  OUTPUT_DIR,
   type Passage,
   type PermissionMode,
   type PermissionPattern,
@@ -151,6 +160,7 @@ import {
   RpcFailure,
 } from "./ipc/server.js"
 import { checkRunStart, DEFAULT_LIMITS, type Limits, startOfLocalDay } from "./limits.js"
+import { openFile, openUrl } from "./open-external.js"
 import { Outbox } from "./outbox.js"
 import { PluginHost } from "./plugins.js"
 import {
@@ -2756,8 +2766,17 @@ export class Daemon {
       },
       "design.open": (params, ctx) => {
         requireHuman(ctx, "abrir el diseño en el navegador")
-        openInBrowser((params as Params<"design.open">).url)
+        // El protocolo ya exige `https://claude.ai/`; `openInBrowser` sólo abre GitHub.
+        openUrl((params as Params<"design.open">).url)
         return { ok: true as const }
+      },
+      "evidence.open": (params, ctx) => {
+        requireHuman(ctx, "abrir la evidencia en el navegador")
+        const ev = this.repo.getEvidence((params as Params<"evidence.open">).evidence_id)
+        if (!ev || ev.project_id !== this.scopeOf(ctx))
+          throw rpcError(ErrorCode.notFound, "la evidencia no existe")
+        const path = this.exportArtifact(ev)
+        return { opened: openFile(path).opened, path }
       },
       "github.open": (params, ctx) => {
         requireHuman(ctx, "abrir GitHub en el navegador")
@@ -3723,6 +3742,9 @@ export class Daemon {
     this.agentTokens.revokeRun(run.id)
     this.toolGate.forgetRun(run.id)
     if (run.purpose === "execute") await this.detectCommits(run.id)
+    // Antes de que el final libere el worktree: lo entregable queda en Keel.
+    const cwd = this.runCwd.get(run.id)
+    if (cwd) this.collectOutputs(run, cwd)
     this.runCwd.delete(run.id)
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
@@ -4318,6 +4340,99 @@ export class Daemon {
   }
 
   /** Al terminar un run: si la etapa pide otro propósito, la conversación sigue sola. */
+  /**
+   * Escribe una evidencia como archivo en la carpeta de exportados de Keel, con su
+   * nombre y extensión, para abrirla fuera: un navegador no abre un artefacto por hash.
+   */
+  private exportArtifact(ev: EvidenceRow): string {
+    const hex = parseArtifactRef(ev.artifact_ref) ?? ev.sha256
+    const media = this.artifacts.get(hex)?.media_type ?? "application/octet-stream"
+    const base =
+      (ev.title ?? ev.kind)
+        .split("/")
+        .at(-1)
+        ?.replace(/[^\w.\- ]+/g, "_") || ev.kind
+    const ext = EXTENSION_OF[media]
+    const name = ext && !base.toLowerCase().endsWith(ext) ? `${base}${ext}` : base
+    const dir = join(dirname(this.artifacts.root), "exports", hex.slice(0, 16))
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+    const path = join(dir, name)
+    if (!existsSync(path)) writeFileSync(path, this.artifacts.readAll(hex), { mode: 0o600 })
+    return path
+  }
+
+  /**
+   * Adjunta como evidencia de la tarea lo que el agente dejó en `.keel-out/` (ver
+   * `OUTPUT_DIR`). Un archivo con el mismo contenido ya adjunto no se repite; uno que
+   * cambió queda como versión nueva de la anterior.
+   */
+  private collectOutputs(run: RunRow, cwd: string): void {
+    const dir = join(cwd, OUTPUT_DIR)
+    if (!existsSync(dir)) return
+    const files: string[] = []
+    const walk = (d: string) => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        const full = join(d, e.name)
+        if (e.isDirectory()) walk(full)
+        else if (e.isFile()) files.push(full)
+      }
+    }
+    try {
+      walk(dir)
+    } catch {
+      return
+    }
+    if (!files.length) return
+    const known = this.repo.listEvidence({ work_item_id: run.work_item_id })
+    runUnitOfWork(this.uowDeps(), this.systemScope(run.project_id), (uow) => {
+      for (const full of files.sort()) {
+        const rel = relative(cwd, full)
+        let bytes: Buffer
+        try {
+          bytes = readFileSync(full)
+        } catch {
+          continue
+        }
+        if (bytes.byteLength > OUTPUT_MAX_BYTES) {
+          uow.emit("evidence.skipped", run.id, {
+            work_item_id: run.work_item_id,
+            path: rel,
+            reason: `pesa más de ${OUTPUT_MAX_BYTES / 1024 / 1024} MB`,
+          })
+          continue
+        }
+        const media = mediaTypeOf(full)
+        const stored = this.artifacts.put(bytes, media, "internal")
+        if (known.some((k) => k.sha256 === stored.sha256)) continue
+        const previous = known.find(
+          (k) =>
+            (JSON.parse(k.provenance_json) as { source?: { output_path?: string } }).source
+              ?.output_path === rel,
+        )
+        const row = this.repo.addEvidence({
+          project_id: run.project_id,
+          work_item_id: run.work_item_id,
+          run_id: run.id,
+          kind: media.startsWith("image/") ? "screenshot" : "document",
+          title: rel.slice(OUTPUT_DIR.length + 1),
+          artifact_ref: stored.ref,
+          sha256: stored.sha256,
+          metadata: { size: bytes.byteLength },
+          provenance: {
+            actor: { kind: "system", id: "system:keel" },
+            captured_at: nowIso(),
+            source: { output_path: rel, run_id: run.id },
+            input_sha256: stored.sha256,
+          },
+          created_by: "system:keel",
+          supersedes_id: previous?.id ?? null,
+        })
+        known.unshift(row)
+        uow.emit("evidence.attached", run.id, this.evidenceView(row))
+      }
+    })
+  }
+
   private afterFlowRun(final: RunRow): void {
     const flow = this.repo.getFlow(final.work_item_id)
     if (!flow || final.status !== "completed") return
@@ -7255,6 +7370,21 @@ function defaultBridge(): { command: string; args: string[] } {
 }
 
 /** Tipo de un archivo adjuntado desde el worktree, por su extensión. */
+const EXTENSION_OF: Record<string, string> = {
+  "text/html": ".html",
+  "text/markdown": ".md",
+  "text/plain": ".txt",
+  "text/csv": ".csv",
+  "application/json": ".json",
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/svg+xml": ".svg",
+  "application/pdf": ".pdf",
+}
+
+/** Lo más grande que Keel adjunta solo desde `.keel-out/`; lo demás se avisa. */
+const OUTPUT_MAX_BYTES = 25 * 1024 * 1024
+
 function mediaTypeOf(path: string): string {
   const types: Record<string, string> = {
     ".json": "application/json",

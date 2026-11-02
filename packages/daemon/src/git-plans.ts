@@ -8,7 +8,7 @@
 import { spawnSync } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import { type GitPlan, GitPlanSchema } from "@keel/core"
+import { type GitPlan, GitPlanSchema, isOutputPath } from "@keel/core"
 import {
   changedFiles,
   commitPaths,
@@ -92,7 +92,8 @@ export async function buildPlan(
   const repo = await openRepo(worktree)
   const branch = await currentBranch(worktree)
   if (!branch) throw new Error("el worktree no está en una rama (HEAD separado)")
-  const all = await changedFiles(worktree)
+  // Lo entregable de `.keel-out/` es evidencia, no código: nunca entra a un commit.
+  const all = (await changedFiles(worktree)).filter((f) => !isOutputPath(f.path))
   const wanted = p.paths?.length ? all.filter((f) => p.paths?.includes(f.path)) : all
   // Sin cambios sólo vale publicar lo que ya está confirmado (el cierre de una feature, ADR-0022 §4).
   if (wanted.length === 0 && !p.push && !p.pr)

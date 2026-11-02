@@ -10,6 +10,7 @@ import {
   type DocReport,
   isReadOnlyStage,
   matchesPattern,
+  OUTPUT_DIR,
   type PermissionPattern,
   type ProjectProfile,
   type Stage,
@@ -84,6 +85,13 @@ export function stageInstructions(f: TaskFlowRow, profile: ProjectProfile | null
     `Objetivo: ${STAGE_GOAL[f.stage]}.`,
     "Avanza con la tool stage_advance (Keel valida la transición y los documentos y te dice qué falta); no uses ExitPlanMode. Los documentos de la tarea (brief, spec, design, tasks, story, qa) se leen y guardan con task_doc_get y task_doc_put; no los escribas en el repo.",
   ]
+  if (!isReadOnlyStage(f.stage))
+    lines.push(
+      `Lo que entregues y no vaya al repo (una maqueta HTML, capturas, un reporte) escríbelo en ${OUTPUT_DIR}/ de tu worktree: no entra al commit y Keel lo adjunta a la tarea al terminar tu turno, donde el humano lo abre. Tu /tmp es privado del sandbox y se borra con el run: nunca le des al humano una ruta de /tmp.`,
+    )
+  lines.push(
+    "Si la tarea pide un diseño en Claude Design, encárgalo con design_request. Si no puedes, dilo y espera al humano: no lo sustituyas con otra cosa que nadie pidió.",
+  )
   if (profile?.verify.length)
     lines.push(
       `La verificación del proyecto (${profile.verify.map((v) => v.name).join(", ")}) la corre Keel con verify_run.`,

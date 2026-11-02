@@ -1,11 +1,11 @@
 import type { EvidenceKindSchema, EvidenceViewSchema } from "@keel/core"
-import { FileText, Paperclip, ShieldAlert } from "lucide-react"
+import { ExternalLink, FileText, Paperclip, ShieldAlert } from "lucide-react"
 import { useCallback, useEffect, useState } from "react"
 import { type KeelTable, TableWithChart } from "./Chart.js"
 import { mutationMeta } from "./client.js"
 import { actorLabel } from "./model.js"
 import { Select } from "./ui/index.js"
-import { Empty, Hint } from "./ui.js"
+import { Button, Empty, Hint } from "./ui.js"
 import type { useWorkspace } from "./useWorkspace.js"
 
 type Call = ReturnType<typeof useWorkspace>["call"]
@@ -90,6 +90,20 @@ export function ArtifactView({
       </>
     )
   }
+  // Una maqueta del agente se ve como página, sin scripts ni red: `sandbox` vacío.
+  if (state.media === "text/html")
+    return (
+      <>
+        {warn}
+        <iframe
+          className="evidence-page"
+          title={title}
+          sandbox=""
+          srcDoc={text()}
+          data-testid="evidence-page"
+        />
+      </>
+    )
   if (state.media === "application/vnd.keel.table+json")
     return (
       <>
@@ -134,6 +148,7 @@ export function EvidencePanel({
   const [title, setTitle] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState("")
   const refresh = useCallback(async () => {
     try {
       setItems((await call("evidence.list", { work_item_id: workItemId })).evidence)
@@ -209,8 +224,9 @@ export function EvidencePanel({
       {items.map((item) => {
         const prov = (item.provenance ?? {}) as {
           captured_at?: string
-          source?: { worktree_path?: string }
+          source?: { worktree_path?: string; output_path?: string }
         }
+        const where = prov.source?.worktree_path ?? prov.source?.output_path
         return (
           <article key={item.id} className="evidence-row" data-testid="evidence">
             <button
@@ -235,11 +251,30 @@ export function EvidencePanel({
               <div className="evidence-body">
                 <p className="mono muted">
                   {prov.captured_at ? new Date(prov.captured_at).toLocaleString() : item.created_at}
-                  {prov.source?.worktree_path ? ` · ${prov.source.worktree_path}` : ""}
+                  {where ? ` · ${where}` : ""}
                   {item.supersedes_id ? ` · corrige ${item.supersedes_id.slice(0, 10)}` : ""}
                   {item.run_id ? ` · run ${item.run_id.slice(0, 10)}` : ""}
                 </p>
                 <Viewer call={call} item={item} />
+                <div className="evidence-actions">
+                  <Button
+                    icon={ExternalLink}
+                    onClick={() =>
+                      call("evidence.open", { evidence_id: item.id })
+                        .then((r) =>
+                          setNotice(
+                            r.opened
+                              ? `Abierta: ${r.path}`
+                              : `No pude abrirla sola; está en ${r.path}`,
+                          ),
+                        )
+                        .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                    }
+                  >
+                    Abrir en el navegador
+                  </Button>
+                  {notice && <span className="mono muted">{notice}</span>}
+                </div>
               </div>
             )}
           </article>

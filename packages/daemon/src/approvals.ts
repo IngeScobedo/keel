@@ -16,6 +16,7 @@ import {
   canonWritable,
   describePattern,
   filePathOf,
+  isOutputPath,
   matchesPattern,
   type PermissionMode,
   type PermissionPattern,
@@ -108,7 +109,9 @@ export class ApprovalGate implements ToolGate {
     const path = filePathOf(input)
     const cwd = this.deps.cwdOf?.(runId)
     if (path === null || !cwd) return false
-    return canonWritable(relative(cwd, resolve(cwd, path)), canon)
+    const rel = relative(cwd, resolve(cwd, path)).split("\\").join("/")
+    // Lo entregable no es canon ni código: se escribe en cualquier etapa que edite.
+    return isOutputPath(rel) || canonWritable(rel, canon)
   }
 
   /** ADR-0039 §3: ¿el archivo cae dentro de la frontera reservada de la subtarea? */
@@ -117,6 +120,8 @@ export class ApprovalGate implements ToolGate {
     const cwd = this.deps.cwdOf?.(runId)
     if (path === null || !cwd) return true
     const rel = relative(cwd, resolve(cwd, path)).split("\\").join("/")
+    // `.keel-out/` es de cada worktree: no la comparte ningún carril.
+    if (isOutputPath(rel)) return true
     return frontier.some((g) => {
       const glob = g.replace(/^\.\//, "").replace(/\/$/, "/**")
       return glob === rel || rel.startsWith(`${glob}/`) || new Bun.Glob(glob).match(rel)

@@ -5,7 +5,7 @@
  * puente MCP.
  */
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type {
@@ -694,5 +694,45 @@ describe("«Waiting for you» dice por qué", () => {
       item: { waiting_on?: { kind: string; text: string } }
     }
     expect(view.item.waiting_on).toEqual({ kind: "qa_fail", text: "QA en FAIL · dile cómo seguir" })
+  }, 30_000)
+})
+
+describe("Lo entregable no se pierde (KEEL-18)", () => {
+  test(".keel-out/ no entra al commit y Keel lo adjunta a la tarea al terminar el run", async () => {
+    const s = await boot()
+    const w = await s.task("Propuesta visual")
+    let files: string[] = []
+    s.scripts.push(async (t) => {
+      await put(t, w.id, "brief", BRIEF)
+      await advance(t, w.id, "implement", { ceremony: "direct", reason: "propuesta" })
+    })
+    s.scripts.push(async (t) => {
+      const cwd = String(t.options.cwd)
+      writeFileSync(join(cwd, "propuesta.md"), "# Propuesta\n")
+      mkdirSync(join(cwd, ".keel-out"), { recursive: true })
+      writeFileSync(join(cwd, ".keel-out", "maqueta.html"), "<h1>Descuentos</h1>\n")
+      const plan = (await t.agent.call("git.propose", {
+        ...meta(),
+        message: "docs: propuesta",
+      })) as { plan_id: string }
+      const op = JSON.parse(s.daemon.repo.getApproval(plan.plan_id)?.operation_json ?? "{}") as {
+        input: { files: { path: string }[] }
+      }
+      files = op.input.files.map((f) => f.path)
+    })
+    await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })
+    const out = () => s.events("evidence.attached").filter((e) => e.title === "maqueta.html").length
+    await s.until(() => out() > 0 && files.length > 0, 20_000)
+    expect(files).toEqual(["propuesta.md"])
+    const ev = (await s.human.call("evidence.list", { work_item_id: w.id })) as {
+      evidence: { title: string; kind: string; provenance: { source: { output_path: string } } }[]
+    }
+    expect(ev.evidence.filter((e) => e.title === "maqueta.html")).toMatchObject([
+      {
+        title: "maqueta.html",
+        kind: "document",
+        provenance: { source: { output_path: ".keel-out/maqueta.html" } },
+      },
+    ])
   }, 30_000)
 })

@@ -645,6 +645,7 @@ describe("ADR-0022: feature y subtareas", () => {
       release = r
     })
     const denied: string[] = []
+    const outside: string[] = []
     const cwds: string[] = []
     scripts.push(
       subtaskScript(d, async () => {}),
@@ -661,6 +662,18 @@ describe("ADR-0022: feature y subtareas", () => {
         content: "x",
       })) as { behavior: string; message?: string } | undefined
       denied.push(`${r?.behavior}: ${r?.message ?? ""}`)
+      // Lo entregable de `.keel-out/` es de su worktree: la frontera no lo reserva.
+      // Va al permiso normal (aquí nadie lo contesta): lo que importa es que no se niega.
+      const out = await Promise.race([
+        (
+          t.use("Write", {
+            file_path: join(cwd, ".keel-out/maqueta.html"),
+            content: "<h1>x</h1>",
+          }) as Promise<{ behavior: string } | undefined>
+        ).then((r) => r?.behavior ?? ""),
+        new Promise<string>((r) => setTimeout(() => r("pendiente"), 300)),
+      ])
+      outside.push(out)
       cwds.push(cwd)
       await hold
       await t1(t)
@@ -711,6 +724,7 @@ describe("ADR-0022: feature y subtareas", () => {
     expect(denied[0]).toStartWith("deny: ")
     expect(denied[0]).toContain("fuera de la frontera")
     expect(denied[0]).toContain("handoff_request")
+    expect(outside[0]).not.toBe("deny")
 
     // Se sueltan: las dos se integran (en fila) y la fase 2 arranca.
     release()

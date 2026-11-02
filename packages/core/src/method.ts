@@ -497,6 +497,18 @@ export function storyFor(task: PlannedTask, specMd: string, designMd: string): s
   ].join("\n\n")
 }
 
+/**
+ * Lo que el agente entrega y no va al repo (una maqueta HTML, capturas, un reporte) va
+ * en esta carpeta de su worktree: no entra al plan de git ni a los cambios de la tarea,
+ * y Keel la adjunta como evidencia al terminar cada run. Su `/tmp` es del sandbox y se
+ * borra con el run (KEEL-18, 2026-10-30: la propuesta en HTML se perdió ahí).
+ */
+export const OUTPUT_DIR = ".keel-out"
+
+export function isOutputPath(path: string): boolean {
+  return path === OUTPUT_DIR || path.startsWith(`${OUTPUT_DIR}/`)
+}
+
 /** Un archivo cae dentro de la frontera si casa con alguno de sus globs. */
 export function withinFrontier(path: string, frontier: readonly string[]): boolean {
   return frontier.some((g) => globToRegExp(g).test(path))

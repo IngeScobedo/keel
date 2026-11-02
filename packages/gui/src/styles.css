@@ -4708,3 +4708,18 @@ button.rc-ledger-row:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.evidence-page {
+  width: 100%;
+  height: min(70vh, 720px);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  /* La maqueta asume una página clara, también con la GUI en modo oscuro. */
+  background: var(--gray-13);
+}
+.evidence-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}

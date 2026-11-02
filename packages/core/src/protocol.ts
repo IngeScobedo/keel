@@ -1509,6 +1509,14 @@ export const Methods = {
     result: z.object({ evidence: z.array(EvidenceViewSchema) }),
   },
   /**
+   * Abre una evidencia en el sistema del humano (un `.html` en su navegador): Keel la
+   * escribe en su carpeta de exportados y la abre con lo que el sistema tenga.
+   */
+  "evidence.open": {
+    params: z.object({ evidence_id: z.string() }),
+    result: z.object({ opened: z.boolean(), path: z.string() }),
+  },
+  /**
    * Retención explícita (ADR-0012 §7): borra eventos de un proyecto más viejos
    * que `older_than_days` (y, si se nombra, su evidencia); luego recolecta los
    * artefactos sin referencias. `dry_run` sólo cuenta.

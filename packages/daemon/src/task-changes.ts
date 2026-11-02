@@ -4,6 +4,7 @@
  * worktree mientras vive y se guarda como evidencia `diff` (ADR-0012 §3 y §7) antes de
  * liberarlo, así la historia no se pierde al mergear y cerrar la tarea.
  */
+import { isOutputPath } from "@keel/core"
 import { git } from "./base-sync.js"
 
 export type FileStat = { path: string; additions: number; deletions: number }
@@ -58,7 +59,7 @@ export async function readChanges(worktree: string, baseSha: string): Promise<Ch
   const stats = numstat((await git(worktree, ["diff", "--numstat", baseSha], {})).out.split("\n"))
   const untracked = (await git(worktree, ["ls-files", "--others", "--exclude-standard"], {})).out
     .split("\n")
-    .filter(Boolean)
+    .filter((f) => f && !isOutputPath(f))
   let diff = tracked.out
   for (const f of untracked) {
     // `--no-index` sale con 1 cuando hay diferencias: es lo esperado.
