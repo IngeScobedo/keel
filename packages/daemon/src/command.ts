@@ -45,6 +45,10 @@ export function runUnitOfWork<T>(
   fn: (uow: UnitOfWork) => T,
 ): T {
   const { db, repo, bus } = deps
+  // Los eventos se publican antes que los demás efectos: un efecto puede abrir otra
+  // unidad de trabajo, y si sus eventos (más nuevos) salen antes, el cliente descarta los
+  // de ésta por viejos (KEEL-15 quedó en «needs_review» con su `done` descartado).
+  const published: (() => void)[] = []
   const effects: (() => void)[] = []
   let enqueued = false
   const uow: UnitOfWork = {
@@ -63,7 +67,7 @@ export function runUnitOfWork<T>(
         payload_json: JSON.stringify(payload),
       })
       if (e)
-        effects.push(() =>
+        published.push(() =>
           bus.publish({
             event_seq: e.event_seq,
             kind,
@@ -93,7 +97,7 @@ export function runUnitOfWork<T>(
     const outbox = deps.outbox
     effects.push(() => void outbox.drain())
   }
-  for (const effect of effects) {
+  for (const effect of [...published, ...effects]) {
     try {
       effect()
     } catch (e) {

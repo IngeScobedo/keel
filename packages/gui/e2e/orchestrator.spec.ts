@@ -76,8 +76,11 @@ test("orquestador: adjuntar una lista, explicarla, corregir el plan y arrancar",
     .getByRole("button", { name: "Abrir" })
     .click()
   const focus = page.getByTestId("task-focus")
-  await expect(focus.getByTestId("feature-plan")).toContainText("Proyectos primero en el menú", {
-    timeout: 20_000,
-  })
+  // El título corregido en el plan es el de la subtarea; los agentes de prueba terminan al
+  // instante, así que el plan ya las lista integradas (sólo por clave).
+  const plan = focus.getByTestId("feature-plan")
+  await expect(plan).toContainText("2/2 integradas", { timeout: 20_000 })
+  await plan.getByTestId("subtask-done").locator("summary").click()
+  await expect(plan.getByTestId("subtask-done")).toContainText("Proyectos primero en el menú")
   if (shots) await page.screenshot({ path: join(shots, "orq-batch.png") })
 })

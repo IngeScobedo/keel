@@ -605,10 +605,19 @@ function SubtaskLanes({
         </details>
       )}
       {lanes.done.length > 0 && (
-        <p className="muted tf-small">
-          <Check size={12} aria-hidden /> Integradas:{" "}
-          {lanes.done.map((s) => s.subtask?.key ?? s.display_id).join(", ")}
-        </p>
+        <details className="tf-queued" data-testid="subtask-done">
+          <summary>
+            <Check size={12} aria-hidden /> Integradas:{" "}
+            {lanes.done.map((s) => s.subtask?.key ?? s.display_id).join(", ")}
+          </summary>
+          {lanes.done.map((s) => (
+            <button type="button" key={s.id} className="subtask-row" onClick={() => onOpen(s)}>
+              <Status state={s.visual_state} dot />
+              <span className="mono muted">{s.subtask?.key ?? s.display_id}</span>
+              <span>{s.title}</span>
+            </button>
+          ))}
+        </details>
       )}
     </section>
   )
