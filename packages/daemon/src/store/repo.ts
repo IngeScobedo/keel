@@ -777,6 +777,28 @@ export class Repo {
           .all(seq, upTo, limit)
   }
   /** Eventos de un tipo que nombran una tarea en su payload, en orden. */
+  /**
+   * Tareas del método en `waiting_human`, sin run vivo, con un plan de git hecho después
+   * de que terminó su último run: el agente no se enteró de la aprobación.
+   */
+  tasksWithPlanAfterLastRun(): string[] {
+    return this.db
+      .query<{ id: string }, []>(
+        `SELECT w.id FROM work_items w JOIN task_flows f ON f.work_item_id = w.id
+          WHERE w.lifecycle = 'waiting_human' AND f.stage != 'close'
+            AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.work_item_id = w.id
+              AND r.status NOT IN ('completed','failed','cancelled','interrupted'))
+            AND EXISTS (SELECT 1 FROM events p WHERE p.kind = 'git.plan.completed'
+              AND p.run_id IN (SELECT id FROM runs WHERE work_item_id = w.id)
+              AND p.event_seq > (SELECT max(e.event_seq) FROM events e
+                WHERE e.run_id = (SELECT id FROM runs WHERE work_item_id = w.id
+                  ORDER BY created_at DESC, id DESC LIMIT 1)
+                AND e.kind = 'run.updated'
+                AND json_extract(e.payload_json, '$.status') IN ('completed','failed','cancelled','interrupted')))`,
+      )
+      .all()
+      .map((r) => r.id)
+  }
   /** ADR-0044: las sesiones de diseño abiertas que no se cerraron. */
   openDesignSessions(): {
     name: string

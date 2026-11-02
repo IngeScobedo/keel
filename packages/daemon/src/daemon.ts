@@ -542,6 +542,8 @@ export class Daemon {
     // ADR-0039: lo que esperaba lugar antes de reiniciar vuelve a la fila.
     queueMicrotask(() => {
       this.refileMisplacedEvents()
+      // Un commit aprobado mientras el daemon no corría, o antes de este arreglo.
+      for (const id of this.repo.tasksWithPlanAfterLastRun()) this.resumeAfterPlan(id)
       // ADR-0044 §1: las sesiones de diseño sobreviven al daemon en tmux.
       for (const s of this.repo.openDesignSessions()) this.design.restore(s)
       this.scheduleAllFeatures()
@@ -3710,6 +3712,8 @@ export class Daemon {
     this.settleWorkItem(final, "dispatch")
     if (!releasesOnFinish(final.status)) await this.captureChanges(run.id)
     this.afterFlowRun(final)
+    // Con el lugar libre sigue la tarea cuyo commit se aprobó sin lugar para avisarle.
+    for (const id of this.repo.tasksWithPlanAfterLastRun()) this.resumeAfterPlan(id)
     // ADR-0022 §3: un run que termina libera lugar para la hija que esperaba.
     for (const parentId of [...this.waitingFeatures]) this.scheduleFeature(parentId)
   }
@@ -6297,6 +6301,22 @@ export class Daemon {
     await this.finishClose(item, run, plan, done.id, approval.decision_actor ?? null)
   }
 
+  /**
+   * El humano aprobó un commit fuera de `close` y el agente ya no corre: sin aviso, la
+   * tarea queda en «waiting for you» aunque nadie tenga nada que decidir. Keel le da
+   * otro turno para seguir con su etapa (ADR-0021: Keel conduce el método).
+   */
+  private resumeAfterPlan(workItemId: string): void {
+    const flow = this.repo.getFlow(workItemId)
+    const item = this.repo.getWorkItem(workItemId)
+    if (!flow || flow.stage === "close" || !item || item.lifecycle !== "waiting_human") return
+    if (this.repo.liveRunFor(workItemId)) return
+    this.continueFlow(
+      workItemId,
+      `El humano aprobó tu commit y ya está confirmado. Sigue con la etapa ${flow.stage} desde donde quedaste.`,
+    )
+  }
+
   private async runGitPlan(planId: string, plan: GitPlan): Promise<void> {
     const run = this.repo.getRun(plan.run_id)
     const item = run ? this.repo.getWorkItem(run.work_item_id) : null
@@ -6323,6 +6343,9 @@ export class Daemon {
         console.error(`keel: no pude guardar los cambios del plan ${planId}`, e),
       )
     if (r.ok && !(await this.finishClose(item, run, plan, planId, approver))) return
+    // Un commit aprobado fuera del cierre con el agente ya detenido: Keel le avisa y la
+    // etapa sigue (KEEL-19 a 23 esperaban a que alguien les escribiera).
+    if (r.ok) this.resumeAfterPlan(item.id)
     // El diff aprobado queda como evidencia de la tarea (ADR-0015 §6, ADR-0012).
     if (r.ok && plan.diff_ref) {
       const sha = parseArtifactRef(plan.diff_ref) as string

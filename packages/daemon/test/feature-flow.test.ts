@@ -560,6 +560,62 @@ describe("ADR-0022: feature y subtareas", () => {
     60_000,
   )
 
+  test("aprobar el commit con el agente ya detenido le da otro turno para seguir su etapa", async () => {
+    const { daemon, human, scripts, until, events } = await boot()
+    const parent = (await human.call("work_items.create", {
+      ...meta(),
+      title: "Dos piezas",
+      kind: "feature",
+    })) as { id: string }
+    scripts.push(async (t) => {
+      await put(t, "brief", BRIEF)
+      await advance(t, "design", { ceremony: "formal", reason: "contrato" })
+    })
+    scripts.push(async (t) => {
+      await put(t, "spec", SPEC)
+      await put(t, "design", DESIGN)
+      await put(t, "tasks", "- [ ] A → `api/a/**` → R1\n- [ ] B → `web/b/**` → R2\n")
+      await advance(t, "implement")
+    })
+    // Como KEEL-20: propone el commit y termina su turno esperando la aprobación.
+    scripts.push(async (t) => {
+      const cwd = String(t.options.cwd)
+      execFileSync("mkdir", ["-p", join(cwd, "api/a")])
+      writeFileSync(join(cwd, "api/a/A.ts"), "export const A = true\n")
+      await t.agent.call("git.propose", { ...meta(), message: "A: implementado" })
+    })
+    // B toma el lugar cuando A se detiene (límite 1); A sigue cuando B lo libera.
+    scripts.push(async () => {})
+    let resumed = ""
+    scripts.push(async (t) => {
+      resumed = t.work_item_id
+    })
+    await human.call("tasks.work", { ...meta(), work_item_id: parent.id })
+    await until(() => daemon.repo.pendingStageGate(parent.id) !== null, "gate (a)")
+    await approveGate(human, daemon, parent.id)
+    await until(
+      () =>
+        daemon.repo.getFlow(parent.id)?.stage === "design" &&
+        daemon.repo.pendingStageGate(parent.id) !== null,
+      "gate (b)",
+    )
+    await approveGate(human, daemon, parent.id)
+    const aId = daemon.repo
+      .childrenOf(parent.id)
+      .find((c) => daemon.repo.getFlow(c.id)?.subtask_json?.includes('"key":"T1"'))?.id as string
+    await until(() => daemon.repo.getWorkItem(aId)?.lifecycle === "waiting_human", "A espera")
+    const plan = daemon.repo.gitPlansFor(aId).find((x) => x.state === "pending")
+    await human.call("approvals.resolve", {
+      ...meta(),
+      approval_id: plan?.id,
+      operation_hash: daemon.repo.getApproval(plan?.id as string)?.operation_hash,
+      decision: "approve_once",
+    })
+    await until(() => resumed !== "", "el turno nuevo")
+    expect(resumed).toBe(aId)
+    expect(events("run.prompt").some((p) => String(p.text).includes("aprobó tu commit"))).toBe(true)
+  }, 60_000)
+
   test("ADR-0039: con lugar, los carriles corren a la vez; el límite y el carril dicen por qué esperan", async () => {
     const { daemon, human, scripts, until } = await boot()
     const d = () => daemon
