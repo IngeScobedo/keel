@@ -159,7 +159,7 @@ import {
   type RecordedProcess,
   sameProcess,
 } from "./processes.js"
-import { detectProfile } from "./project-profile.js"
+import { detectProfile, detectSetup } from "./project-profile.js"
 import { Research, ResearchError } from "./research.js"
 import { describePlaybook, discoverPlaybooks } from "./resources/ansible-discover.js"
 import { BrokerError, ResourceBroker } from "./resources/broker.js"
@@ -201,6 +201,7 @@ import { Vault, VaultError } from "./vault/vault.js"
 import { runVerify } from "./verify.js"
 import type { WorkspaceDriver } from "./workspace-driver.js"
 import { defaultWorktreesDir, GitWorktreeDriver, releasesOnFinish } from "./workspaces.js"
+import { WorktreeSetup } from "./worktree-setup.js"
 
 export type DaemonOptions = {
   dbPath: string
@@ -340,6 +341,8 @@ export class Daemon {
   private readonly closedByPlan = new Map<string, string>()
   /** Una verificación a la vez por tarea: la segunda espera a la primera. */
   private readonly verifying = new Map<string, Promise<unknown>>()
+  /** ADR-0030 §3: las dependencias de cada worktree. */
+  private readonly worktreeSetup: WorktreeSetup
   private lagMs = 0
   private lagTimer: ReturnType<typeof setInterval> | null = null
 
@@ -387,6 +390,10 @@ export class Daemon {
     })
     // ADR-0013: el intermediario ejecuta con la credencial; el agente sólo ve el resultado.
     this.github = new GithubService(() => this.ghPath())
+    this.worktreeSetup = new WorktreeSetup({
+      store: (text) => this.artifacts.put(text, "text/plain").ref,
+      worktreesDir: opts.worktreesDir ?? defaultWorktreesDir(),
+    })
     this.design = new DesignSessions({
       claude: () => (opts.design?.claude === undefined ? detectClaudeBinary() : opts.design.claude),
       // En el último run de la tarea, para que el chat los muestre en su hilo.
@@ -3629,12 +3636,15 @@ export class Daemon {
       if (!ws.ok) final = ctx.fail(ws.message, "run.start_failed")
       else {
         for (const e of ws.events) this.emitSystem(e.kind, run.id, e.payload)
-        if (run.purpose === "execute")
+        if (run.purpose === "execute") {
           this.emitSystem("workspace.prepared", run.id, {
             kind: driver.kind,
             guarantees: driver.guarantees,
             cwd: ws.cwd,
           })
+          // ADR-0030 §3: las dependencias se instalan mientras el agente empieza.
+          this.track(this.ensureSetup(item, ws.cwd, run.id))
+        }
         // Cancelado mientras se preparaba: no se lanza el proveedor. Sin await entre esta
         // lectura y execute; el adaptador pasa a `initializing` en su parte síncrona.
         if (current.status !== "queued") final = current
@@ -4050,12 +4060,48 @@ export class Daemon {
     return { approval_id: a.id, state: "approved" as const }
   }
 
+  /**
+   * ADR-0030 §3: instala las dependencias del worktree si faltan o cambió el lockfile. Un
+   * fallo se ve en el chat y el agente vivo se entera: verify va a fallar por eso.
+   */
+  private async ensureSetup(w: WorkItemRow, cwd: string, runId: string | null): Promise<void> {
+    const profile = this.profileOf(w.project_id) ?? (await this.detectedProfile(w.project_id))
+    const command = profile.setup?.command ?? null
+    const outcome = await this.worktreeSetup.ensure(cwd, profile.setup, () =>
+      this.emitSystem("workspace.setup_started", runId, { work_item_id: w.id, command }),
+    )
+    if (outcome.state !== "done") return
+    const r = outcome.result
+    this.emitSystem(r.ok ? "workspace.setup_completed" : "workspace.setup_failed", runId, {
+      work_item_id: w.id,
+      command: r.command,
+      ok: r.ok,
+      exit_code: r.exit_code,
+      duration_ms: r.duration_ms,
+      tail: r.tail,
+      output_ref: r.output_ref,
+    })
+    const live = this.repo.liveRunFor(w.id)
+    if (!r.ok && live) {
+      const text = `[Keel] No pude instalar las dependencias del worktree (\`${r.command}\`, salida ${r.exit_code}). verify va a fallar por eso, no por tu cambio; díselo al humano. Final de la salida:\n${r.tail.split("\n").slice(-8).join("\n")}`
+      if (this.providerOf(live).sendMessage(live.id, text))
+        this.emitSystem("run.keel_message", live.id, { text })
+    }
+  }
+
   /** El perfil confirmado o, si no hay, el detectado. */
   private profileOf(projectId: string): ProjectProfile | null {
     const row = this.repo.getProfile(projectId)
     if (row) {
-      const parsed = ProjectProfileSchema.safeParse(JSON.parse(row.profile_json))
-      if (parsed.success) return parsed.data
+      const raw = JSON.parse(row.profile_json) as Record<string, unknown>
+      const parsed = ProjectProfileSchema.safeParse(raw)
+      if (parsed.success) {
+        // Un perfil confirmado antes de que existiera `setup` no lo quitó: lo detecta Keel.
+        // Si el humano lo dejó en null, no se instala nada.
+        if (!("setup" in raw))
+          parsed.data.setup = detectSetup(this.repo.projectRoot(projectId) ?? this.rootPath)
+        return parsed.data
+      }
     }
     return this.detectedProfiles.get(projectId) ?? null
   }
@@ -5184,6 +5230,8 @@ export class Daemon {
       .then(async () => {
         const w = this.requireWorkItem(workItemId)
         const profile = this.profileOf(w.project_id) ?? (await this.detectedProfile(w.project_id))
+        // Sin dependencias, verify falla igual antes y después del cambio y no dice nada.
+        await this.ensureSetup(w, this.taskCwd(w), this.repo.lastRunFor(w.id)?.id ?? null)
         const results = profile.verify.length
           ? await runVerify(this.taskCwd(w), profile.verify, {
               store: (text) => this.artifacts.put(text, "text/plain").ref,

@@ -230,7 +230,12 @@ async function keel15(canon: boolean) {
   scripts.push(async (t) => {
     await put(t, "spec", SPEC)
     await put(t, "design", DESIGN)
-    await put(t, "tasks", "- [ ] A → `api/a/**` → R1\n- [ ] B → `web/b/**` → R2\n")
+    // B en otra fase: espera a A y no le disputa el único lugar (límite 1).
+    await put(
+      t,
+      "tasks",
+      "## Fase 1 — A\n- [ ] A → `api/a/**` → R1\n## Fase 2 — B\n- [ ] B → `web/b/**` → R2\n",
+    )
     await advance(t, "implement")
   })
   // Como KEEL-15: propone el commit en implement, revisa con CONCERNS y termina sin cerrar.

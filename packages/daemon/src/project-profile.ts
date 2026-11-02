@@ -130,7 +130,30 @@ export async function detectProfile(root: string): Promise<ProjectProfile> {
     },
     flow,
     conventions: { co_authored_by },
+    setup: detectSetup(root),
   }
+}
+
+/**
+ * ADR-0030 §3: cómo instalar las dependencias, por el lockfile del repo. Siempre con el
+ * lockfile congelado: instalar en un worktree no debe cambiarlo ni ensuciar el diff.
+ */
+export function detectSetup(root: string): ProjectProfile["setup"] {
+  const has = (p: string) => existsSync(join(root, p))
+  const locks = (...names: string[]) => names.filter(has)
+  if (has("bun.lock") || has("bun.lockb"))
+    return { command: "bun install --frozen-lockfile", lockfiles: locks("bun.lock", "bun.lockb") }
+  if (has("pnpm-lock.yaml"))
+    return { command: "pnpm install --frozen-lockfile", lockfiles: ["pnpm-lock.yaml"] }
+  if (has("yarn.lock"))
+    return {
+      command: has(".yarnrc.yml") ? "yarn install --immutable" : "yarn install --frozen-lockfile",
+      lockfiles: ["yarn.lock"],
+    }
+  if (has("package-lock.json")) return { command: "npm ci", lockfiles: ["package-lock.json"] }
+  if (has("uv.lock")) return { command: "uv sync --frozen", lockfiles: ["uv.lock"] }
+  if (has("poetry.lock")) return { command: "poetry install --no-root", lockfiles: ["poetry.lock"] }
+  return null
 }
 
 /** La rama por defecto del remoto (o main/master) y `develop` si existe. */

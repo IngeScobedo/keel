@@ -81,6 +81,27 @@ export function LiveProfile({ call }: { call: Call }) {
           : "ninguno (Keel usa su método)"}
         .
       </p>
+      <h3>Dependencias</h3>
+      <Hint>
+        Keel las instala en cada worktree al prepararlo y otra vez si cambia el lockfile, antes de
+        verificar (ADR-0030 §3). Vacío: no instala nada.
+      </Hint>
+      <label className="profile-field">
+        Comando de instalación
+        <input
+          aria-label="Comando de instalación"
+          className="mono"
+          value={draft.setup?.command ?? ""}
+          placeholder="bun install --frozen-lockfile"
+          onChange={(e) =>
+            set({
+              setup: e.target.value.trim()
+                ? { command: e.target.value, lockfiles: draft.setup?.lockfiles ?? [] }
+                : null,
+            })
+          }
+        />
+      </label>
       <h3>Verificación</h3>
       <Hint>
         Keel la corre en el worktree de la tarea: un baseline al empezar a implementar y el delta al

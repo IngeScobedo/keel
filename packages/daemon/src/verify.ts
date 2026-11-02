@@ -30,7 +30,8 @@ export async function runVerify(
   return out
 }
 
-function runOne(
+/** Un comando del perfil con su salida acotada y guardada: `verify` y `setup` (ADR-0030 §3). */
+export function runOne(
   cwd: string,
   c: ProjectProfile["verify"][number],
   deps: VerifyDeps,

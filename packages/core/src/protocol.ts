@@ -329,6 +329,18 @@ export const ProjectProfileSchema = z.object({
   flow: GitFlowSchema.nullable().default(null),
   /** ADR-0043 §7: convenciones que Keel respeta en sus commits. */
   conventions: z.object({ co_authored_by: z.boolean() }).default({ co_authored_by: true }),
+  /**
+   * ADR-0030 §3: instala las dependencias en cada worktree. Keel lo corre al preparar el
+   * worktree y otra vez si cambia uno de sus `lockfiles`; `verify` lo espera.
+   */
+  setup: z
+    .object({
+      command: z.string().min(1).max(2_000),
+      lockfiles: z.array(z.string()),
+      timeout_ms: z.number().int().positive().max(3_600_000).optional(),
+    })
+    .nullable()
+    .default(null),
 })
 export type ProjectProfile = z.infer<typeof ProjectProfileSchema>
 export const ProjectProfileViewSchema = z.object({

@@ -390,3 +390,23 @@ describe("ADR-0044: la sesión de Claude Design en el chat", () => {
     ])
   })
 })
+
+describe("ADR-0030 §3: las dependencias del worktree en el chat", () => {
+  test("instaladas y fallidas", () => {
+    const items = buildChat([
+      at("workspace.setup_completed", {
+        command: "bun install --frozen-lockfile",
+        duration_ms: 13_600,
+      }),
+      at("workspace.setup_failed", {
+        command: "bun install",
+        exit_code: 1,
+        tail: "a\nb\nerror: sin red",
+      }),
+    ])
+    expect(items.map((i) => ("text" in i ? i.text : ""))).toEqual([
+      "Keel instaló las dependencias del worktree (bun install --frozen-lockfile) en 14 s",
+      "Keel no pudo instalar las dependencias (bun install, salida 1): verify va a fallar por eso. a b error: sin red",
+    ])
+  })
+})

@@ -576,3 +576,44 @@ describe("ADR-0021: reglas que el agente no se salta", () => {
     expect(existsSync(join(String(s.seen[0]?.options.cwd), ".claude", "settings.json"))).toBe(true)
   })
 })
+
+describe("ADR-0030 §3: el worktree trae sus dependencias", () => {
+  test("Keel instala al preparar el worktree y verify lo espera; el baseline ya ve las dependencias", async () => {
+    const s = await boot()
+    const profile = (await s.human.call("projects.profile_get", {})) as {
+      profile: Record<string, unknown>
+    }
+    // Como `bun install`: deja lo instalado en una carpeta que git no sigue.
+    await s.human.call("projects.profile_set", {
+      ...meta(),
+      profile: {
+        ...profile.profile,
+        verify: [{ name: "deps", command: "test -f node_modules/.ok" }],
+        setup: {
+          command: "sleep 0.2 && mkdir -p node_modules && touch node_modules/.ok",
+          lockfiles: [],
+        },
+      },
+    })
+    const w = await s.task("Con dependencias")
+    s.scripts.push(async (t) => {
+      await put(t, w.id, "brief", BRIEF)
+      await advance(t, w.id, "implement", { ceremony: "direct", reason: "fix chico" })
+    })
+    let verdict: { ok: boolean }[] = []
+    s.scripts.push(async (t) => {
+      const v = (await t.agent.call("verify.run", { ...meta(), work_item_id: w.id })) as {
+        results: { ok: boolean }[]
+      }
+      verdict = v.results
+    })
+    await s.human.call("tasks.work", { ...meta(), work_item_id: w.id })
+    await s.until(() => verdict.length > 0, 20_000)
+    expect(verdict).toMatchObject([{ ok: true }])
+    // Una sola instalación por worktree, aunque el run y verify la pidan.
+    const done = s.events("workspace.setup_completed")
+    expect(done).toHaveLength(1)
+    expect(done[0]).toMatchObject({ work_item_id: w.id, ok: true })
+    expect(s.events("workspace.setup_failed")).toHaveLength(0)
+  }, 40_000)
+})

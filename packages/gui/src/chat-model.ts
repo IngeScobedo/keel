@@ -349,6 +349,32 @@ export function buildChat(events: EventNotification[]): ChatItem[] {
           text: `Se integró ${p.key ?? ""} · ${String(p.title)} a ${String(p.branch)}`,
         })
         break
+      // ADR-0030 §3: las dependencias del worktree.
+      case "workspace.setup_completed":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "done",
+          subtask_id: null,
+          text: `Keel instaló las dependencias del worktree (${String(p.command)}) en ${Math.round(Number(p.duration_ms) / 1000)} s`,
+        })
+        break
+      case "workspace.setup_failed":
+        items.push({
+          kind: "method",
+          key,
+          event: "feature",
+          tone: "warn",
+          subtask_id: null,
+          text: `Keel no pudo instalar las dependencias (${String(p.command)}, salida ${String(p.exit_code)}): verify va a fallar por eso. ${String(
+            p.tail ?? "",
+          )
+            .split("\n")
+            .slice(-3)
+            .join(" ")}`,
+        })
+        break
       // ADR-0044: la sesión de Claude Design de la tarea; su detalle vive en su tarjeta.
       case "design.requested":
         items.push({
