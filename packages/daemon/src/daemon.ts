@@ -1487,6 +1487,10 @@ export class Daemon {
               ? (JSON.parse(flow.baseline_json) as VerifyResult[])
               : null
             if (!last) missing.push("verificación: corre verify_run antes de cerrar")
+            else if (!measuredAtBase(base))
+              missing.push(
+                "verificación: el baseline se tomó con el cambio puesto; corre verify_run y Keel lo mide en el commit base",
+              )
             else {
               const delta = verifyDelta(base, last)
               if (!delta.green && qaVerdict(docs.qa ?? "") !== "WAIVED")

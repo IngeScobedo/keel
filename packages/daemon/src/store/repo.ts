@@ -1825,7 +1825,7 @@ export class Repo {
    * agente cerró su turno y no había nada que aprobar).
    */
   private waitingFields(w: WorkItemRow): {
-    waiting_on?: { kind: "decision" | "qa_fail" | "reply"; text: string }
+    waiting_on?: { kind: "decision" | "qa_fail" | "qa_done" | "reply"; text: string }
   } {
     if (w.lifecycle !== "waiting_human") return {}
     const pending = this.db
@@ -1838,12 +1838,16 @@ export class Repo {
     if ((pending?.n ?? 0) > 0)
       return { waiting_on: { kind: "decision", text: "Espera tu decisión" } }
     const flow = this.getFlow(w.id)
-    const qa = flow?.stage === "implement" ? this.getTaskDoc(w.id, "qa") : null
-    // El QA en FAIL de la última revisión, que la devolvió a implementar.
+    const qa =
+      flow?.stage === "implement" || flow?.stage === "review" ? this.getTaskDoc(w.id, "qa") : null
+    // El QA de la última revisión: en FAIL la devolvió a implementar; si no, falta
+    // que el humano diga si se cierra.
     if (qa && qa.created_at >= (this.lastStageEntry(w.id, "review") ?? "") && this.artifacts) {
       const verdict = qaVerdict(this.taskDocContent(qa))
-      if (verdict === "FAIL")
+      if (verdict === "FAIL" && flow?.stage === "implement")
         return { waiting_on: { kind: "qa_fail", text: "QA en FAIL · dile cómo seguir" } }
+      if (verdict && verdict !== "FAIL" && flow?.stage === "review")
+        return { waiting_on: { kind: "qa_done", text: `QA en ${verdict} · ¿cerrar?` } }
     }
     return { waiting_on: { kind: "reply", text: "Terminó su turno · contéstale" } }
   }

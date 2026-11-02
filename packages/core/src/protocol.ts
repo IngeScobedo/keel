@@ -194,7 +194,7 @@ export const WorkItemViewSchema = z.object({
     .optional(),
   /** Con `waiting_human`: por qué espera al humano, en una línea. */
   waiting_on: z
-    .object({ kind: z.enum(["decision", "qa_fail", "reply"]), text: z.string() })
+    .object({ kind: z.enum(["decision", "qa_fail", "qa_done", "reply"]), text: z.string() })
     .optional(),
   ...projected,
 })
