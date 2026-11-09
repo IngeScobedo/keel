@@ -76,6 +76,20 @@ export function useBaseGuard(call: Call, onPulled?: () => void) {
         )}
         <div className="modal-actions">
           <Button onClick={() => setPending(null)}>Cancelar</Button>
+          {b.error && (
+            // Una frase mal escrita o el remoto caído: se consulta otra vez, y si ssh
+            // rechazó la frase, Keel la vuelve a preguntar (KEEL-3).
+            <Button
+              disabled={checking}
+              onClick={() => {
+                const go = pending.go
+                setPending(null)
+                void guard(go)
+              }}
+            >
+              {checking ? "Consultando…" : "Reintentar"}
+            </Button>
+          )}
           <Button
             onClick={() => {
               const go = pending.go

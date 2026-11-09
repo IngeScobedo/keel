@@ -39,7 +39,24 @@ type AskEntry = {
    * vez aunque Ansible la lea varias (ADR-0031 §6).
    */
   reuse?: boolean
+  /** Lo que askpass ya contestó en esta operación: si ssh lo vuelve a pedir, no sirvió. */
+  answered?: Set<string>
 }
+
+/**
+ * ¿ssh vuelve a pedir lo que Keel ya le dio en esta misma operación? Entonces lo rechazó
+ * (una frase mal escrita, o vieja en el vault). ssh lo pide de nuevo antes de fallar
+ * (`number_of_password_prompts`, 3 por defecto); servir otra vez lo recordado dejaba la
+ * tarea sin poder reintentar hasta reiniciar el daemon (KEEL-3, 2026-11-09).
+ */
+function askedAgain(entry: AskEntry, key: string): boolean {
+  entry.answered ??= new Set()
+  if (entry.answered.has(key)) return true
+  entry.answered.add(key)
+  return false
+}
+
+const REJECTED = "La anterior no sirvió. "
 /** A quién se refiere una pregunta de secreto: una conexión o la llave de git. */
 type PromptTarget = { project_id: string; id: string; name: string; environment: string }
 type Prompt = {
@@ -301,10 +318,14 @@ export class CredentialService implements Credentials {
       return { value: entry.served[0] as string, ask: false }
     const conn = this.deps.broker.find(entry.project_id, entry.connection_id)
     const what = conn.auth_method === "file" ? "passphrase" : "password"
+    const key = `${conn.id}:${what}`
+    // Rechazada: ni la sesión ni el vault la vuelven a dar; se le pregunta al humano.
+    const again = askedAgain(entry, key)
+    if (again) this.session.delete(key)
     let value: string | null = null
-    if (conn.vault_item_id && this.deps.vault.state() === "unlocked")
+    if (!again && conn.vault_item_id && this.deps.vault.state() === "unlocked")
       value = await this.deps.vault.use(conn.vault_item_id, `askpass:${entry.purpose}`, (v) => v)
-    value ??= this.session.get(`${conn.id}:${what}`) ?? null
+    if (!again) value ??= this.session.get(key) ?? null
     if (value === null && entry.purpose === "human") return { value: null, ask: true }
     if (value === null)
       value = await this.askHuman(
@@ -315,7 +336,7 @@ export class CredentialService implements Credentials {
           environment: conn.environment,
         },
         what,
-        prompt,
+        again ? `${REJECTED}${prompt}` : prompt,
         entry.ctx,
         (v, scope, actor) => this.keep(conn, what, v, scope, actor),
       )
@@ -335,15 +356,18 @@ export class CredentialService implements Credentials {
     // Sólo frases de llaves: usuario y contraseña de un proveedor de git no pasan por Keel.
     if (!key) return { value: null, ask: false }
     const label = `ssh-key:${key}`
-    let value = this.session.get(label) ?? null
-    if (value === null && this.deps.vault.state() === "unlocked") {
+    // Rechazada: ni la sesión ni el vault la vuelven a dar; se le pregunta al humano.
+    const again = askedAgain(entry, label)
+    if (again) this.session.delete(label)
+    let value = again ? null : (this.session.get(label) ?? null)
+    if (value === null && !again && this.deps.vault.state() === "unlocked") {
       const id = this.deps.vault.findByLabel(label)
       if (id) value = await this.deps.vault.use(id, "askpass:git", (v) => v)
     }
     value ??= await this.askHuman(
       { project_id: entry.project_id, id: label, name: `git · ${key}`, environment: "dev" },
       "passphrase",
-      prompt,
+      again ? `${REJECTED}${prompt}` : prompt,
       null,
       async (v, scope, actor) => {
         if (scope === "session") this.session.set(label, v)

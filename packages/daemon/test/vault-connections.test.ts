@@ -523,3 +523,103 @@ describe("ADR-0025: importar y llaves", () => {
     expect(pub.split(" ").slice(0, 2)).toEqual(k.publicLine.split(" ").slice(0, 2))
   })
 })
+
+/** Como OpenSSH: vuelve a pedir por askpass mientras la contraseña no sirva (3 intentos). */
+const RETRY_SSH = `#!/bin/bash
+for i in 1 2 3; do
+  pw=$("$SSH_ASKPASS" "deploy@203.0.113.10's password: ") || exit 255
+  if [ "$pw" = "buena-5d1e" ]; then echo "entró"; exit 0; fi
+done
+echo "Permission denied" >&2; exit 255
+`
+
+describe.skipIf(process.platform === "win32")(
+  "Una contraseña rechazada se vuelve a preguntar (KEEL-3)",
+  () => {
+    const prompts = (events: () => { kind: string; payload_json: string }[]) =>
+      events()
+        .filter((e) => e.kind === "secret.prompt_requested")
+        .map((e) => JSON.parse(e.payload_json) as { prompt_id: string; text: string })
+    async function waitPrompt(events: () => { kind: string; payload_json: string }[], n: number) {
+      const end = Date.now() + 10_000
+      while (prompts(events).length < n && Date.now() < end) await Bun.sleep(20)
+      return prompts(events)[n - 1]
+    }
+
+    test("conexión: lo recordado que ssh rechaza no se vuelve a dar; se pregunta diciendo que no sirvió", async () => {
+      const { dir, daemon, human, add, run, allow, events } = await boot()
+      const fake = join(dir, "retry-ssh")
+      writeFileSync(fake, RETRY_SSH)
+      chmodSync(fake, 0o755)
+      const c = await add({
+        name: "dev-retry",
+        auth_method: "ask",
+        config: { host: "203.0.113.10", user: "deploy", ssh_path: fake },
+      })
+      await allow(c.id)
+      const pending = run("dev-retry", "uptime")
+      const first = await waitPrompt(events, 1)
+      await human.call("secrets.prompt_answer", {
+        ...meta(),
+        prompt_id: first?.prompt_id,
+        value: "mala-5d1e",
+        remember: "session",
+      })
+      const second = await waitPrompt(events, 2)
+      expect(second?.text).toStartWith("La anterior no sirvió.")
+      await human.call("secrets.prompt_answer", {
+        ...meta(),
+        prompt_id: second?.prompt_id,
+        value: "buena-5d1e",
+        remember: "session",
+      })
+      expect((await pending).output).toContain("entró")
+      // Lo que quedó en la sesión es la buena: la siguiente no pregunta.
+      expect((await run("dev-retry", "uptime")).output).toContain("entró")
+      expect(prompts(events)).toHaveLength(2)
+      assertNoLeak(dir, daemon, "buena-5d1e")
+    }, 30_000)
+
+    test("git: la frase de la llave mal escrita no queda pegada a la sesión", async () => {
+      const { daemon, human, events } = await boot()
+      const creds = (
+        daemon as unknown as {
+          credentials: {
+            gitEnv(p: string, n: string): { env: Record<string, string>; done(): void }
+            askpass(t: string, p: string): Promise<{ value: string | null }>
+          }
+        }
+      ).credentials
+      const ask = "Enter passphrase for key '/home/u/.ssh/id_ed25519': "
+      const pid = daemon.project.project_id
+      const g = creds.gitEnv(pid, "/bin/false")
+      const token = g.env.KEEL_ASKPASS_TOKEN as string
+      const a1 = creds.askpass(token, ask)
+      const p1 = await waitPrompt(events, 1)
+      await human.call("secrets.prompt_answer", {
+        ...meta(),
+        prompt_id: p1?.prompt_id,
+        value: "mala",
+        remember: "session",
+      })
+      expect((await a1).value).toBe("mala")
+      // ssh la rechaza y vuelve a pedir en la misma operación: Keel pregunta otra vez.
+      const a2 = creds.askpass(token, ask)
+      const p2 = await waitPrompt(events, 2)
+      expect(p2?.text).toStartWith("La anterior no sirvió.")
+      await human.call("secrets.prompt_answer", {
+        ...meta(),
+        prompt_id: p2?.prompt_id,
+        value: "buena",
+        remember: "session",
+      })
+      expect((await a2).value).toBe("buena")
+      g.done()
+      // Otra operación (reintentar) usa la buena sin preguntar.
+      const g2 = creds.gitEnv(pid, "/bin/false")
+      expect((await creds.askpass(g2.env.KEEL_ASKPASS_TOKEN as string, ask)).value).toBe("buena")
+      expect(prompts(events)).toHaveLength(2)
+      g2.done()
+    }, 30_000)
+  },
+)
