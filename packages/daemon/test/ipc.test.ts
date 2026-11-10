@@ -199,6 +199,49 @@ describe("servidor IPC (ADR-0005)", () => {
     c.close()
   })
 
+  test("replay_limit: el replay manda sólo los últimos eventos antes del cursor y enlaza con el stream", async () => {
+    const { project_id } = daemon.project
+    const from = daemon.repo.lastEventSeq()
+    daemon.store.db.transaction(() => {
+      for (let i = 0; i < 300; i++)
+        daemon.repo.appendEvent({
+          project_id,
+          run_id: null,
+          source: "test",
+          source_event_key: `limit:${from}:${i}`,
+          fidelity: "full",
+          adapter_version: "test/0",
+          kind: "test.backlog",
+          occurred_at: null,
+          payload_json: JSON.stringify({ i }),
+        })
+    })()
+    const c = await IpcClient.connect(daemon.server.path)
+    const seqs: number[] = []
+    c.onEvent((n) => seqs.push(n.event_seq))
+    const sub = (await c.call("events.subscribe", { project_id, replay_limit: 50 })) as {
+      cursor: number
+    }
+    expect(sub.cursor).toBe(from + 300)
+    expect(seqs).toEqual(Array.from({ length: 50 }, (_, i) => from + 251 + i))
+    await c.call("work_items.create", {
+      request_id: "limit",
+      idempotency_key: key(),
+      title: "después del replay corto",
+      kind: "chore",
+    })
+    for (let i = 0; i < 100 && seqs.length < 51; i++) await new Promise((r) => setTimeout(r, 10))
+    expect(seqs.at(-1)).toBe(from + 301)
+    // Un cursor más reciente que la ventana manda sólo lo que faltó.
+    const d = await IpcClient.connect(daemon.server.path)
+    const more: number[] = []
+    d.onEvent((n) => more.push(n.event_seq))
+    await d.call("events.subscribe", { project_id, after_event_seq: from + 298, replay_limit: 50 })
+    expect(more.slice(0, 3)).toEqual([from + 299, from + 300, from + 301])
+    c.close()
+    d.close()
+  })
+
   test("runs.start: un run vivo bloquea el segundo; cancelar lo libera; la corrida grabada termina en needs_review", async () => {
     const c = await IpcClient.connect(daemon.server.path)
     const updates: { status?: string }[] = []

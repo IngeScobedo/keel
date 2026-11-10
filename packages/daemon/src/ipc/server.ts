@@ -252,7 +252,10 @@ export class IpcServer {
   ): Promise<unknown> {
     const ctx: HandlerContext = { actor: state.actor ?? this.actor, client: state }
     if (method === "events.subscribe")
-      return this.subscribe(params as { project_id?: string; after_event_seq: number }, state)
+      return this.subscribe(
+        params as { project_id?: string; after_event_seq: number; replay_limit?: number },
+        state,
+      )
     if (method === "events.history") {
       const p = params as { work_item_id: string; before_event_seq: number; limit: number }
       const rows = this.opts.repo.taskEventsBefore(p.work_item_id, p.before_event_seq, p.limit + 1)
@@ -308,7 +311,10 @@ export class IpcServer {
   }
 
   /** Snapshot + replay desde el cursor + stream en vivo (ADR-0005 §4). */
-  private subscribe(p: { project_id?: string; after_event_seq: number }, state: ClientState) {
+  private subscribe(
+    p: { project_id?: string; after_event_seq: number; replay_limit?: number },
+    state: ClientState,
+  ) {
     const repo = this.opts.repo
     const subscriptionId = `sub-${state.id}-${state.subscriptions.size + 1}`
     const projectId = p.project_id ?? null
@@ -332,6 +338,8 @@ export class IpcServer {
     // capturado; luego el bus. Todo es síncrono, así que ningún evento se publica
     // entre el final del replay y el alta en el bus.
     let last = Math.min(p.after_event_seq, cursor)
+    if (p.replay_limit !== undefined)
+      last = Math.max(last, repo.seqBeforeLast(projectId, p.replay_limit, cursor))
     while (!state.closed) {
       const page = repo.eventsAfter(last, projectId, REPLAY_PAGE_SIZE, cursor)
       for (const e of page) this.send(state, notification("events.event", this.toNotification(e)))

@@ -79,20 +79,41 @@ export function useWorkspace() {
         const stopAttention = await rpc.listen("attention.changed", () => {
           if (generation.current === currentGeneration) setAttentionTick((n) => n + 1)
         })
+        // Los eventos se aplican en tandas, una por cuadro: uno por render hacía que una
+        // ráfaga (el replay, varios runs a la vez) repintara la ventana entera cada vez.
+        let queue: { event: EventNotification; apply: boolean }[] = []
+        let scheduled = false
+        const flush = () => {
+          scheduled = false
+          const batch = queue
+          queue = []
+          if (generation.current !== currentGeneration || batch.length === 0) return
+          if (batch.some((q) => touchesInbox(q.event.kind))) setInboxTick((n) => n + 1)
+          // La proyección interna no le sirve a ningún cliente y es un tercio del volumen.
+          const shown = batch.filter((q) => q.event.kind !== "projection.updated")
+          if (shown.length)
+            setEvents((old) => {
+              const seen = new Set(old.map((item) => item.event_seq))
+              const fresh = shown.map((q) => q.event).filter((e) => !seen.has(e.event_seq))
+              return fresh.length ? [...old, ...fresh].slice(-EVENT_WINDOW) : old
+            })
+          const live = batch.filter((q) => q.apply)
+          if (live.length)
+            setSnapshot((old) =>
+              live.reduce((state, q) => applyEvent(state, q.event, project.current), old),
+            )
+        }
         const stopEvents = await rpc.subscribe((event) => {
           if (generation.current !== currentGeneration) return
-          if (touchesInbox(event.kind)) setInboxTick((n) => n + 1)
           if (!ready) buffered.push(event)
-          // La proyección interna no le sirve a ningún cliente y es un tercio del volumen.
-          if (event.kind !== "projection.updated")
-            setEvents((old) =>
-              old.some((item) => item.event_seq === event.event_seq)
-                ? old
-                : [...old, event].slice(-EVENT_WINDOW),
-            )
-          if (ready) setSnapshot((old) => applyEvent(old, event, project.current))
+          queue.push({ event, apply: ready })
+          if (scheduled) return
+          scheduled = true
+          if (typeof requestAnimationFrame === "function") requestAnimationFrame(flush)
+          else setTimeout(flush, 16)
         })
         cleanup.current = () => {
+          queue = []
           stopEvents()
           stopAttention()
         }
@@ -107,8 +128,10 @@ export function useWorkspace() {
         // descubre del primer evento.
         const wanted = projectId || daemonHealth.project?.id || ""
         if (wanted) project.current = wanted
+        // Sólo la ventana: lo anterior de cada tarea se pide al abrirla (`task-history.ts`).
+        const replay = { replay_limit: EVENT_WINDOW }
         let result = await rpc
-          .call("events.subscribe", wanted ? { project_id: wanted } : {})
+          .call("events.subscribe", wanted ? { project_id: wanted, ...replay } : replay)
           .catch(async (e: { rpc?: { code: number; details?: { min_cursor?: number } } }) => {
             // ADR-0012 §8: la historia anterior se purgó; snapshot y replay desde el mínimo.
             const min = e.rpc?.code === -32009 ? e.rpc.details?.min_cursor : undefined
@@ -116,13 +139,14 @@ export function useWorkspace() {
             return rpc.call("events.subscribe", {
               ...(wanted ? { project_id: wanted } : {}),
               after_event_seq: min,
+              ...replay,
             })
           })
         const discovered = wanted || buffered[0]?.project_id
         if (discovered && !wanted) {
           project.current = discovered
           await rpc.call("events.unsubscribe", { subscription_id: result.subscription_id })
-          result = await rpc.call("events.subscribe", { project_id: discovered })
+          result = await rpc.call("events.subscribe", { project_id: discovered, ...replay })
         }
         if (generation.current !== currentGeneration) return
         setSnapshot(mergeReplay(result.snapshot, buffered, project.current))

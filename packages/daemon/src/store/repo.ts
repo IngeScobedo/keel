@@ -759,6 +759,21 @@ export class Repo {
       )
       .all(before, workItemId, workItemId, workItemId, limit)
   }
+  /** El `event_seq` justo antes de los últimos `n` eventos hasta `upTo` (0 si hay menos). */
+  seqBeforeLast(projectId: string | null, n: number, upTo: number): number {
+    const row = projectId
+      ? this.db
+          .query<{ event_seq: number }, [number, string, number]>(
+            "SELECT event_seq FROM events WHERE event_seq <= ? AND project_id = ? ORDER BY event_seq DESC LIMIT 1 OFFSET ?",
+          )
+          .get(upTo, projectId, n)
+      : this.db
+          .query<{ event_seq: number }, [number, number]>(
+            "SELECT event_seq FROM events WHERE event_seq <= ? ORDER BY event_seq DESC LIMIT 1 OFFSET ?",
+          )
+          .get(upTo, n)
+    return row?.event_seq ?? 0
+  }
   eventsAfter(
     seq: number,
     projectId: string | null,

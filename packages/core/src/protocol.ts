@@ -2288,6 +2288,12 @@ export const Methods = {
     params: z.object({
       project_id: z.string().optional(),
       after_event_seq: z.number().int().nonnegative().default(0),
+      /**
+       * A lo más estos eventos del replay, los últimos antes del cursor. La GUI guarda una
+       * ventana y pide lo anterior de cada tarea con `events.history`: reenviarle toda la
+       * historia (62 MB en Casa Matte) tardaba 10 s con el daemon bloqueado.
+       */
+      replay_limit: z.number().int().positive().optional(),
     }),
     result: z.object({
       subscription_id: z.string(),
