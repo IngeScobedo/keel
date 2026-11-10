@@ -305,6 +305,87 @@ export async function removeWorktree(repo: GitRepo, runId: string): Promise<Remo
   return { removed: true, rescueRef, branchKept }
 }
 
+/**
+ * Vuelve a poner el worktree de un run ya quitado, en la misma ruta y rama, con lo que
+ * tenía: la rama si se conservó (o la cabeza del rescate) y, encima, sin commit, los
+ * cambios del último rescate. Así un run que continúa al interrumpido retoma su carpeta y,
+ * con ella, la sesión del proveedor, que se busca por la ruta. `base` es la base original.
+ */
+export async function restoreWorktree(
+  repo: GitRepo,
+  opts: { runId: string; path: string; base: string; owner?: string },
+): Promise<KeelWorktree & { rescueRef: string | null }> {
+  assertRunId(opts.runId)
+  if (!isAbsolute(opts.path))
+    throw new GitError("invalid_argument", `la ruta del worktree debe ser absoluta: ${opts.path}`)
+  if (existsSync(opts.path)) throw new GitError("conflict", `la ruta ya existe: ${opts.path}`)
+  const branch = `${BRANCH_PREFIX}${opts.runId}`
+  const ref = `${RUN_REF_PREFIX}${opts.runId}`
+  const rescueRef = await latestRescue(repo, opts.runId)
+  return write(repo, async () => {
+    if (await refExists(repo, ref))
+      throw new GitError("conflict", `el run ya tiene worktree: ${ref}`)
+    const kept = await refExists(repo, `refs/heads/${branch}`)
+    // Sin la rama, la cabeza que tenía al rescatar es el padre del commit de rescate.
+    const tip = kept ? branch : rescueRef ? `${rescueRef}^` : opts.base
+    const tipSha = (
+      await git(["rev-parse", "--verify", `${tip}^{commit}`], { cwd: repo.root })
+    ).stdout.trim()
+    await git(["update-ref", ref, opts.base, ""], { cwd: repo.root })
+    try {
+      await git(
+        kept
+          ? ["worktree", "add", opts.path, branch]
+          : ["worktree", "add", "-b", branch, opts.path, tipSha],
+        { cwd: repo.root },
+      )
+    } catch (e) {
+      if (!kept && (await refExists(repo, `refs/heads/${branch}`)))
+        await git(["branch", "-D", branch], { cwd: repo.root }).catch(() => undefined)
+      await git(["update-ref", "-d", ref, opts.base], { cwd: repo.root }).catch(() => undefined)
+      throw e
+    }
+    const path = canonical(opts.path)
+    if (rescueRef) {
+      // El árbol del rescate en la carpeta, y el índice otra vez en HEAD: lo rescatado
+      // vuelve como cambios sin commit, igual que estaba (borrados incluidos).
+      await git(["read-tree", "-m", "-u", "HEAD", rescueRef], { cwd: path })
+      await git(["reset", "-q"], { cwd: path })
+    }
+    const meta: WorktreeMeta = {
+      version: 1,
+      run_id: opts.runId,
+      base_sha: opts.base,
+      branch,
+      path,
+      created_at: new Date().toISOString(),
+      owner: opts.owner ?? null,
+    }
+    await writeFile(join(await worktreeGitDir(path), META_FILE), JSON.stringify(meta, null, 2))
+    const headSha = (await git(["rev-parse", "HEAD"], { cwd: path })).stdout.trim()
+    return {
+      runId: opts.runId,
+      state: "active" as const,
+      path,
+      branch,
+      baseSha: opts.base,
+      headSha,
+      dirty: rescueRef !== null,
+      meta,
+      rescueRef,
+    }
+  })
+}
+
+/** El rescate más reciente del run (los sellos de tiempo ordenan como texto). */
+async function latestRescue(repo: GitRepo, runId: string): Promise<string | null> {
+  const { stdout } = await git(
+    ["for-each-ref", "--format=%(refname)", `${RESCUE_REF_PREFIX}${runId}/`],
+    { cwd: repo.root },
+  )
+  return stdout.trim().split("\n").filter(Boolean).sort().at(-1) ?? null
+}
+
 // --- lectura de git ------------------------------------------------------------------
 
 type ListedWorktree = {

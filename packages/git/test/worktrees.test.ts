@@ -15,6 +15,7 @@ import {
   RUN_REF_PREFIX,
   reconcile,
   removeWorktree,
+  restoreWorktree,
 } from "../src/index.ts"
 
 const dirs: string[] = []
@@ -175,6 +176,70 @@ describe("@keel/git: worktrees por run con el estado en el propio repo (ADR-0007
       branchKept: false,
     })
     expect(sh(root, "branch", "--list", "keel/*").trim()).toBe("")
+  })
+})
+
+describe("@keel/git: un run quitado vuelve a su carpeta (continuar tras una interrupción)", () => {
+  test("sin commits propios: misma ruta y rama, y los cambios rescatados vuelven sin commit", async () => {
+    const { repo, root, wt } = await fixture()
+    const path = wt("K-5/r1/root")
+    const created = await createWorktree(repo, { runId: "K-5/r1/root", path })
+    writeFileSync(join(path, "README.md"), "editado\n")
+    writeFileSync(join(path, "nuevo.ts"), "export {}\n")
+    const removed = await removeWorktree(repo, "K-5/r1/root")
+    expect(removed.branchKept).toBe(false)
+    expect(existsSync(path)).toBe(false)
+
+    const back = await restoreWorktree(repo, {
+      runId: "K-5/r1/root",
+      path,
+      base: created.baseSha as string,
+    })
+    expect(back.path).toBe(canonical(path))
+    expect(back.rescueRef).toBe(removed.rescueRef)
+    expect(sh(path, "rev-parse", "--abbrev-ref", "HEAD").trim()).toBe("keel/K-5/r1/root")
+    expect(sh(path, "status", "--porcelain").trimEnd().split("\n").sort()).toEqual([
+      " M README.md",
+      "?? nuevo.ts",
+    ])
+    expect(refs(root, RUN_REF_PREFIX)).toEqual(["refs/keel/runs/K-5/r1/root"])
+    // Se puede volver a quitar y rescata otra vez.
+    expect((await removeWorktree(repo, "K-5/r1/root")).rescueRef).not.toBeNull()
+  })
+
+  test("con la rama conservada: vuelve a la rama con sus commits y un borrado sigue borrado", async () => {
+    const { repo, root, wt } = await fixture()
+    const path = wt("K-6/r1/root")
+    const created = await createWorktree(repo, { runId: "K-6/r1/root", path })
+    writeFileSync(join(path, "a.ts"), "1\n")
+    sh(path, "add", ".")
+    sh(path, "commit", "-q", "-m", "commit del agente")
+    sh(path, "rm", "-q", "README.md")
+    const removed = await removeWorktree(repo, "K-6/r1/root")
+    expect(removed.branchKept).toBe(true)
+
+    await restoreWorktree(repo, { runId: "K-6/r1/root", path, base: created.baseSha as string })
+    expect(sh(path, "log", "-1", "--format=%s").trim()).toBe("commit del agente")
+    expect(existsSync(join(path, "README.md"))).toBe(false)
+    expect(sh(path, "status", "--porcelain").trimEnd()).toBe(" D README.md")
+    expect(refs(root, RUN_REF_PREFIX)).toEqual(["refs/keel/runs/K-6/r1/root"])
+  })
+
+  test("sin nada rescatado vuelve a la base; con el run vivo es conflict", async () => {
+    const { repo, wt } = await fixture()
+    const path = wt("K-7/r1/root")
+    const created = await createWorktree(repo, { runId: "K-7/r1/root", path })
+    expect(await kindOf(restoreWorktree(repo, { runId: "K-7/r1/root", path, base: "HEAD" }))).toBe(
+      "conflict",
+    )
+    await removeWorktree(repo, "K-7/r1/root")
+    const back = await restoreWorktree(repo, {
+      runId: "K-7/r1/root",
+      path,
+      base: created.baseSha as string,
+    })
+    expect(back.rescueRef).toBeNull()
+    expect(back.headSha).toBe(created.baseSha)
   })
 })
 

@@ -5,7 +5,7 @@
  * Daemon, git y SQLite reales; proveedores dobles.
  */
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Options, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
@@ -254,6 +254,38 @@ describe("ADR-0019 §3: conversación con Claude", () => {
     expect(daemon.repo.runWorktrees(child.id)).toHaveLength(1)
     expect(daemon.repo.runWorktrees(parent.id)).toHaveLength(0)
     expect(daemon.repo.getWorkItem(w.id)?.lifecycle).toBe("needs_review")
+  })
+})
+
+describe("Continuar tras una interrupción que liberó el worktree", () => {
+  test("el hijo vuelve a la carpeta del padre con lo rescatado y retoma su sesión", async () => {
+    const seen: Seen = { options: [], inputs: [] }
+    const { daemon, human, task, kinds } = await boot(talking(seen, false))
+    const w = await task(true)
+    const parent = (await human.call("runs.start", {
+      ...meta(),
+      work_item_id: w.id,
+      purpose: "execute",
+    })) as { id: string }
+    await daemon.idle()
+    const parentCwd = seen.options[0]?.cwd as string
+    writeFileSync(join(parentCwd, "a-medias.ts"), "export const x = 1\n")
+    // Como un run que se cae sin red: Keel rescata y quita el worktree.
+    await daemon.workspaces.release(parent.id)
+    expect(existsSync(parentCwd)).toBe(false)
+
+    const child = (await human.call("runs.continue", {
+      ...meta(),
+      run_id: parent.id,
+      text: "continua",
+    })) as { id: string }
+    await daemon.idle()
+    expect(kinds(child.id)).toContain("worktree.restored")
+    expect(kinds(child.id)).not.toContain("run.resume_skipped")
+    expect(seen.options[1]?.cwd).toBe(parentCwd)
+    expect(seen.options[1]?.resume).toBe("s-1")
+    expect(readFileSync(join(parentCwd, "a-medias.ts"), "utf8")).toBe("export const x = 1\n")
+    expect(daemon.repo.runWorktrees(child.id)).toHaveLength(1)
   })
 })
 

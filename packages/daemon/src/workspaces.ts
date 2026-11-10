@@ -34,6 +34,7 @@ import {
   type RemoveResult,
   reconcile,
   removeWorktree,
+  restoreWorktree,
 } from "@keel/git"
 import { defaultStateDir } from "./state-dir.js"
 import type { Repo, RunRow, RunWorktreeRow, WorkItemRow } from "./store/repo.js"
@@ -62,6 +63,8 @@ export type Released = {
   branch: string
   result: RemoveResult
 }
+
+type Restored = { row: RunWorktreeRow; rescueRef: string | null }
 
 export type WorkspacesDeps = {
   repo: Repo
@@ -105,6 +108,24 @@ export class GitWorktreeDriver implements WorkspaceDriver {
       const inherited = repo
         .runWorktrees(run.parent_run_id)
         .filter((w) => existsSync(w.worktree_path))
+      const restored = inherited.length > 0 ? [] : await this.restoreParent(run.parent_run_id)
+      if (restored.length > 0) {
+        repo.transferWorktrees(run.parent_run_id, run.id)
+        const root = restored.find((r) => r.row.slot === "root") ?? (restored[0] as Restored)
+        return {
+          ok: true,
+          cwd: root.row.worktree_path,
+          events: restored.map(({ row, rescueRef }) => ({
+            kind: "worktree.restored",
+            payload: {
+              ...row,
+              run_id: run.id,
+              from_run_id: run.parent_run_id,
+              rescue_ref: rescueRef,
+            },
+          })),
+        }
+      }
       if (inherited.length > 0) {
         repo.transferWorktrees(run.parent_run_id, run.id)
         const root = inherited.find((w) => w.slot === "root") ?? (inherited[0] as RunWorktreeRow)
@@ -160,6 +181,46 @@ export class GitWorktreeDriver implements WorkspaceDriver {
       cwd: row.worktree_path,
       events: [{ kind: "worktree.created", payload: row }],
     }
+  }
+
+  /**
+   * El run anterior terminó interrumpido (sin red, un reinicio) y Keel liberó su worktree,
+   * rescatando antes. El que continúa lo vuelve a poner en la misma ruta y rama, con lo
+   * rescatado sin commit: el agente sigue donde iba y retoma su sesión, que el proveedor
+   * busca por la carpeta. Si no se puede, el run empieza en uno nuevo, como antes.
+   */
+  private async restoreParent(parentRunId: string): Promise<Restored[]> {
+    const rows = this.deps.repo.runWorktrees(parentRunId)
+    if (rows.length === 0 || rows.some((w) => existsSync(w.worktree_path))) return []
+    const out: Restored[] = []
+    for (const row of rows) {
+      const projectRepo = this.deps.repo.getProjectRepo(row.project_repo_id)
+      if (!projectRepo) return []
+      try {
+        const back = await restoreWorktree(await this.gitRepo(projectRepo.local_path), {
+          runId: row.branch_name.slice(BRANCH_PREFIX.length),
+          path: row.worktree_path,
+          base: row.base_sha,
+          owner: this.deps.owner ?? "keel-daemon",
+        })
+        out.push({ row, rescueRef: back.rescueRef })
+      } catch (e) {
+        if (!(e instanceof GitError)) throw e
+        // Lo que sí volvió se quita otra vez (rescatando): el run empieza limpio, no a medias.
+        for (const r of out) await this.releaseOne(r.row)
+        return []
+      }
+    }
+    return out
+  }
+
+  private async releaseOne(w: RunWorktreeRow): Promise<void> {
+    const projectRepo = this.deps.repo.getProjectRepo(w.project_repo_id)
+    if (!projectRepo) return
+    await removeWorktree(
+      await this.gitRepo(projectRepo.local_path),
+      w.branch_name.slice(BRANCH_PREFIX.length),
+    )
   }
 
   async capture(runId: string): Promise<WorkspaceEvent[]> {
