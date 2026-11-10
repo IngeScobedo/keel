@@ -5,7 +5,7 @@
  */
 import type { EventNotification, Methods } from "@keel/core"
 import { ExternalLink, Palette, SquareTerminal, X } from "lucide-react"
-import { type FormEvent, useEffect, useMemo, useState } from "react"
+import { type CSSProperties, type FormEvent, useEffect, useMemo, useState } from "react"
 import { parseAnsi } from "./ansi.js"
 import "./DesignSession.css"
 import type { WorkItem } from "./model.js"
@@ -195,7 +195,10 @@ function DesignTerminal({ call, taskId }: { call: Call; taskId: string }) {
   }
   return (
     <div className="ds-terminal">
-      <pre data-testid="design-screen" style={{ width: `${screen?.cols ?? 120}ch` }}>
+      <pre
+        data-testid="design-screen"
+        style={{ "--ds-cols": screen?.cols ?? 120 } as CSSProperties}
+      >
         {parseAnsi(screen?.text ?? "").map((s, i) => (
           <span
             // biome-ignore lint/suspicious/noArrayIndexKey: los tramos no tienen identidad propia.
