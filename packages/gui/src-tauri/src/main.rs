@@ -62,7 +62,7 @@ async fn ipc_disconnect(bridge: State<'_, Bridge>) -> Result<(), String> {
 
 /// En WSLg la ventana por Wayland no tiene GPU (EGL falla) y WebKitGTK no recibe
 /// bien clics ni teclado: no se podía crear una tarea. Por X11 (XWayland) sí,
-/// medido el 2026-10-23. Sólo si el usuario no eligió backend.
+/// medido el 2026-10-23. Sólo si el usuario no eligió backend ni render.
 #[cfg(target_os = "linux")]
 fn prefer_x11_on_wsl() {
     let wsl = std::env::var_os("WSL_DISTRO_NAME").is_some()
@@ -70,6 +70,11 @@ fn prefer_x11_on_wsl() {
     if wsl && std::env::var_os("GDK_BACKEND").is_none() {
         // Antes de iniciar GTK y de crear hilos.
         std::env::set_var("GDK_BACKEND", "x11");
+    }
+    // El render por DMA-BUF no tiene aceleración en WSLg: el scroll iba a 15 fps. Sin él
+    // (memoria compartida), 37 fps con WebKitGTK 2.52, medido el 2026-11-10.
+    if wsl && std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 }
 
