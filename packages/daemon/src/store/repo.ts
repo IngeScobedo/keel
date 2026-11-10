@@ -1147,6 +1147,17 @@ export class Repo {
       .query<RunRow, [string]>("SELECT * FROM runs WHERE project_id = ? ORDER BY created_at")
       .all(projectId)
   }
+  /** Si se emitió `approval.resolved` para esta aprobación. */
+  approvalResolvedEmitted(approvalId: string): boolean {
+    return (
+      this.db
+        .query<{ n: number }, [string]>(
+          `SELECT count(*) AS n FROM events WHERE kind = 'approval.resolved'
+            AND json_extract(payload_json, '$.approval_id') = ?`,
+        )
+        .get(approvalId)?.n !== 0
+    )
+  }
   liveRunFor(workItemId: string): RunRow | null {
     const r = this.db
       .query<RunRow, [string]>(

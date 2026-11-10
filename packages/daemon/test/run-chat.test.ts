@@ -152,7 +152,10 @@ async function boot(profile: Record<string, unknown> = {}) {
       .eventsAfter(0, null, 100_000)
       .filter((e) => e.kind === kind && e.run_id === runId)
       .map((e) => JSON.parse(e.payload_json) as Record<string, unknown>)
-  return { daemon, human, start, pending, finished, resolve, events }
+  const setNext = (q: QueryFn) => {
+    next = q
+  }
+  return { daemon, human, start, pending, finished, resolve, events, setNext }
 }
 
 function newControl(): Control {
@@ -208,6 +211,64 @@ describe("ADR-0020 §7: las preguntas del agente se contestan en el chat", () =>
       decision: "approved",
       answers: { [q]: "Paginado de 50" },
     })
+  })
+
+  test("contestar la pregunta de un run que ya no vive sigue la conversación con la respuesta (KEEL-26)", async () => {
+    const s = await boot()
+    const run = await s.start(liveQuery([], newControl()))
+    await s.finished(run.id)
+    // Como tras reiniciar el daemon: la pregunta quedó pendiente y su run ya no vive.
+    const q = "¿Qué rojo uso?"
+    const op = { tool: "AskUserQuestion", input: question(q).input }
+    const id = s.daemon.repo.createApproval({
+      project_id: s.daemon.project.project_id,
+      run_id: run.id,
+      operation_hash: "h-26",
+      operation: op,
+      expires_at: null,
+    })
+    const a = { id, operation_hash: "h-26" } as Approval
+    const ctl = newControl()
+    s.setNext(liveQuery([], ctl))
+    await s.resolve(a, { decision: "approve_once", answers: { [q]: "#C0392B" } })
+    await s.daemon.idle()
+    expect(s.events(run.id, "approval.resolved")[0]).toMatchObject({
+      approval_id: id,
+      decision: "approved",
+      answers: { [q]: "#C0392B" },
+    })
+    const child = s.daemon.repo.lastRunFor(run.work_item_id)
+    expect(child?.parent_run_id).toBe(run.id)
+    expect(String(s.events(child?.id as string, "run.prompt")[0]?.text)).toContain("#C0392B")
+    expect(ctl.options?.resume).toBe("s")
+    // Ya contestada: un segundo clic no arranca otro run.
+    await expect(s.resolve(a, { decision: "approve_once", answers: { [q]: "x" } })).rejects.toThrow(
+      "la aprobación está approved",
+    )
+  })
+
+  test("una respuesta que se perdió antes de este arreglo se puede volver a dar", async () => {
+    const s = await boot()
+    const run = await s.start(liveQuery([], newControl()))
+    await s.finished(run.id)
+    const q = "¿Qué rojo uso?"
+    const id = s.daemon.repo.createApproval({
+      project_id: s.daemon.project.project_id,
+      run_id: run.id,
+      operation_hash: "h-lost",
+      operation: { tool: "AskUserQuestion", input: question(q).input },
+      expires_at: null,
+    })
+    // Lo que dejaba el daemon viejo: aprobada, sin evento y sin run que la recibiera.
+    s.daemon.repo.setApproval(id, "approved", "user:test")
+    s.setNext(liveQuery([], newControl()))
+    await s.resolve({ id, operation_hash: "h-lost" } as Approval, {
+      decision: "approve_once",
+      answers: { [q]: "el de la marca" },
+    })
+    await s.daemon.idle()
+    expect(s.events(run.id, "approval.resolved")).toHaveLength(1)
+    expect(s.daemon.repo.lastRunFor(run.work_item_id)?.parent_run_id).toBe(run.id)
   })
 
   test("no contestar le dice al agente que el humano no quiso, con su motivo", async () => {

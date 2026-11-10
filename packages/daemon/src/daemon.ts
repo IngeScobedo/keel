@@ -1752,43 +1752,7 @@ export class Daemon {
             ErrorCode.invalidTransition,
             "el run sigue vivo; escríbele con runs.message",
           )
-        const manifest = JSON.parse(parent.context_manifest_json) as {
-          provider?: string
-          options?: Params<"runs.start">["options"]
-        }
-        const w = this.requireWorkItem(parent.work_item_id)
-        // ADR-0021 §3: una tarea del método es una sola conversación en su worktree.
-        // Escribirle desde el chat sigue por el mismo camino que «Trabajar»: el propósito
-        // de su etapa, el worktree de la tarea y la sesión del último run.
-        if (repo.getFlow(w.id))
-          return this.startFlowRun(uow, w, p.text, {
-            source: "human",
-            ...(p.options ? { options: p.options } : {}),
-          })
-        // Una ejecución revisada o fallida vuelve a planned por decisión del humano
-        // (las mismas aristas que work_items.transition) y sigue en su worktree.
-        // ADR-0021: una tarea del método que espera al humano también sigue al escribirle.
-        if (
-          parent.purpose === "execute" &&
-          (w.lifecycle === "needs_review" ||
-            w.lifecycle === "failed" ||
-            w.lifecycle === "waiting_human")
-        )
-          this.transition(uow, w, "planned", "human", {
-            runId: parent.id,
-            reason: "continuar la conversación",
-            keepWorkspaces: true,
-          })
-        const run = this.startRunIn(uow, {
-          work_item_id: parent.work_item_id,
-          purpose: parent.purpose,
-          prompt: p.text,
-          profile: manifest.provider ?? "claude",
-          // ADR-0028: sólo se hereda el tope de turnos que eligió el humano.
-          options: { ...inheritedOptions(parent), ...p.options },
-          parent_run_id: parent.id,
-        })
-        return run
+        return this.continueRun(uow, parent, p.text, p.options)
       }),
       "runs.request": this.mutation<Params<"runs.request">>("runs.request", (p, uow, ctx) => {
         // Un agente pide; arrancar es del humano (ADR-0009 §5). Un humano usa runs.start.
@@ -3467,10 +3431,10 @@ export class Daemon {
               ErrorCode.conflict,
               "el hash de la operación no coincide: la solicitud cambió",
             )
-          if (a.state !== "pending")
-            throw rpcError(ErrorCode.invalidTransition, `la aprobación está ${a.state}`)
           // ADR-0015: un plan de git se aprueba una vez y se ejecuta revalidando.
           const op = JSON.parse(a.operation_json) as { tool?: string; input?: unknown }
+          if (a.state !== "pending" && !this.answerLost(a, op.tool))
+            throw rpcError(ErrorCode.invalidTransition, `la aprobación está ${a.state}`)
           if (op.tool === "git.plan") return this.resolveGitPlan(uow, a, op.input, p.decision)
           // ADR-0043 §4: la promoción que pidió el agente la decide el humano.
           if (op.tool === "delivery.promote") {
@@ -5487,6 +5451,55 @@ export class Daemon {
   }
 
   /**
+   * ADR-0019 §3: seguir la conversación de un run terminado con un mensaje del humano.
+   * `runs.continue` y la respuesta a una pregunta cuyo run ya no vive llegan aquí.
+   */
+  private continueRun(
+    uow: UnitOfWork,
+    parent: RunRow,
+    text: string,
+    options?: Params<"runs.start">["options"],
+  ) {
+    const manifest = JSON.parse(parent.context_manifest_json) as {
+      provider?: string
+      options?: Params<"runs.start">["options"]
+    }
+    const w = this.requireWorkItem(parent.work_item_id)
+    // ADR-0021 §3: una tarea del método es una sola conversación en su worktree.
+    // Escribirle desde el chat sigue por el mismo camino que «Trabajar»: el propósito
+    // de su etapa, el worktree de la tarea y la sesión del último run.
+    if (this.repo.getFlow(w.id))
+      return this.startFlowRun(uow, w, text, {
+        source: "human",
+        ...(options ? { options } : {}),
+      })
+    // Una ejecución revisada o fallida vuelve a planned por decisión del humano
+    // (las mismas aristas que work_items.transition) y sigue en su worktree.
+    // ADR-0021: una tarea del método que espera al humano también sigue al escribirle.
+    if (
+      parent.purpose === "execute" &&
+      (w.lifecycle === "needs_review" ||
+        w.lifecycle === "failed" ||
+        w.lifecycle === "waiting_human")
+    )
+      this.transition(uow, w, "planned", "human", {
+        runId: parent.id,
+        reason: "continuar la conversación",
+        keepWorkspaces: true,
+      })
+    const run = this.startRunIn(uow, {
+      work_item_id: parent.work_item_id,
+      purpose: parent.purpose,
+      prompt: text,
+      profile: manifest.provider ?? "claude",
+      // ADR-0028: sólo se hereda el tope de turnos que eligió el humano.
+      options: { ...inheritedOptions(parent), ...options },
+      parent_run_id: parent.id,
+    })
+    return run
+  }
+
+  /**
    * ADR-0020 §7: contestar o rechazar una pregunta del agente. Aprobar exige
    * respuestas; un plan aprobado puede cambiar el modo del run.
    */
@@ -5536,8 +5549,33 @@ export class Daemon {
       ...(p.annotations ? { annotations: p.annotations } : {}),
       ...(p.reason ? { reason: p.reason } : {}),
     }
+    // El run que preguntó ya no vive (se reinició el daemon, se cayó): nadie espera la
+    // respuesta. Se registra y, si contestó, la conversación sigue con ella (KEEL-26).
+    if (run && !ACTIVE_RUN_STATUSES.includes(run.status)) {
+      uow.emit("approval.resolved", run.id, {
+        approval_id: a.id,
+        decision,
+        ...(resolution.answers ? { answers: resolution.answers } : {}),
+      })
+      if (decision === "approved" && !this.repo.liveRunFor(run.work_item_id))
+        this.continueRun(uow, run, answerText(tool, answers))
+      return { approval_id: a.id, state: decision as "approved" | "denied" }
+    }
     uow.afterCommit(() => this.approvalWaiters.get(a.id)?.(resolution))
     return { approval_id: a.id, state: decision as "approved" | "denied" }
+  }
+
+  /**
+   * Antes de 2026-11-10, contestar la pregunta de un run muerto la marcaba sin avisar a
+   * nadie: ni evento ni run que la recibiera, y la GUI la seguía mostrando pendiente
+   * (KEEL-26). Esa respuesta se perdió; se puede volver a contestar.
+   */
+  private answerLost(a: NonNullable<ReturnType<Repo["getApproval"]>>, tool?: string): boolean {
+    if (!tool || !QUESTION_TOOLS.has(tool) || a.state !== "approved") return false
+    const run = this.repo.getRun(a.run_id)
+    return (
+      !!run && !ACTIVE_RUN_STATUSES.includes(run.status) && !this.repo.approvalResolvedEmitted(a.id)
+    )
   }
 
   private providerOf(run: RunRow): ClaudeAdapter | CodexAdapter {
@@ -7472,4 +7510,16 @@ function inheritedOptions(run: RunRow | null): Params<"runs.start">["options"] {
     ...rest,
     ...(m.turns_explicit && typeof max_turns === "number" ? { max_turns } : {}),
   } as Params<"runs.start">["options"]
+}
+
+/** La respuesta del humano como mensaje para el agente que ya no esperaba su pregunta. */
+function answerText(tool: string, answers: Record<string, string>): string {
+  if (tool !== "AskUserQuestion")
+    return "Mientras esperabas mi respuesta tu run se interrumpió. Aprobado: sigue."
+  const lines = Object.entries(answers).map(([q, a]) => `- ${q}\n  → ${a}`)
+  return [
+    "Mientras esperabas mi respuesta tu run se interrumpió. Te contesto aquí:",
+    ...lines,
+    "Sigue desde donde ibas.",
+  ].join("\n")
 }
